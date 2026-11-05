@@ -1,0 +1,111 @@
+import { Parser } from 'expr-eval';
+import { User } from '../models/User.js';
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
+const parser = new Parser({ operators: { logical: false, comparison: false, in: false, assignment: false } });
+
+const tools = [
+  { type: 'function', function: { name: 'web_search', description: 'Search the public web for current information. Return concise source titles, URLs, snippets and dates. Use for current facts, research, documentation and news.', parameters: { type: 'object', properties: { query: { type: 'string', description: 'Specific search query' }, topic: { type: 'string', enum: ['general', 'news', 'finance'], description: 'Search topic' }, max_results: { type: 'integer', minimum: 1, maximum: 8 } }, required: ['query'] } } },
+  { type: 'function', function: { name: 'save_memory', description: 'Save a concise, useful fact or preference about the user to their long-term memory. Only use when the user explicitly asks you to remember or save something.', parameters: { type: 'object', properties: { memory: { type: 'string', description: 'A concise user fact or preference to remember' } }, required: ['memory'] } } },
+  { type: 'function', function: { name: 'search_memories', description: "Search the current user's saved memories for relevant information.", parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } } },
+  { type: 'function', function: { name: 'calculator', description: 'Evaluate a mathematical expression using arithmetic operators and common math functions.', parameters: { type: 'object', properties: { expression: { type: 'string' } }, required: ['expression'] } } },
+  { type: 'function', function: { name: 'get_current_datetime', description: 'Get the current date and time in an IANA timezone.', parameters: { type: 'object', properties: { timezone: { type: 'string' } } } } },
+  { type: 'function', function: { name: 'npm_search', description: 'Search npm packages by keyword.', parameters: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 10 } }, required: ['query'] } } },
+  { type: 'function', function: { name: 'github_search', description: 'Search public GitHub repositories.', parameters: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 10 } }, required: ['query'] } } },
+  { type: 'function', function: { name: 'fetch_public_url', description: 'Fetch and extract text from a public HTTPS webpage or documentation URL. Do not access private network addresses.', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } } }
+];
+
+function isPrivateAddress(address) {
+  const value = address.toLowerCase().split('%')[0];
+  if (isIP(value) === 4) {
+    const parts = value.split('.').map(Number);
+    return parts[0] === 10 || parts[0] === 127 || parts[0] === 0 || parts[0] >= 224 || (parts[0] === 192 && parts[1] === 0 && parts[2] === 0) || (parts[0] === 169 && parts[1] === 254) || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) || (parts[0] === 192 && parts[1] === 168) || (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127);
+  }
+  if (isIP(value) === 6) {
+    if (value === '::' || value === '::1' || value.startsWith('fc') || value.startsWith('fd') || /^fe[89ab]/.test(value)) return true;
+    if (value.startsWith('::ffff:')) return isPrivateAddress(value.slice(7));
+  }
+  return isIP(value) === 0;
+}
+async function safeUrl(raw) {
+  const url = new URL(raw);
+  if (url.protocol !== 'https:' || url.username || url.password) throw new Error('Only public HTTPS URLs are allowed.');
+  let addresses;
+  if (isIP(url.hostname)) addresses = [{ address: url.hostname }];
+  else addresses = await lookup(url.hostname, { all: true, verbatim: true });
+  if (!addresses.length || addresses.some(item => isPrivateAddress(item.address))) throw new Error('The URL resolves to a private or non-public network address and cannot be fetched.');
+  return url;
+}
+async function tavilySearch(args) {
+  if (!process.env.TAVILY_API_KEY) throw new Error('Web search is not configured. Add TAVILY_API_KEY to the backend environment.');
+  const response = await fetch('https://api.tavily.com/search', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_key: process.env.TAVILY_API_KEY, query: String(args.query || '').slice(0, 500), topic: ['general', 'news', 'finance'].includes(args.topic) ? args.topic : 'general', search_depth: 'basic', max_results: Math.max(1, Math.min(8, Number(args.max_results) || 5)), include_answer: false, include_raw_content: false }),
+    signal: AbortSignal.timeout(20000)
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || `Tavily returned HTTP ${response.status}`);
+  return { query: args.query, answer: data.answer || null, results: (data.results || []).map(item => ({ title: item.title, url: item.url, content: item.content, score: item.score, published_date: item.published_date || null })) };
+}
+async function executeTool(name, args, user) {
+  if (name === 'save_memory') {
+    if (!user?._id || String(user._id).startsWith('guest:')) throw new Error('Sign in is required to save memories.');
+    const memory = String(args.memory || '').trim(); if (!memory || memory.length > 2000) throw new Error('Memory must be between 1 and 2,000 characters.');
+    const updated = await User.findByIdAndUpdate(user._id, { $push: { memories: { text: memory, source: 'assistant' } } }, { new: true }).select('memories').lean();
+    return { saved: true, memory, totalMemories: updated?.memories?.length || 0 };
+  }
+  if (name === 'search_memories') {
+    if (!user?._id || String(user._id).startsWith('guest:')) return { memories: [] };
+    const query = String(args.query || '').toLowerCase(); const doc = await User.findById(user._id).select('memories').lean();
+    const found = (doc?.memories || []).filter(m => !query || m.text.toLowerCase().includes(query)).slice(0, 15).map(m => ({ id: m._id, text: m.text }));
+    return { memories: found };
+  }
+  if (name === 'web_search') return tavilySearch(args);
+  if (name === 'calculator') {
+    const expression = String(args.expression || ''); if (expression.length > 300) throw new Error('Expression is too long.');
+    const result = parser.parse(expression).evaluate({}); if (!Number.isFinite(result)) throw new Error('Expression did not return a finite number.'); return { result };
+  }
+  if (name === 'get_current_datetime') {
+    const timezone = String(args.timezone || 'Asia/Kolkata'); const date = new Date();
+    return { iso: date.toISOString(), timezone, local: new Intl.DateTimeFormat('en-IN', { dateStyle: 'full', timeStyle: 'long', timeZone: timezone }).format(date) };
+  }
+  if (name === 'npm_search') {
+    const query = String(args.query || '').trim(); if (!query) throw new Error('A search query is required.');
+    const limit = Math.max(1, Math.min(10, Number(args.limit) || 5));
+    const response = await fetch(`https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(query)}&size=${limit}`, { signal: AbortSignal.timeout(12000) });
+    if (!response.ok) throw new Error(`npm registry returned HTTP ${response.status}`); const data = await response.json();
+    return { packages: (data.objects || []).map(({ package: p }) => ({ name: p.name, version: p.version, description: p.description, links: p.links })) };
+  }
+  if (name === 'github_search') {
+    const query = String(args.query || '').trim(); if (!query) throw new Error('A search query is required.');
+    const limit = Math.max(1, Math.min(10, Number(args.limit) || 5));
+    const response = await fetch(`https://api.github.com/search/repositories?q=${encodeURIComponent(query)}&per_page=${limit}`, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Nemotron-Agent-Lab' }, signal: AbortSignal.timeout(12000) });
+    if (!response.ok) throw new Error(`GitHub API returned HTTP ${response.status}`); const data = await response.json();
+    return { repositories: (data.items || []).map(repo => ({ full_name: repo.full_name, description: repo.description, html_url: repo.html_url, stargazers_count: repo.stargazers_count, language: repo.language })) };
+  }
+  if (name === 'fetch_public_url') {
+    const url = await safeUrl(String(args.url || ''));
+    const response = await fetch(url, { headers: { 'User-Agent': 'Nemotron-Agent-Lab/1.0', Accept: 'text/html,text/plain,application/json' }, redirect: 'error', signal: AbortSignal.timeout(15000) });
+    if (!response.ok) throw new Error(`URL returned HTTP ${response.status}`);
+    const type = response.headers.get('content-type') || ''; if (!/text\//i.test(type) && !/json/i.test(type)) throw new Error('Only text, HTML and JSON responses can be fetched.');
+    return { url: url.toString(), contentType: type, content: (await response.text()).slice(0, 30000) };
+  }
+  throw new Error(`Unknown tool: ${name}`);
+}
+export function getToolDefinitions() { return tools; }
+export function getPluginCatalog() {
+  return [
+    { id: 'save_memory', name: 'Save memory', description: 'Save user-approved facts for future chats', icon: 'MemoryStick', configured: true },
+    { id: 'search_memories', name: 'Search memory', description: 'Recall saved user context', icon: 'MemoryStick', configured: true },
+    { id: 'web_search', name: 'Web search', description: 'Search current websites and news', icon: 'Globe', configured: Boolean(process.env.TAVILY_API_KEY) },
+    { id: 'fetch_public_url', name: 'Open webpage', description: 'Read public URLs and documentation', icon: 'Link', configured: true },
+    { id: 'github_search', name: 'GitHub', description: 'Find public repositories', icon: 'Github', configured: true },
+    { id: 'npm_search', name: 'npm', description: 'Search npm packages', icon: 'Package', configured: true },
+    { id: 'calculator', name: 'Calculator', description: 'Evaluate calculations', icon: 'Calculator', configured: true },
+    { id: 'get_current_datetime', name: 'Date & time', description: 'Get timezone-aware current time', icon: 'Clock', configured: true }
+  ];
+}
+export async function runTool(name, args, user) {
+  try { return { ok: true, result: await executeTool(name, args, user) }; }
+  catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
+}

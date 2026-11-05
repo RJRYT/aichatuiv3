@@ -1,0 +1,15 @@
+{
+  "name": "nemotron-chat-monorepo",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "workspaces": ["apps/client", "apps/server"],
+  "scripts": {
+    "dev": "concurrently -k -n API,WEB -c blue,green \"npm run dev --workspace @nemotron/server\" \"npm run dev --workspace @nemotron/client\"",
+    "build": "npm run build --workspace @nemotron/client",
+    "prestart": "npm run build",
+    "start": "npm run start --workspace @nemotron/server",
+    "start:api": "npm run start --workspace @nemotron/server"
+  },
+  "devDependencies": { "concurrently": "^9.1.2" }
+}
