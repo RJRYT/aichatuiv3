@@ -29,6 +29,11 @@ export function createSessionCookie(res, userId) {
 }
 export function clearSessionCookie(res) { clearCookie(res, cookieName); }
 
+export function sessionUserId(req) {
+  const cookies = parseCookies(req.headers.cookie || ''); const raw = verify(cookies[cookieName]);
+  if (!raw) return null; try { const payload = JSON.parse(Buffer.from(raw, 'base64url').toString()); return payload.exp > Date.now() ? String(payload.sub) : null; } catch { return null; }
+}
+
 export async function requireAuth(req, res, next) {
   try {
     const cookies = parseCookies(req.headers.cookie || '');
@@ -62,7 +67,8 @@ export function oauthStart(req, res, provider) {
   const config = providerConfig(provider);
   if (!config.clientId || !config.clientSecret) return res.status(503).send(`${provider} OAuth is not configured on the server.`);
   const state = crypto.randomBytes(24).toString('hex');
-  setCookie(res, stateCookie, signed(b64(JSON.stringify({ state, provider, exp: Date.now() + 10 * 60 * 1000 }))), 600);
+  const linkUserId = req.authLinkUserId || null;
+  setCookie(res, stateCookie, signed(b64(JSON.stringify({ state, provider, linkUserId, exp: Date.now() + 10 * 60 * 1000 }))), 600);
   const url = new URL(config.auth);
   url.searchParams.set('client_id', config.clientId);
   url.searchParams.set('redirect_uri', config.callback);
@@ -85,23 +91,24 @@ async function fetchProfile(provider, token) {
   if (provider === 'google') {
     const response = await fetch('https://openidconnect.googleapis.com/v1/userinfo', { headers: { Authorization: `Bearer ${token}` } });
     if (!response.ok) throw new Error('Could not load Google profile.');
-    const p = await response.json(); return { id: p.sub, name: p.name, email: p.email, avatar: p.picture };
+    const p = await response.json(); return { id: p.sub, name: p.name, email: p.email, emailVerified: p.email_verified === true, avatar: p.picture };
   }
   if (provider === 'github') {
     const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'Nemotron-Agent-Lab' };
     const [userRes, emailRes] = await Promise.all([fetch('https://api.github.com/user', { headers }), fetch('https://api.github.com/user/emails', { headers })]);
     if (!userRes.ok) throw new Error('Could not load GitHub profile.');
     const p = await userRes.json(); const emails = emailRes.ok ? await emailRes.json() : [];
-    return { id: String(p.id), name: p.name || p.login, email: emails.find(x => x.primary)?.email || emails[0]?.email || '', avatar: p.avatar_url };
+    const primary = emails.find(x => x.primary && x.verified) || emails.find(x => x.verified); return { id: String(p.id), name: p.name || p.login, email: primary?.email || '', emailVerified: Boolean(primary?.verified), avatar: p.avatar_url };
   }
   const response = await fetch('https://discord.com/api/users/@me', { headers: { Authorization: `Bearer ${token}` } });
   if (!response.ok) throw new Error('Could not load Discord profile.');
   const p = await response.json();
-  return { id: p.id, name: p.global_name || p.username, email: p.email || '', avatar: p.avatar ? `https://cdn.discordapp.com/avatars/${p.id}/${p.avatar}.png` : '' };
+  return { id: p.id, name: p.global_name || p.username, email: p.email || '', emailVerified: p.verified === true, avatar: p.avatar ? `https://cdn.discordapp.com/avatars/${p.id}/${p.avatar}.png` : '' };
 }
 
 export async function oauthCallback(req, res, provider) {
   const frontend = process.env.FRONTEND_URL || 'http://localhost:5173';
+  let linkAttempt = false;
   try {
     const cookies = parseCookies(req.headers.cookie || '');
     const raw = verify(cookies[stateCookie]);
@@ -112,15 +119,55 @@ export async function oauthCallback(req, res, provider) {
     const config = providerConfig(provider);
     const token = await exchangeToken(provider, config, String(req.query.code || ''));
     const profile = await fetchProfile(provider, token);
-    const user = await User.findOneAndUpdate(
-      { provider, providerId: profile.id },
-      { $set: { name: profile.name || 'User', email: profile.email || '', avatar: profile.avatar || '', lastLoginAt: new Date() }, $setOnInsert: { provider, providerId: profile.id } },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
-    );
+    const verifiedEmail = profile.emailVerified === true && Boolean(profile.email);
+    const identity = { provider, providerId: String(profile.id), providerEmail: verifiedEmail ? profile.email.toLowerCase() : '' };
+
+    if (statePayload.linkUserId) {
+      linkAttempt = true;
+      const activeUserId = sessionUserId(req);
+      if (!activeUserId || activeUserId !== String(statePayload.linkUserId)) throw new Error('Your sign-in session changed. Sign in again before linking an account.');
+      const existingIdentity = await User.findOne({ $or: [{ provider, providerId: identity.providerId }, { linkedAccounts: { $elemMatch: { provider, providerId: identity.providerId } } }] });
+      if (existingIdentity && String(existingIdentity._id) !== activeUserId) throw new Error('This provider account is already linked to another user.');
+      if (verifiedEmail) {
+        const emailOwner = await User.findOne({ email: profile.email.toLowerCase(), emailVerified: true });
+        if (emailOwner && String(emailOwner._id) !== activeUserId) throw new Error('This verified email belongs to another account. Sign in to that account to link providers.');
+      }
+      const user = await User.findById(activeUserId);
+      if (!user) throw new Error('Account not found.');
+      const linked = Array.isArray(user.linkedAccounts) ? user.linkedAccounts : [];
+      const existingProviderLink = linked.find(item => item.provider === provider);
+      if (existingProviderLink && existingProviderLink.providerId !== identity.providerId) throw new Error(`A different ${provider} account is already linked to this user.`);
+      if (!linked.some(item => item.provider === provider && item.providerId === identity.providerId)) linked.push({ ...identity, linkedAt: new Date() });
+      user.linkedAccounts = linked;
+      if (!user.provider || !user.providerId) { user.provider = provider; user.providerId = identity.providerId; }
+      await user.save();
+      res.redirect(`${frontend}/?account_linked=${encodeURIComponent(provider)}`);
+      return;
+    }
+
+    let user = await User.findOne({ $or: [{ provider, providerId: identity.providerId }, { linkedAccounts: { $elemMatch: { provider, providerId: identity.providerId } } }] });
+    if (!user) {
+      if (verifiedEmail) {
+        const emailOwner = await User.findOne({ email: profile.email.toLowerCase(), emailVerified: true });
+        if (emailOwner) throw new Error('An account already uses this verified email. Sign in with its linked provider, then link this provider in Settings.');
+      }
+      const base = String(profile.name || provider).toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 15) || 'user';
+      let username = `${base}_${crypto.randomBytes(3).toString('hex')}`;
+      user = await User.create({ provider, providerId: identity.providerId, linkedAccounts: [{ ...identity, linkedAt: new Date() }], name: profile.name || 'User', email: verifiedEmail ? profile.email.toLowerCase() : '', emailVerified: verifiedEmail, avatar: profile.avatar || '', username, lastLoginAt: new Date() });
+    } else {
+      const linked = Array.isArray(user.linkedAccounts) ? user.linkedAccounts : [];
+      if (!linked.some(item => item.provider === provider && item.providerId === identity.providerId)) linked.push({ ...identity, linkedAt: new Date() });
+      user.linkedAccounts = linked;
+      if (!user.provider || !user.providerId) { user.provider = provider; user.providerId = identity.providerId; }
+      user.name = profile.name || user.name; user.avatar = profile.avatar || user.avatar; user.lastLoginAt = new Date();
+      if (verifiedEmail) { const owner = await User.findOne({ email: profile.email.toLowerCase(), emailVerified: true, _id: { $ne: user._id } }); if (!owner) { user.email = profile.email.toLowerCase(); user.emailVerified = true; } }
+      await user.save();
+    }
     createSessionCookie(res, user._id);
     res.redirect(frontend);
   } catch (error) {
-    res.redirect(`${frontend}/?auth_error=${encodeURIComponent(error.message || 'Sign-in failed')}`);
+    const key = linkAttempt ? 'account_link_error' : 'auth_error';
+    res.redirect(`${frontend}/?${key}=${encodeURIComponent(error.message || 'Sign-in failed')}`);
   }
 }
 

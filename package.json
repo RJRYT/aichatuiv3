@@ -12,7 +12,10 @@
     "build": "npm run build --workspace @nemotron/client",
     "start": "npm run start --workspace @nemotron/server",
     "start:build": "npm run build && npm start",
-    "start:api": "npm run start --workspace @nemotron/server"
+    "start:api": "npm run start --workspace @nemotron/server",
+    "test": "node --test apps/server/test/*.test.js",
+    "migrate:users": "node apps/server/scripts/migrate-users.js",
+    "sandbox:check": "node apps/server/scripts/check-python.js"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

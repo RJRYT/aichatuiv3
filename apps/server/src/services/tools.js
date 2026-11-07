@@ -1,3 +1,4 @@
+import { executePython } from './interpreter/interpreter.js';
 import { Parser } from 'expr-eval';
 import { User } from '../models/User.js';
 import { lookup } from 'node:dns/promises';
@@ -5,6 +6,7 @@ import { isIP } from 'node:net';
 const parser = new Parser({ operators: { logical: false, comparison: false, in: false, assignment: false } });
 
 const tools = [
+  { type: 'function', function: { name: 'execute_python', description: 'Execute Python in an isolated, network-disabled sandbox. Use for calculations, data processing, CSV/JSON analysis, charts and generating files. Return and inspect stdout, stderr, status and artifact metadata. Do not claim success unless status is completed.', parameters: { type: 'object', properties: { code: { type: 'string', description: 'Complete Python source code to execute.' }, task_context: { type: 'string', description: 'Brief description of the intended computation.' } }, required: ['code'] } } },
   { type: 'function', function: { name: 'web_search', description: 'Search the public web for current information. Return concise source titles, URLs, snippets and dates. Use for current facts, research, documentation and news.', parameters: { type: 'object', properties: { query: { type: 'string', description: 'Specific search query' }, topic: { type: 'string', enum: ['general', 'news', 'finance'], description: 'Search topic' }, max_results: { type: 'integer', minimum: 1, maximum: 8 } }, required: ['query'] } } },
   { type: 'function', function: { name: 'save_memory', description: 'Save a concise, useful fact or preference about the user to their long-term memory. Only use when the user explicitly asks you to remember or save something.', parameters: { type: 'object', properties: { memory: { type: 'string', description: 'A concise user fact or preference to remember' } }, required: ['memory'] } } },
   { type: 'function', function: { name: 'search_memories', description: "Search the current user's saved memories for relevant information.", parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } } },
@@ -47,12 +49,19 @@ async function tavilySearch(args) {
   if (!response.ok) throw new Error(data.detail || `Tavily returned HTTP ${response.status}`);
   return { query: args.query, answer: data.answer || null, results: (data.results || []).map(item => ({ title: item.title, url: item.url, content: item.content, score: item.score, published_date: item.published_date || null })) };
 }
-async function executeTool(name, args, user) {
+async function executeTool(name, args, user, options = {}) {
+  if (name === 'execute_python') {
+    if (!user?._id || String(user._id).startsWith('guest:')) throw new Error('A signed-in user is required for Python execution.');
+    const result = await executePython({ code: args.code }, String(user._id), { signal: options.signal });
+    return { ...result, taskContext: String(args.task_context || '').slice(0, 500) };
+  }
   if (name === 'save_memory') {
     if (!user?._id || String(user._id).startsWith('guest:')) throw new Error('Sign in is required to save memories.');
     const memory = String(args.memory || '').trim(); if (!memory || memory.length > 2000) throw new Error('Memory must be between 1 and 2,000 characters.');
-    const updated = await User.findByIdAndUpdate(user._id, { $push: { memories: { text: memory, source: 'assistant' } } }, { new: true }).select('memories').lean();
-    return { saved: true, memory, totalMemories: updated?.memories?.length || 0 };
+    const existed = Boolean(await User.exists({ _id: user._id, 'memories.text': memory }));
+    let updated = await User.findOneAndUpdate({ _id: user._id, 'memories.text': { $ne: memory } }, { $push: { memories: { text: memory, source: 'assistant' } } }, { new: true }).select('memories').lean();
+    if (!updated) updated = await User.findById(user._id).select('memories').lean();
+    return { saved: true, duplicate: existed, memory, totalMemories: updated?.memories?.length || 0 };
   }
   if (name === 'search_memories') {
     if (!user?._id || String(user._id).startsWith('guest:')) return { memories: [] };
@@ -95,6 +104,7 @@ async function executeTool(name, args, user) {
 export function getToolDefinitions() { return tools; }
 export function getPluginCatalog() {
   return [
+    { id: 'execute_python', name: 'Python interpreter', description: 'Run code in an isolated, network-disabled sandbox', icon: 'Code', configured: true },
     { id: 'save_memory', name: 'Save memory', description: 'Save user-approved facts for future chats', icon: 'MemoryStick', configured: true },
     { id: 'search_memories', name: 'Search memory', description: 'Recall saved user context', icon: 'MemoryStick', configured: true },
     { id: 'web_search', name: 'Web search', description: 'Search current websites and news', icon: 'Globe', configured: Boolean(process.env.TAVILY_API_KEY) },
@@ -105,7 +115,7 @@ export function getPluginCatalog() {
     { id: 'get_current_datetime', name: 'Date & time', description: 'Get timezone-aware current time', icon: 'Clock', configured: true }
   ];
 }
-export async function runTool(name, args, user) {
-  try { return { ok: true, result: await executeTool(name, args, user) }; }
+export async function runTool(name, args, user, options = {}) {
+  try { return { ok: true, result: await executeTool(name, args, user, options) }; }
   catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
 }

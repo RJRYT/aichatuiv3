@@ -21,6 +21,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV SERVE_STATIC=true
 
+# Docker CLI connects to a dedicated remote sandbox daemon via DOCKER_HOST.
+RUN apk add --no-cache docker-cli
+
 WORKDIR /app/apps/server
 
 COPY apps/server/package.json ./package.json

@@ -27,13 +27,15 @@ function cleanMessages(messages = []) {
     if (message.durationMs != null) safe.durationMs = Number(message.durationMs);
     if (message.toolEvents) safe.toolEvents = message.toolEvents;
     if (message.error) safe.error = String(message.error).slice(0, 2000);
+    if (Array.isArray(message.versions)) safe.versions = message.versions.slice(0, 20).map(v => ({ content: String(v.content || '').slice(0, 120000), reasoning: String(v.reasoning || '').slice(0, 50000), toolEvents: Array.isArray(v.toolEvents) ? v.toolEvents : [], usage: v.usage, createdAt: v.createdAt }));
+    if (Number.isInteger(message.activeVersion)) safe.activeVersion = message.activeVersion;
     if (message.createdAt) safe.createdAt = message.createdAt;
     return safe;
   });
 }
 
 export async function listChats(sessionId) {
-  if (mongoose.connection.readyState === 1) return Chat.find({ sessionId }).sort({ updatedAt: -1 }).select('_id title messages createdAt updatedAt').lean();
+  if (mongoose.connection.readyState === 1) return Chat.find({ sessionId }).sort({ updatedAt: -1 }).select('_id title titleManuallyEdited activeBranchId revision messages createdAt updatedAt').lean();
   return [...memory.values()].filter((x) => x.sessionId === sessionId).sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
 }
 
@@ -44,7 +46,8 @@ export async function getChat(sessionId, chatId) {
 }
 
 export async function createChat(sessionId, title = 'New chat') {
-  const doc = { sessionId, title: String(title).slice(0, 120) || 'New chat', messages: [], createdAt: now(), updatedAt: now() };
+  const initialMessages = [];
+  const doc = { sessionId, title: String(title).slice(0, 120) || 'New chat', titleManuallyEdited: false, messages: initialMessages, branches: [{ branchId: 'main', parentBranchId: null, forkedFromMessageId: null, messages: initialMessages, createdAt: now(), updatedAt: now() }], activeBranchId: 'main', revision: 0, createdAt: now(), updatedAt: now() };
   if (mongoose.connection.readyState === 1) {
     const created = await Chat.create(doc);
     return created.toObject();
@@ -56,11 +59,13 @@ export async function createChat(sessionId, title = 'New chat') {
 
 export async function updateChat(sessionId, chatId, patch) {
   const values = { ...patch, updatedAt: now() };
+  const expectedRevision = values.expectedRevision; delete values.expectedRevision;
   if (values.messages) values.messages = cleanMessages(values.messages);
   if (values.title) values.title = String(values.title).slice(0, 120);
-  if (mongoose.connection.readyState === 1) return Chat.findOneAndUpdate({ _id: chatId, sessionId }, { $set: values }, { new: true }).lean();
+  if (Array.isArray(values.branches)) values.branches = values.branches.map(branch => ({ ...branch, messages: cleanMessages(branch.messages || []) }));
+  if (mongoose.connection.readyState === 1) return Chat.findOneAndUpdate({ _id: chatId, sessionId, ...(Number.isInteger(expectedRevision) ? { revision: expectedRevision } : {}) }, { $set: values }, { new: true }).lean();
   const current = memory.get(chatId);
-  if (!current || current.sessionId !== sessionId) return null;
+  if (!current || current.sessionId !== sessionId || (Number.isInteger(expectedRevision) && (current.revision || 0) !== expectedRevision)) return null;
   const next = { ...current, ...values };
   memory.set(chatId, next);
   return next;

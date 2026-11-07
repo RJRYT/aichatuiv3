@@ -4,6 +4,7 @@ const router = Router();
 for (const provider of ['google', 'github', 'discord']) {
   router.get(`/${provider}`, (req, res) => oauthStart(req, res, provider));
   router.get(`/${provider}/callback`, (req, res, next) => oauthCallback(req, res, provider).catch(next));
+  router.get(`/${provider}/link`, requireAuth, (req, res) => { req.authLinkUserId = String(req.user._id); oauthStart(req, res, provider); });
 }
 router.get('/me', requireAuth, currentUser);
 router.post('/logout', (_req, res) => { clearSessionCookie(res); res.json({ ok: true }); });
