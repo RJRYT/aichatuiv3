@@ -3,6 +3,9 @@ import { Parser } from 'expr-eval';
 import { User } from '../models/User.js';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import logger from '../utils/logger.js';
+
+const toolLog = logger.child({ component: 'tools' });
 const parser = new Parser({ operators: { logical: false, comparison: false, in: false, assignment: false } });
 
 const tools = [
@@ -50,6 +53,8 @@ async function tavilySearch(args) {
   return { query: args.query, answer: data.answer || null, results: (data.results || []).map(item => ({ title: item.title, url: item.url, content: item.content, score: item.score, published_date: item.published_date || null })) };
 }
 async function executeTool(name, args, user, options = {}) {
+  const userId = user ? String(user._id) : 'guest';
+  toolLog.debug('Tool execution started.', { tool: name, userId });
   if (name === 'execute_python') {
     if (!user?._id || String(user._id).startsWith('guest:')) throw new Error('A signed-in user is required for Python execution.');
     const result = await executePython({ code: args.code }, String(user._id), { signal: options.signal });
@@ -61,6 +66,7 @@ async function executeTool(name, args, user, options = {}) {
     const existed = Boolean(await User.exists({ _id: user._id, 'memories.text': memory }));
     let updated = await User.findOneAndUpdate({ _id: user._id, 'memories.text': { $ne: memory } }, { $push: { memories: { text: memory, source: 'assistant' } } }, { new: true }).select('memories').lean();
     if (!updated) updated = await User.findById(user._id).select('memories').lean();
+    toolLog.info('Memory saved.', { userId, memory, duplicate: existed, totalMemories: updated?.memories?.length || 0 });
     return { saved: true, duplicate: existed, memory, totalMemories: updated?.memories?.length || 0 };
   }
   if (name === 'search_memories') {
@@ -69,7 +75,12 @@ async function executeTool(name, args, user, options = {}) {
     const found = (doc?.memories || []).filter(m => !query || m.text.toLowerCase().includes(query)).slice(0, 15).map(m => ({ id: m._id, text: m.text }));
     return { memories: found };
   }
-  if (name === 'web_search') return tavilySearch(args);
+  if (name === 'web_search') {
+    toolLog.debug('Web search started.', { userId, query: String(args.query || '').slice(0, 100) });
+    const result = await tavilySearch(args);
+    toolLog.debug('Web search completed.', { userId, query: String(args.query || '').slice(0, 100), resultCount: result.results?.length });
+    return result;
+  }
   if (name === 'calculator') {
     const expression = String(args.expression || ''); if (expression.length > 300) throw new Error('Expression is too long.');
     const result = parser.parse(expression).evaluate({}); if (!Number.isFinite(result)) throw new Error('Expression did not return a finite number.'); return { result };
@@ -93,11 +104,14 @@ async function executeTool(name, args, user, options = {}) {
     return { repositories: (data.items || []).map(repo => ({ full_name: repo.full_name, description: repo.description, html_url: repo.html_url, stargazers_count: repo.stargazers_count, language: repo.language })) };
   }
   if (name === 'fetch_public_url') {
+    toolLog.debug('Fetch public URL started.', { userId, url: String(args.url || '') });
     const url = await safeUrl(String(args.url || ''));
     const response = await fetch(url, { headers: { 'User-Agent': 'Nemotron-Agent-Lab/1.0', Accept: 'text/html,text/plain,application/json' }, redirect: 'error', signal: AbortSignal.timeout(15000) });
     if (!response.ok) throw new Error(`URL returned HTTP ${response.status}`);
     const type = response.headers.get('content-type') || ''; if (!/text\//i.test(type) && !/json/i.test(type)) throw new Error('Only text, HTML and JSON responses can be fetched.');
-    return { url: url.toString(), contentType: type, content: (await response.text()).slice(0, 30000) };
+    const content = (await response.text()).slice(0, 30000);
+    toolLog.info('Fetch public URL completed.', { userId, url: url.toString(), contentLength: content.length });
+    return { url: url.toString(), contentType: type, content };
   }
   throw new Error(`Unknown tool: ${name}`);
 }
@@ -116,6 +130,13 @@ export function getPluginCatalog() {
   ];
 }
 export async function runTool(name, args, user, options = {}) {
-  try { return { ok: true, result: await executeTool(name, args, user, options) }; }
-  catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
+  const userId = user ? String(user._id) : 'guest';
+  try {
+    const result = await executeTool(name, args, user, options);
+    toolLog.debug('Tool execution completed.', { tool: name, userId, ok: true });
+    return { ok: true, result };
+  } catch (error) {
+    toolLog.warn('Tool execution failed.', { tool: name, userId, error: error instanceof Error ? error.message : String(error) });
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }

@@ -1,5 +1,8 @@
 import crypto from 'node:crypto';
 import { User } from '../models/User.js';
+import logger from '../utils/logger.js';
+
+const authLog = logger.child({ component: 'auth' });
 
 const cookieName = 'nemotron_session';
 const stateCookie = 'nemotron_oauth_state';
@@ -42,13 +45,19 @@ export async function requireAuth(req, res, next) {
       const payload = JSON.parse(Buffer.from(raw, 'base64url').toString());
       if (payload.exp > Date.now()) {
         const user = await User.findById(payload.sub).lean();
-        if (user) { req.user = user; return next(); }
+        if (user) {
+          req.user = user;
+          authLog.info('Authenticated request.', { userId: String(user._id), path: req.path });
+          return next();
+        }
       }
     }
     if (process.env.AUTH_REQUIRED === 'false' && process.env.NODE_ENV !== 'production') {
       req.user = { _id: `guest:${req.ip}`, name: 'Guest', preferences: {}, memories: [] };
+      authLog.debug('Guest session created.', { ip: req.ip });
       return next();
     }
+    authLog.warn('Authentication required.', { path: req.path });
     return res.status(401).json({ error: 'Authentication required.' });
   } catch (error) { return next(error); }
 }
@@ -65,7 +74,10 @@ function providerConfig(provider) {
 
 export function oauthStart(req, res, provider) {
   const config = providerConfig(provider);
-  if (!config.clientId || !config.clientSecret) return res.status(503).send(`${provider} OAuth is not configured on the server.`);
+  if (!config.clientId || !config.clientSecret) {
+    authLog.error('OAuth provider not configured.', { provider });
+    return res.status(503).send(`${provider} OAuth is not configured on the server.`);
+  }
   const state = crypto.randomBytes(24).toString('hex');
   const linkUserId = req.authLinkUserId || null;
   setCookie(res, stateCookie, signed(b64(JSON.stringify({ state, provider, linkUserId, exp: Date.now() + 10 * 60 * 1000 }))), 600);
@@ -108,14 +120,21 @@ async function fetchProfile(provider, token) {
 
 export async function oauthCallback(req, res, provider) {
   const frontend = process.env.FRONTEND_URL || 'http://localhost:5173';
+  authLog.info('OAuth callback received.', { provider });
   let linkAttempt = false;
   try {
     const cookies = parseCookies(req.headers.cookie || '');
     const raw = verify(cookies[stateCookie]);
     const statePayload = raw ? JSON.parse(Buffer.from(raw, 'base64url').toString()) : null;
     clearCookie(res, stateCookie);
-    if (!statePayload || statePayload.provider !== provider || statePayload.state !== req.query.state || statePayload.exp < Date.now()) throw new Error('OAuth state validation failed. Please try signing in again.');
-    if (req.query.error) throw new Error(String(req.query.error));
+    if (!statePayload || statePayload.provider !== provider || statePayload.state !== req.query.state || statePayload.exp < Date.now()) {
+      authLog.warn('OAuth state validation failed.', { provider });
+      throw new Error('OAuth state validation failed. Please try signing in again.');
+    }
+    if (req.query.error) {
+      authLog.warn('OAuth provider returned error.', { provider, error: req.query.error });
+      throw new Error(String(req.query.error));
+    }
     const config = providerConfig(provider);
     const token = await exchangeToken(provider, config, String(req.query.code || ''));
     const profile = await fetchProfile(provider, token);
@@ -164,6 +183,7 @@ export async function oauthCallback(req, res, provider) {
       await user.save();
     }
     createSessionCookie(res, user._id);
+    authLog.info('User signed in successfully.', { userId: String(user._id), provider, linkAttempt });
     res.redirect(frontend);
   } catch (error) {
     const key = linkAttempt ? 'account_link_error' : 'auth_error';
