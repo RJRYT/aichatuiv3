@@ -112,12 +112,14 @@ function log(level, message, meta = {}) {
 }
 
 function child(meta) {
-  return {
+  const bound = {
     debug: (message, extra) => log('debug', message, { ...meta, ...extra }),
     info: (message, extra) => log('info', message, { ...meta, ...extra }),
     warn: (message, extra) => log('warn', message, { ...meta, ...extra }),
     error: (message, extra) => log('error', message, { ...meta, ...extra }),
   };
+  bound.child = (extra) => child({ ...meta, ...extra });
+  return bound;
 }
 
 const logger = {
