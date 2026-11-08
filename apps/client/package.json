@@ -16,5 +16,8 @@
     "remark-gfm": "^4.0.1",
     "@vitejs/plugin-react": "^5.0.4",
     "vite": "^7.1.7"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
   }
 }

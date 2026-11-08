@@ -1,17 +1,13 @@
 import crypto from 'node:crypto';
 import { getToolDefinitions, runTool } from './tools.js';
 import { buildSystemPrompt } from './systemPrompt.js';
-import logger from '../utils/logger.js';
 export const MODEL_ID = 'nvidia/nemotron-3.5-super-vl-120b-a12b';
-
-const nvidiaLog = logger.child({ component: 'nvidia' });
 const NVIDIA_ENDPOINT = 'https://integrate.api.nvidia.com/v1/chat/completions';
 const MAX_TOOL_ROUNDS = 8;
 function sse(res, payload) { if (!res.writableEnded) res.write(`data: ${JSON.stringify(payload)}\n\n`); }
 function parseToolArgs(raw) { try { return typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {}); } catch { return {}; } }
 function systemPrompt(user) { return buildSystemPrompt(user); }
 async function requestRound({ messages, tools, thinkingEnabled, signal, res, round, hasVision }) {
-  nvidiaLog.debug('NVIDIA request round.', { round, toolCount: tools.length, hasVision, messageCount: messages.length });
   const body = {
     model: MODEL_ID, messages, temperature: hasVision ? 0.6 : 1.0, top_p: 0.95,
     stream: true,
@@ -19,7 +15,7 @@ async function requestRound({ messages, tools, thinkingEnabled, signal, res, rou
     ...(tools.length ? { tools, tool_choice: 'auto', parallel_tool_calls: true } : {})
   };
   const response = await fetch(NVIDIA_ENDPOINT, { method: 'POST', headers: { Authorization: `Bearer ${process.env.NVIDIA_API_KEY}`, 'Content-Type': 'application/json', Accept: 'text/event-stream' }, body: JSON.stringify(body), signal });
-  if (!response.ok) { const detail = (await response.text()).slice(0, 9000); nvidiaLog.error('NVIDIA NIM returned error.', { status: response.status, detail }); throw Object.assign(new Error(`NVIDIA NIM returned HTTP ${response.status}: ${detail}`), { status: response.status }); }
+  if (!response.ok) { const detail = (await response.text()).slice(0, 9000); throw Object.assign(new Error(`NVIDIA NIM returned HTTP ${response.status}: ${detail}`), { status: response.status }); }
   if (!response.body) throw new Error('NVIDIA returned an empty streaming response body.');
   const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = '', content = '', reasoning = '', finishReason = null, usage = null; const calls = new Map();
   const handleLine = line => {
@@ -48,24 +44,12 @@ async function requestRound({ messages, tools, thinkingEnabled, signal, res, rou
   return { content, reasoning, finishReason, usage, toolCalls: [...calls.values()].sort((a, b) => a.index - b.index) };
 }
 export async function runNemotronChat({ body, req, res, persist, user }) {
-  const requestId = req.requestId || crypto.randomUUID();
-  const chatId = String(body?.chatId || 'unknown');
-  const log = nvidiaLog.child({ requestId, chatId });
-
-  if (!process.env.NVIDIA_API_KEY) {
-    log.error('NVIDIA_API_KEY is missing on the backend.');
-    throw Object.assign(new Error('NVIDIA_API_KEY is missing on the backend.'), { status: 503 });
-  }
-  if (!Array.isArray(body.messages) || !body.messages.length) {
-    log.warn('Invalid request: empty messages array.', { messageCount: body.messages?.length });
-    throw Object.assign(new Error('A non-empty messages array is required.'), { status: 400 });
-  }
-  const userId = user ? String(user._id) : 'guest';
+  if (!process.env.NVIDIA_API_KEY) throw Object.assign(new Error('NVIDIA_API_KEY is missing on the backend.'), { status: 503 });
+  if (!Array.isArray(body.messages) || !body.messages.length) throw Object.assign(new Error('A non-empty messages array is required.'), { status: 400 });
   const tools = getToolDefinitions();
   const input = body.messages.map(m => ({ role: m.role, content: m.content, ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}), ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}), ...(m.name ? { name: m.name } : {}) }));
   const messages = [{ role: 'system', content: systemPrompt(user) }, ...input];
   const hasVision = input.some(m => Array.isArray(m.content) && m.content.some(p => p.type === 'image_url'));
-  log.info('Chat generation started.', { userId, hasVision, messageCount: input.length, toolCount: tools.length, thinkingEnabled: body.thinkingEnabled !== false });
   const controller = new AbortController(); const onClose = () => { if (!res.writableEnded) controller.abort(); }; res.on('close', onClose);
   const startedAt = Date.now(); let finalUsage = null, finalText = '', finalReasoning = '', rounds = 0, toolEvents = [];
   try {
@@ -74,36 +58,28 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
       const result = await requestRound({ messages, tools, thinkingEnabled: body.thinkingEnabled !== false, signal: controller.signal, res, round, hasVision });
       finalUsage = result.usage || finalUsage; finalText += result.content; finalReasoning += result.reasoning;
       if (!result.toolCalls.length) break;
-      if (round === MAX_TOOL_ROUNDS) {
-        log.warn('Plugin execution exceeded safety limit.', { rounds });
-        throw new Error('Plugin execution exceeded the safety limit.');
-      }
+      if (round === MAX_TOOL_ROUNDS) throw new Error('Plugin execution exceeded the safety limit.');
       const calls = result.toolCalls.map((call, index) => ({ id: call.id || `call_${round}_${index}`, type: 'function', function: { name: call.function.name, arguments: call.function.arguments || '{}' } }));
       messages.push({ role: 'assistant', content: result.content || null, tool_calls: calls });
       for (const call of calls) {
         const name = call.function.name, args = parseToolArgs(call.function.arguments);
         const safeArgs = name === 'execute_python' ? { task_context: args.task_context || '', code_bytes: Buffer.byteLength(String(args.code || ''), 'utf8') } : args;
-        log.debug('Tool call started.', { tool: name, round, args: safeArgs });
         sse(res, { type: 'tool_start', name, arguments: safeArgs, round });
         const outcome = await runTool(name, args, user, { signal: controller.signal });
         const event = { name, arguments: safeArgs, status: outcome.ok ? 'complete' : 'error', result: outcome.ok ? outcome.result : undefined, error: outcome.ok ? undefined : outcome.error };
         toolEvents.push(event); sse(res, { type: 'tool_result', ...event, round });
-        log.debug('Tool call completed.', { tool: name, round, ok: outcome.ok, error: outcome.error });
         messages.push({ role: 'tool', tool_call_id: call.id, name, content: JSON.stringify(outcome) });
       }
     }
     const visible = body.messages.filter(m => m.role !== 'system' && m.role !== 'tool');
     await persist?.([...visible, { id: String(body.assistantMessageId || crypto.randomUUID()), role: 'assistant', content: finalText, reasoning: finalReasoning, usage: finalUsage, toolEvents, createdAt: new Date().toISOString() }]);
     sse(res, { type: 'done', usage: finalUsage, durationMs: Date.now() - startedAt, toolRounds: rounds });
-    log.info('Chat generation completed.', { userId, durationMs: Date.now() - startedAt, toolRounds: rounds, finalTextLength: finalText.length, finalReasoningLength: finalReasoning.length, toolEventCount: toolEvents.length });
   } catch (error) {
-    log.error('Chat generation failed.', { error: error.message, durationMs: Date.now() - startedAt, toolRounds: rounds });
     if (error.name === 'AbortError') sse(res, { type: 'stopped' });
     else sse(res, { type: 'error', status: error.status || 502, error: error.message || 'NVIDIA request failed.' });
   } finally { res.off('close', onClose); if (!res.writableEnded) res.end(); }
 }
 export async function generateChatTitle(text) {
-  nvidiaLog.debug('Generating chat title.', { textLength: String(text).length });
   const response = await fetch(NVIDIA_ENDPOINT, { method: 'POST', headers: { Authorization: `Bearer ${process.env.NVIDIA_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: MODEL_ID, messages: [{ role: 'system', content: 'Generate a concise, specific chat title of 3 to 8 words using the full conversation context. Focus on the user objective, not greetings or generic assistant text. Consider tool activity only when it materially clarifies the task. Return only the title, no quotes or punctuation.' }, { role: 'user', content: String(text).slice(0, 9000) }], temperature: 0.2, top_p: 0.95, max_tokens: 32, stream: false, chat_template_kwargs: { enable_thinking: false } }), signal: AbortSignal.timeout(20000) });
   if (!response.ok) throw new Error(`Title generation failed with HTTP ${response.status}.`);
   const data = await response.json(); return String(data.choices?.[0]?.message?.content || '').trim().replace(/^['"`]|['"`]$/g, '').slice(0, 72) || 'New chat';

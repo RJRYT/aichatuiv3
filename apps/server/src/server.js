@@ -17,7 +17,8 @@ import publicShareRouter from './routes/publicShare.js';
 import { requireAuth } from './services/auth.js';
 import { getPluginCatalog } from './services/tools.js';
 import { MODEL_ID } from './services/nvidia.js';
-import logger from './utils/logger.js';
+import { closeMontyPool } from './services/interpreter/sandboxManager.js';
+import { pruneArtifacts } from './services/interpreter/artifactStore.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 const app = express(); const port = Number(process.env.PORT || 4000);
@@ -28,7 +29,6 @@ app.set('trust proxy', 1);
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' }, contentSecurityPolicy: false }));
 app.use(cors({ origin(origin, callback) { if (!origin || allowedOrigins.includes('*') || allowedOrigins.includes(origin)) return callback(null, true); if (process.env.NODE_ENV !== 'production' && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return callback(null, true); return callback(new Error(`Origin ${origin} is not allowed by CORS.`)); }, credentials: true, methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type'], maxAge: 86400 }));
 app.use(express.json({ limit: '28mb' }));
-app.use(logger.requestLogger());
 const limiter = rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: 'draft-7', legacyHeaders: false, message: { error: 'Too many requests. Please wait and retry.' } });
 app.get('/api/health', (_req, res) => res.json({ ok: true, database: getDatabaseMode(), authRequired: process.env.AUTH_REQUIRED !== 'false', oauth: { google: Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET), github: Boolean(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET), discord: Boolean(process.env.DISCORD_CLIENT_ID && process.env.DISCORD_CLIENT_SECRET) } }));
 app.use('/api/auth', authRouter);
@@ -41,7 +41,30 @@ app.get('/api/plugins', (_req, res) => res.json({ plugins: getPluginCatalog() })
 app.use('/api/chats', limiter, chatsRouter);
 app.use('/api/chat', limiter, chatRouter);
 if (process.env.SERVE_STATIC !== 'false' && fs.existsSync(frontendDist)) { app.use(express.static(frontendDist, { maxAge: process.env.NODE_ENV === 'production' ? '1y' : 0, immutable: process.env.NODE_ENV === 'production' })); app.get('*', (req, res, next) => req.path.startsWith('/api/') ? next() : res.sendFile(path.join(frontendDist, 'index.html'))); }
-app.use((error, _req, res, _next) => { logger.error('Unhandled request error', { message: error.message, stack: error.stack, status: error.status }); if (res.headersSent) return res.end(); res.status(Number(error.status) || (error.message?.includes('CORS') ? 403 : 500)).json({ error: error.message || 'Internal server error.' }); });
+app.use((error, _req, res, _next) => { console.error('[api]', error); if (res.headersSent) return res.end(); res.status(Number(error.status) || (error.message?.includes('CORS') ? 403 : 500)).json({ error: error.message || 'Internal server error.' }); });
 if (process.env.NODE_ENV === 'production' && (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32 || process.env.SESSION_SECRET === 'development-only-change-this-secret' || process.env.SESSION_SECRET.startsWith('replace-'))) throw new Error('Set a unique SESSION_SECRET of at least 32 characters in production.');
 await connectDatabase();
-app.listen(port, () => logger.info('Nemotron Agent Lab API listening', { port, model: MODEL_ID, database: getDatabaseMode(), authRequired: process.env.AUTH_REQUIRED !== 'false' }));
+const httpServer = app.listen(port, () => console.log(`[api] Nemotron Agent Lab API listening on http://localhost:${port} · model=${MODEL_ID} · db=${getDatabaseMode()}`));
+const artifactPruneTimer = setInterval(() => {
+  pruneArtifacts().catch(error => console.warn('[artifacts] expiry cleanup failed:', error?.message || error));
+}, 15 * 60 * 1000);
+artifactPruneTimer.unref();
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[api] ${signal} received; closing HTTP server and Monty workers...`);
+  clearInterval(artifactPruneTimer);
+  const forceExit = setTimeout(() => {
+    console.error('[api] graceful shutdown deadline exceeded.');
+    process.exit(1);
+  }, 15_000);
+  forceExit.unref();
+  httpServer.close(async () => {
+    await closeMontyPool();
+    clearTimeout(forceExit);
+    process.exitCode = 0;
+  });
+}
+process.once('SIGINT', () => { void shutdown('SIGINT'); });
+process.once('SIGTERM', () => { void shutdown('SIGTERM'); });

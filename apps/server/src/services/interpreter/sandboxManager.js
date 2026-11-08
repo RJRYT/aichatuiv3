@@ -1,104 +1,238 @@
-import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import fs from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
-import { collectArtifacts } from './artifactStore.js';
-import { EXECUTION_LIMITS } from './executionSchemas.js';
+import { storeArtifact, deleteArtifacts } from './artifactStore.js';
+import { EXECUTION_LIMITS, getMontyRuntimeConfig } from './executionSchemas.js';
 
 const active = new Map();
-const pythonBin = process.env.PYTHON_BIN || (process.platform === 'win32' ? 'python' : 'python3');
-const allowUnsandboxed = process.env.PYTHON_ALLOW_UNSANDBOXED === 'true';
-const maxOutput = EXECUTION_LIMITS.outputBytes;
+let poolPromise;
+let poolReady = false;
 
-function appendLimited(current, chunk) {
-  if (current.length >= maxOutput) return current;
-  return (current + chunk.toString('utf8')).slice(0, maxOutput);
+function getPool() {
+  if (!poolPromise) {
+    poolPromise = (async () => {
+      const { Monty } = await import('@pydantic/monty/wasm');
+      const config = getMontyRuntimeConfig();
+      const pool = await Monty.create({
+        minProcesses: 0,
+        maxProcesses: config.maxProcesses,
+        checkoutTimeout: config.checkoutTimeoutSeconds
+      });
+      poolReady = true;
+      return pool;
+    })().catch(error => {
+      poolReady = false;
+      poolPromise = undefined;
+      throw error;
+    });
+  }
+  return poolPromise;
 }
 
-function terminate(child) {
-  if (!child || child.killed) return;
-  try { child.kill('SIGTERM'); } catch {}
-  const force = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 500);
-  force.unref?.();
+function normalizeValue(value, depth = 0, seen = new WeakSet()) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') return value.length > 8000 ? `${value.slice(0, 8000)}… [truncated]` : value;
+  if (typeof value === 'number' || typeof value === 'boolean') return Number.isFinite(value) || typeof value === 'boolean' ? value : String(value);
+  if (typeof value === 'bigint') return value.toString();
+  if (typeof value === 'function') return '[function]';
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+    return { type: 'bytes', byteLength: value.byteLength, note: 'Binary values are not inlined; use create_artifact() to create a downloadable file.' };
+  }
+  if (depth >= 6) return '[maximum result depth reached]';
+  if (typeof value !== 'object') return String(value);
+  if (seen.has(value)) return '[circular reference]';
+  seen.add(value);
+  let output;
+  if (Array.isArray(value)) output = value.slice(0, 100).map(item => normalizeValue(item, depth + 1, seen));
+  else if (value instanceof Map) {
+    const entries = [...value.entries()].slice(0, 100);
+    output = Object.fromEntries(entries.map(([key, item], index) => [typeof key === 'string' ? key : String(index), normalizeValue(item, depth + 1, seen)]));
+  } else if (value instanceof Set) output = [...value].slice(0, 100).map(item => normalizeValue(item, depth + 1, seen));
+  else {
+    output = {};
+    for (const [key, item] of Object.entries(value).slice(0, 100)) {
+      if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
+      output[key] = normalizeValue(item, depth + 1, seen);
+    }
+  }
+  seen.delete(value);
+  return output;
+}
+
+function getExceptionType(error) {
+  return String(error?.exception?.typeName || error?.name || 'Error');
+}
+
+function formatError(error) {
+  if (typeof error?.display === 'function') {
+    try { return String(error.display('traceback')); } catch {
+      try { return String(error.display()); } catch { /* fall through */ }
+    }
+  }
+  return String(error?.message || error || 'Python execution failed.');
+}
+
+function makeArtifactWriter({ ownerId, job }) {
+  const created = [];
+  let totalBytes = 0;
+  const createArtifact = async (...callArgs) => {
+    if (job.cancelled) throw Object.assign(new Error('Execution cancelled by the user.'), { name: 'RuntimeError' });
+    let [name, content, mimeType = 'text/plain'] = callArgs;
+    const maybeKwargs = callArgs.at(-1);
+    if (maybeKwargs && typeof maybeKwargs === 'object' && !Buffer.isBuffer(maybeKwargs) && !(maybeKwargs instanceof Uint8Array) && !Array.isArray(maybeKwargs)) {
+      name = maybeKwargs.name ?? name;
+      content = maybeKwargs.content ?? content;
+      mimeType = maybeKwargs.mime_type ?? maybeKwargs.mimeType ?? mimeType;
+    }
+    if (created.length >= EXECUTION_LIMITS.maxArtifacts) throw new Error(`An execution may create at most ${EXECUTION_LIMITS.maxArtifacts} artifacts.`);
+    const contentBytes = typeof content === 'string' ? Buffer.byteLength(content, 'utf8') : content?.byteLength;
+    if (!Number.isFinite(contentBytes)) throw new Error('Artifact content must be a string or bytes value.');
+    if (totalBytes + contentBytes > EXECUTION_LIMITS.maxArtifactBytes) throw new Error('The total artifact size for this execution exceeds 10 MB.');
+    const artifact = await storeArtifact({ ownerId, name, content, mimeType: String(mimeType || 'text/plain') });
+    created.push(artifact);
+    totalBytes += artifact.size;
+    return { id: artifact.id, name: artifact.name, size: artifact.size, mime_type: artifact.mimeType, download_url: artifact.downloadUrl };
+  };
+  return { createArtifact, created };
 }
 
 /**
- * Native Python provider for hosts where Docker/root access is unavailable.
- *
- * IMPORTANT: A subprocess is NOT a security sandbox. It runs with the Node
- * process account's OS permissions. Enable only for trusted/private use unless
- * the hosting provider separately isolates processes at the OS/container level.
+ * Executes code with Pydantic Monty's WebAssembly worker pool.
+ * The sandbox has no ambient filesystem, network or environment access. The
+ * only host capabilities exposed here are bounded artifact creation and a
+ * cooperative cancellation check.
  */
-export async function executeInSandbox({ code, userId, executionId, signal }) {
+export async function executeWithMonty({ code, userId, executionId, signal, getPool: getPoolOverride = getPool }) {
   const id = executionId || randomUUID();
   const startedAt = Date.now();
-  if (!allowUnsandboxed) {
-    return {
-      executionId: id, status: 'failed', stdout: '',
-      stderr: 'Native Python execution is disabled. Set PYTHON_ALLOW_UNSANDBOXED=true only if you trust submitted code, or configure an isolated remote executor.',
-      exitCode: null, durationMs: Date.now() - startedAt, artifacts: []
-    };
+  const job = { userId: String(userId), cancelled: Boolean(signal?.aborted) };
+  if (job.cancelled) {
+    return { executionId: id, status: 'cancelled', stdout: '', stderr: 'Execution cancelled before it started.', exitCode: null, durationMs: 0, artifacts: [], provider: 'pydantic-monty-wasm' };
   }
+  if (active.has(id)) {
+    return { executionId: id, status: 'failed', stdout: '', stderr: 'This execution ID is already active. Use a unique executionId for each request.', exitCode: 1, durationMs: 0, artifacts: [], provider: 'pydantic-monty-wasm' };
+  }
+  active.set(id, job);
+  const onAbort = () => { job.cancelled = true; };
+  signal?.addEventListener('abort', onAbort, { once: true });
 
-  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'nemotron-python-'));
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  signal?.addEventListener('abort', abort, { once: true });
-  active.set(id, { controller, userId: String(userId), child: null });
-  let stdout = '', stderr = '', exitCode = null, timedOut = false;
-  const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, EXECUTION_LIMITS.timeoutMs);
+  let session;
+  let stdout = '';
+  let stderr = '';
+  let outputBytes = 0;
+  let result;
+  const appendOutput = (stream, incoming) => {
+    const available = EXECUTION_LIMITS.maxOutputBytes - outputBytes;
+    if (available <= 0) return;
+    const bytes = Buffer.from(String(incoming ?? ''), 'utf8');
+    const accepted = bytes.subarray(0, available).toString('utf8');
+    outputBytes += Buffer.byteLength(accepted, 'utf8');
+    if (stream === 'stderr') stderr += accepted;
+    else stdout += accepted;
+  };
+  const { createArtifact, created } = makeArtifactWriter({ ownerId: userId, job });
+  const config = getMontyRuntimeConfig();
+
   try {
-    // Keep the process environment minimal; this is hygiene, not a security boundary.
-    const env = {
-      PATH: process.env.PYTHON_PATH || process.env.PATH || '',
-      HOME: workspace,
-      TMPDIR: workspace,
-      TMP: workspace,
-      TEMP: workspace,
-      PYTHONNOUSERSITE: '1',
-      PYTHONDONTWRITEBYTECODE: '1',
-      MPLCONFIGDIR: path.join(workspace, '.mpl')
-    };
-    const child = spawn(pythonBin, ['-I', '-u', '-c', code], {
-      cwd: workspace, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true
+    const pool = await getPoolOverride();
+    if (job.cancelled) throw Object.assign(new Error('Execution cancelled by the user.'), { name: 'ExecutionCancelledError' });
+    session = await pool.checkout({
+      scriptName: 'nemotron_agent.py',
+      printFlushInterval: 0.005,
+      limits: {
+        maxMemory: config.maxMemory,
+        maxFeedDurationSecs: config.maxFeedDurationSecs,
+        maxRecursionDepth: EXECUTION_LIMITS.maxRecursionDepth,
+        maxSuspensions: EXECUTION_LIMITS.maxSuspensions,
+        maxTotalSleepSecs: 1
+      }
     });
-    active.get(id).child = child;
-    child.stdout.on('data', chunk => { stdout = appendLimited(stdout, chunk); });
-    child.stderr.on('data', chunk => { stderr = appendLimited(stderr, chunk); });
-    const exit = await new Promise((resolve, reject) => {
-      child.once('error', reject);
-      child.once('close', (codeValue, sig) => resolve({ code: codeValue, signal: sig }));
-      controller.signal.addEventListener('abort', () => terminate(child), { once: true });
+    if (job.cancelled) throw Object.assign(new Error('Execution cancelled before Python started.'), { name: 'ExecutionCancelledError' });
+
+    result = await session.feedRun(code, {
+      externalLookup: {
+        create_artifact: createArtifact,
+        check_cancelled: () => {
+          if (job.cancelled) throw Object.assign(new Error('Execution cancelled by the user.'), { name: 'RuntimeError' });
+          return true;
+        }
+      },
+      printCallback: appendOutput
     });
-    exitCode = exit.code;
-    if (exit.signal && !controller.signal.aborted) stderr = appendLimited(stderr, `\nProcess terminated (${exit.signal}).`);
-    const status = timedOut ? 'timeout' : controller.signal.aborted ? 'cancelled' : exitCode === 0 ? 'completed' : 'failed';
-    const artifacts = status === 'completed' ? await collectArtifacts(workspace, userId).catch(error => {
-      stderr = appendLimited(stderr, `\nArtifact collection failed: ${error.message}`);
-      return [];
-    }) : [];
-    return { executionId: id, status, stdout, stderr, exitCode, durationMs: Date.now() - startedAt, artifacts };
-  } catch (error) {
+
+    if (job.cancelled) {
+      await deleteArtifacts(created.map(item => item.id), userId);
+      return {
+        executionId: id, status: 'cancelled', stdout, stderr,
+        exitCode: null, durationMs: Date.now() - startedAt, artifacts: [], provider: 'pydantic-monty-wasm'
+      };
+    }
+
     return {
       executionId: id,
-      status: timedOut ? 'timeout' : controller.signal.aborted ? 'cancelled' : 'failed',
-      stdout, stderr: appendLimited(stderr, error.message), exitCode,
-      durationMs: Date.now() - startedAt, artifacts: []
+      status: 'completed',
+      stdout,
+      stderr,
+      exitCode: 0,
+      durationMs: Date.now() - startedAt,
+      result: normalizeValue(result),
+      artifacts: created,
+      provider: 'pydantic-monty-wasm'
+    };
+  } catch (error) {
+    const exceptionType = getExceptionType(error);
+    const timedOut = exceptionType === 'TimeoutError' || Boolean(error?.timedOut) || /feed time limit exceeded|timed out/i.test(String(error?.message || ''));
+    const cancelled = job.cancelled || exceptionType === 'ExecutionCancelledError';
+    if (created.length) await deleteArtifacts(created.map(item => item.id), userId);
+    const status = cancelled ? 'cancelled' : timedOut ? 'timeout' : 'failed';
+    const detail = formatError(error);
+    appendOutput('stderr', stderr ? `\n${detail}` : detail);
+    return {
+      executionId: id,
+      status,
+      stdout,
+      stderr,
+      exitCode: status === 'failed' ? 1 : null,
+      durationMs: Date.now() - startedAt,
+      artifacts: [],
+      provider: 'pydantic-monty-wasm'
     };
   } finally {
-    clearTimeout(timeout);
-    signal?.removeEventListener('abort', abort);
+    signal?.removeEventListener('abort', onAbort);
     active.delete(id);
-    // Artifact files are copied/registered from this workspace. Keep it until expiry
-    // when artifacts exist; otherwise remove it immediately.
-    await fs.rm(workspace, { recursive: true, force: true }).catch(() => {});
+    if (session) {
+      try { await session.close(); }
+      catch (error) { console.warn('[monty] session cleanup failed:', error?.message || error); }
+    }
   }
+}
+
+export function executeInSandbox(args) {
+  return executeWithMonty(args);
 }
 
 export function cancelExecution(executionId, userId) {
   const item = active.get(executionId);
   if (!item || item.userId !== String(userId)) return false;
-  item.controller.abort();
+  item.cancelled = true;
   return true;
 }
+
+export async function closeMontyPool() {
+  if (!poolPromise) return;
+  const current = poolPromise;
+  poolPromise = undefined;
+  poolReady = false;
+  try {
+    const pool = await current;
+    await pool.close();
+  } catch (error) {
+    console.warn('[monty] pool shutdown failed:', error?.message || error);
+  } finally {
+    poolReady = false;
+  }
+}
+
+export function getInterpreterStatus() {
+  return { provider: 'pydantic-monty-wasm', runtime: 'WebAssembly + Node.js worker_threads', ready: poolReady, initializing: Boolean(poolPromise) && !poolReady, activeExecutions: active.size };
+}
+
+export { normalizeValue as normalizeMontyValue, getExceptionType as getMontyExceptionType };

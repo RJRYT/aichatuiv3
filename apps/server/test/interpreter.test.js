@@ -20,3 +20,23 @@ test('enforces per-user concurrent execution quota and releases slots', () => {
   const releaseC = acquireExecution('test-user');
   releaseB(); releaseC();
 });
+
+test('Monty runtime settings are clamped and checkout can wait for a single worker feed', async () => {
+  const { getMontyRuntimeConfig } = await import('../src/services/interpreter/executionSchemas.js');
+  assert.deepEqual(getMontyRuntimeConfig({}), {
+    maxProcesses: 1,
+    maxMemory: 32 * 1024 * 1024,
+    maxFeedDurationSecs: 12,
+    checkoutTimeoutSeconds: 17
+  });
+  assert.deepEqual(getMontyRuntimeConfig({
+    MONTY_MAX_WORKERS: '99',
+    MONTY_MAX_MEMORY_BYTES: '1',
+    MONTY_MAX_FEED_SECONDS: '99'
+  }), {
+    maxProcesses: 4,
+    maxMemory: 8 * 1024 * 1024,
+    maxFeedDurationSecs: 30,
+    checkoutTimeoutSeconds: 35
+  });
+});

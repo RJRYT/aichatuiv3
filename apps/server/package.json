@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "sandbox:check": "node scripts/check-python.js"
+    "monty:check": "node scripts/check-monty.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -15,6 +15,10 @@
     "express-rate-limit": "^7.5.0",
     "expr-eval": "^2.0.2",
     "helmet": "^8.0.0",
-    "mongoose": "^8.9.5"
+    "mongoose": "^8.9.5",
+    "@pydantic/monty": "1.3.0"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
   }
 }

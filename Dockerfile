@@ -21,8 +21,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV SERVE_STATIC=true
 
-# Docker CLI connects to a dedicated remote sandbox daemon via DOCKER_HOST.
-RUN apk add --no-cache docker-cli
+# Python execution uses Pydantic Monty WASM + Node worker_threads; no Docker CLI or Python runtime is required.
 
 WORKDIR /app/apps/server
 

@@ -12,7 +12,7 @@ apps/
 
 ## Local setup
 
-Requirements: Node.js 20+, npm 10+, MongoDB.
+Requirements: Node.js `^20.19.0` or `>=22.12.0`, npm 10+, MongoDB. `.nvmrc` selects Node.js 22.
 
 ```bash
 npm install
@@ -61,7 +61,7 @@ npm run build
 npm start
 ```
 
-The root `prestart` script builds the React client; Express serves `apps/client/dist` when `SERVE_STATIC=true`.
+Build the React client before starting; Express serves `apps/client/dist` when `SERVE_STATIC=true`.
 
 ### Separate static frontend and API host
 
@@ -104,60 +104,78 @@ API reference: https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3_5-sup
 
 The model card advertises up to 1M context, text/image/video input and configurable thinking. Individual hosted deployments can enforce smaller limits. The agent does not assume that the full advertised context is always available.
 
-## Universal Python execution (v2 upgrade)
+## Universal Python execution (v5 Monty upgrade)
 
 The agent now exposes one general-purpose `execute_python` function tool. The model decides when to call it; users do not need to select a tool in the composer. Tool calls and their status/arguments/results appear inside the assistant response activity panel. Fenced code blocks include a language label and a copy action. The composer uses **Enter for a newline** and **Ctrl+Enter (Cmd+Enter on macOS) to send**.
 
-### Python runtime (Docker optional)
+### Python runtime (Pydantic Monty OSS WebAssembly)
 
-The v4 interpreter no longer builds or invokes Docker. It starts the configured Python
-executable as a child process in a fresh temporary working directory. The model-facing
-`execute_python` tool and existing authenticated execution, cancellation and artifact
-download API routes are retained.
+The v5 interpreter uses the open-source `@pydantic/monty` package through its
+`@pydantic/monty/wasm` entry point. Under Node.js, Monty WASM runs in
+`node:worker_threads`; the application does not spawn Python, invoke Docker, or need
+root access. A Node.js 20+ runtime with worker-thread support is required.
 
-Check whether the hosting provider supplies Python and allows Node.js child processes:
+Install dependencies and verify the runtime:
 
 ```bash
-npm run sandbox:check
+npm install
+npm run monty:check
 ```
 
-Configure the runtime:
+Configure the optional resource settings in `.env`:
 
 ```env
-PYTHON_BIN=python3
-PYTHON_ALLOW_UNSANDBOXED=false
+MONTY_MAX_WORKERS=1
+MONTY_MAX_MEMORY_BYTES=33554432
+MONTY_MAX_FEED_SECONDS=12
 ```
 
-Set `PYTHON_BIN` to the exact executable path if Python is not on `PATH`. Install any
-required Python libraries through the hosting provider's supported build mechanism;
-the application never runs arbitrary `pip install` commands.
+The backend clamps these values to safe ranges. Defaults are one worker, 32 MiB of
+Monty heap memory per session, and a 12-second maximum feed duration. Each session
+also has recursion, host-suspension and cumulative sleep limits. With a one-worker
+configuration, queued checkouts wait up to the feed limit plus a small margin. The
+worker pool is created lazily when the first Python execution arrives.
 
-**Critical security warning:** native subprocess execution is not a secure sandbox.
-Python runs with the same operating-system permissions as the Node.js service. The
-implementation provides a temporary working directory, reduced environment, timeout,
-cancellation, output limits and bounded artifact collection, but it cannot enforce
-filesystem/network isolation or hard CPU/memory limits without OS/container support.
-`PYTHON_ALLOW_UNSANDBOXED=true` is an explicit opt-in and is suitable only for trusted,
-private use. Do not enable it for a public multi-user service accepting untrusted code.
+**Monty is a Python subset, not full CPython.** Its bundled standard library covers
+common tasks such as math, JSON, CSV, text processing, dates, regular expressions and
+collections. Third-party packages such as NumPy, Pandas, Matplotlib, SciPy, Pillow and
+openpyxl are not available. The WASM build does not support filesystem mounts. Python
+code cannot use `open()` or `pathlib` to access host files and has no ambient network
+or environment access.
 
-For public execution, use a separately isolated remote runner or a hosting product that
-provides per-job sandboxing. Managed hosting without root access cannot gain a strong
-security boundary merely by spawning Python. Docker is no longer a requirement for the
-chat application, but isolation is still required before exposing arbitrary code execution
-to untrusted users.
+To produce a downloadable file, the model must call the explicitly exposed
+`create_artifact(name, content, mime_type)` host function. The backend validates the
+name, MIME type, owner, size and artifact count before storing it. Artifacts are
+available through the existing authenticated download endpoint for one hour. Storage
+is capped at 20 MB per account and 64 MB per server process. Artifacts use temporary
+host storage and are process-local: they do not survive restarts or move between replicas.
+The other exposed host function, `check_cancelled()`, supports cooperative cancellation;
+Monty also enforces the feed-duration limit. Cancellation is not an instant hard kill:
+code that does not reach the cooperative check may continue until the execution limit.
 
-The authenticated API remains `POST /api/interpreter/execute` with
-`{ "code": "print(1 + 1)", "executionId": "optional-client-id" }`.
-Cancellation remains `POST /api/interpreter/cancel/:id`; artifacts remain available from
-`GET /api/interpreter/artifacts/:id`. The internal model tool uses the same execution
-service. Execution requires a signed-in account. Limits are defined in
-`apps/server/src/services/interpreter/executionSchemas.js`.
+The authenticated API contracts are preserved:
+
+- `POST /api/interpreter/execute` with `{ "code": "print(1 + 1)", "executionId": "optional-client-id" }`
+- `POST /api/interpreter/cancel/:id` requests cancellation.
+- `GET /api/interpreter/artifacts/:id` downloads an owner-checked artifact.
+- `GET /api/interpreter/status` reports the active interpreter provider and readiness.
+
+Execution requires a signed-in account. The existing model-facing `execute_python`
+tool is unchanged at the API/schema level. The provider is reported as
+`pydantic-monty-wasm` in execution results.
+
+**Isolation note:** Monty evaluates Python in a constrained WebAssembly runtime and
+only the narrow host functions above are exposed. The Node WASM build uses worker
+threads, not separate OS processes or containers. Do not add broad host functions or
+pass secrets, unrestricted filesystem handles, or network clients into the sandbox.
+For deployments accepting hostile multi-tenant code, retain OS-level resource controls
+and conduct a security review of the actual hosting environment.
 
 ### Current upgrade scope
 
 This repository update includes the isolated Python execution foundation, the model tool registration and streaming activity, owner-checked artifact downloads, removal of the composer plugin drop-up, multiline keyboard behavior, richer activity details, code-block copy controls, context-based chat title input, centralized versioned system-prompt construction, memory duplicate avoidance, and private-app SEO/robots metadata.
 
-The continuity upgrade adds linked OAuth identities, editable profiles/usernames, conversation branches, response versions, prompt editing as a new branch, response regeneration, opt-in public snapshots with revocation, IndexedDB composer drafts, active-chat restoration, revision checks, context-aware/manual chat naming, and memory synchronization. The account migration is intentionally explicit and must be run before relying on the new linked-account/username fields. A production-grade end-to-end security audit, full attachment ingestion into Python, browser/device QA, and a real Docker sandbox deployment test remain deployment verification tasks. Do not treat those items as completed.
+The continuity upgrade adds linked OAuth identities, editable profiles/usernames, conversation branches, response versions, prompt editing as a new branch, response regeneration, opt-in public snapshots with revocation, IndexedDB composer drafts, active-chat restoration, revision checks, context-aware/manual chat naming, and memory synchronization. The account migration is intentionally explicit and must be run before relying on the new linked-account/username fields. A production-grade end-to-end security audit, full attachment ingestion into Python, browser/device QA, and Monty WASM runtime compatibility and worker-thread behavior must still be verified on the target managed host. Do not treat those items as completed.
 
 
 ## Continuity upgrade — account and conversation architecture
@@ -206,4 +224,4 @@ The active chat ID is stored as a small local preference. The composer draft is 
 
 ## Verification notes
 
-The repository includes unit tests for branch-prefix behavior and interpreter validation/queue limits. Run `npm test`. A successful unit-test run does not replace a live MongoDB migration rehearsal, OAuth-provider testing, frontend production build, Docker sandbox threat testing, or deployment-level browser testing.
+The repository includes 17 Node.js unit tests covering conversation branches, interpreter input/queue limits, Monty provider behavior, output caps, cancellation and artifact ownership. Run `npm test`. A successful unit-test run does not replace a live MongoDB migration rehearsal, OAuth-provider testing, frontend production build, managed-host Monty WASM verification, or deployment-level browser testing.

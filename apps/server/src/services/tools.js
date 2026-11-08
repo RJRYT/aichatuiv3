@@ -3,13 +3,10 @@ import { Parser } from 'expr-eval';
 import { User } from '../models/User.js';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
-import logger from '../utils/logger.js';
-
-const toolLog = logger.child({ component: 'tools' });
 const parser = new Parser({ operators: { logical: false, comparison: false, in: false, assignment: false } });
 
 const tools = [
-  { type: 'function', function: { name: 'execute_python', description: 'Execute Python in an isolated, network-disabled sandbox. Use for calculations, data processing, CSV/JSON analysis, charts and generating files. Return and inspect stdout, stderr, status and artifact metadata. Do not claim success unless status is completed.', parameters: { type: 'object', properties: { code: { type: 'string', description: 'Complete Python source code to execute.' }, task_context: { type: 'string', description: 'Brief description of the intended computation.' } }, required: ['code'] } } },
+  { type: 'function', function: { name: 'execute_python', description: 'Execute Python with Pydantic Monty WebAssembly in a resource-limited sandbox. Use for calculations, algorithms, JSON/CSV/text processing and lightweight data analysis. This is a Python subset, not CPython: third-party packages such as pandas, numpy, matplotlib and scipy are unavailable, and the sandbox has no normal filesystem, network or environment access. For downloadable files use `await create_artifact(name, content, mime_type)` with text or bytes; do not use open() or pathlib to write files. In long loops call check_cancelled() periodically. Inspect stdout, stderr, result, status and artifact metadata. Do not claim success unless status is completed.', parameters: { type: 'object', properties: { code: { type: 'string', description: 'Python source for Pydantic Monty (supported Python subset and bundled standard library only). Use `await create_artifact(name, content, mime_type)` for downloadable output and check_cancelled() inside long loops.' }, task_context: { type: 'string', description: 'Brief description of the intended computation.' } }, required: ['code'] } } },
   { type: 'function', function: { name: 'web_search', description: 'Search the public web for current information. Return concise source titles, URLs, snippets and dates. Use for current facts, research, documentation and news.', parameters: { type: 'object', properties: { query: { type: 'string', description: 'Specific search query' }, topic: { type: 'string', enum: ['general', 'news', 'finance'], description: 'Search topic' }, max_results: { type: 'integer', minimum: 1, maximum: 8 } }, required: ['query'] } } },
   { type: 'function', function: { name: 'save_memory', description: 'Save a concise, useful fact or preference about the user to their long-term memory. Only use when the user explicitly asks you to remember or save something.', parameters: { type: 'object', properties: { memory: { type: 'string', description: 'A concise user fact or preference to remember' } }, required: ['memory'] } } },
   { type: 'function', function: { name: 'search_memories', description: "Search the current user's saved memories for relevant information.", parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } } },
@@ -53,8 +50,6 @@ async function tavilySearch(args) {
   return { query: args.query, answer: data.answer || null, results: (data.results || []).map(item => ({ title: item.title, url: item.url, content: item.content, score: item.score, published_date: item.published_date || null })) };
 }
 async function executeTool(name, args, user, options = {}) {
-  const userId = user ? String(user._id) : 'guest';
-  toolLog.debug('Tool execution started.', { tool: name, userId });
   if (name === 'execute_python') {
     if (!user?._id || String(user._id).startsWith('guest:')) throw new Error('A signed-in user is required for Python execution.');
     const result = await executePython({ code: args.code }, String(user._id), { signal: options.signal });
@@ -66,7 +61,6 @@ async function executeTool(name, args, user, options = {}) {
     const existed = Boolean(await User.exists({ _id: user._id, 'memories.text': memory }));
     let updated = await User.findOneAndUpdate({ _id: user._id, 'memories.text': { $ne: memory } }, { $push: { memories: { text: memory, source: 'assistant' } } }, { new: true }).select('memories').lean();
     if (!updated) updated = await User.findById(user._id).select('memories').lean();
-    toolLog.info('Memory saved.', { userId, memory, duplicate: existed, totalMemories: updated?.memories?.length || 0 });
     return { saved: true, duplicate: existed, memory, totalMemories: updated?.memories?.length || 0 };
   }
   if (name === 'search_memories') {
@@ -75,12 +69,7 @@ async function executeTool(name, args, user, options = {}) {
     const found = (doc?.memories || []).filter(m => !query || m.text.toLowerCase().includes(query)).slice(0, 15).map(m => ({ id: m._id, text: m.text }));
     return { memories: found };
   }
-  if (name === 'web_search') {
-    toolLog.debug('Web search started.', { userId, query: String(args.query || '').slice(0, 100) });
-    const result = await tavilySearch(args);
-    toolLog.debug('Web search completed.', { userId, query: String(args.query || '').slice(0, 100), resultCount: result.results?.length });
-    return result;
-  }
+  if (name === 'web_search') return tavilySearch(args);
   if (name === 'calculator') {
     const expression = String(args.expression || ''); if (expression.length > 300) throw new Error('Expression is too long.');
     const result = parser.parse(expression).evaluate({}); if (!Number.isFinite(result)) throw new Error('Expression did not return a finite number.'); return { result };
@@ -104,14 +93,11 @@ async function executeTool(name, args, user, options = {}) {
     return { repositories: (data.items || []).map(repo => ({ full_name: repo.full_name, description: repo.description, html_url: repo.html_url, stargazers_count: repo.stargazers_count, language: repo.language })) };
   }
   if (name === 'fetch_public_url') {
-    toolLog.debug('Fetch public URL started.', { userId, url: String(args.url || '') });
     const url = await safeUrl(String(args.url || ''));
     const response = await fetch(url, { headers: { 'User-Agent': 'Nemotron-Agent-Lab/1.0', Accept: 'text/html,text/plain,application/json' }, redirect: 'error', signal: AbortSignal.timeout(15000) });
     if (!response.ok) throw new Error(`URL returned HTTP ${response.status}`);
     const type = response.headers.get('content-type') || ''; if (!/text\//i.test(type) && !/json/i.test(type)) throw new Error('Only text, HTML and JSON responses can be fetched.');
-    const content = (await response.text()).slice(0, 30000);
-    toolLog.info('Fetch public URL completed.', { userId, url: url.toString(), contentLength: content.length });
-    return { url: url.toString(), contentType: type, content };
+    return { url: url.toString(), contentType: type, content: (await response.text()).slice(0, 30000) };
   }
   throw new Error(`Unknown tool: ${name}`);
 }
@@ -130,13 +116,6 @@ export function getPluginCatalog() {
   ];
 }
 export async function runTool(name, args, user, options = {}) {
-  const userId = user ? String(user._id) : 'guest';
-  try {
-    const result = await executeTool(name, args, user, options);
-    toolLog.debug('Tool execution completed.', { tool: name, userId, ok: true });
-    return { ok: true, result };
-  } catch (error) {
-    toolLog.warn('Tool execution failed.', { tool: name, userId, error: error instanceof Error ? error.message : String(error) });
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
-  }
+  try { return { ok: true, result: await executeTool(name, args, user, options) }; }
+  catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
 }
