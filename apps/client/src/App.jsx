@@ -4,8 +4,8 @@ import remarkGfm from 'remark-gfm';
 import {
   AlertCircle, ArrowDown, ArrowUp, Bot, Brain, Check, Copy, Download,
   FileImage, FileText, FileSpreadsheet, FileArchive, Files, Eye, RefreshCw, HardDrive, LoaderCircle,
-  LogOut, MessageSquare, Paperclip, PanelLeft, Plus, Search, Settings2, ShieldCheck,
-  Sparkles, Square, SquarePen, Trash2, Video, Wrench, X, Pencil,
+  LogOut, MessageSquare, Paperclip, PanelLeft, Plus, Search, ShieldCheck,
+  Sparkles, Square, Trash2, Video, Wrench, X, Pencil,
   UserRound, SlidersHorizontal, Code2, Github, Share2, GitBranch, PencilLine, ChevronLeft, ChevronRight
 } from 'lucide-react';
 
@@ -20,8 +20,8 @@ const SUGGESTIONS = [
 ];
 function api(path) { return `${API_BASE}${path}`; }
 async function request(path, options = {}) {
-  const response = await fetch(api(path), { credentials: 'include', ...options, headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers || {}) } });
-  if (!response.ok) { let data = {}; try { data = await response.json(); } catch { data.error = await response.text(); } throw new Error(data.error || `Request failed (${response.status})`); }
+  const response = await fetch(api(path), { credentials: 'include', cache: 'no-store', ...options, headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers || {}) } });
+  if (!response.ok) { let data = {}; try { data = await response.json(); } catch { data.error = await response.text(); } const error = new Error(data.error || `Request failed (${response.status})`); error.status = response.status; throw error; }
   return response;
 }
 function textOf(content) { return typeof content === 'string' ? content : Array.isArray(content) ? content.filter(p => p.type === 'text').map(p => p.text).join('\n') : ''; }
@@ -226,9 +226,9 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
   </section></div>;
 }
 
-function HistoryDrawer({ open, onClose, chats, activeId, onSelect, onNew, onDelete, onRename }) {
+function HistoryDrawer({ open, onClose, chats, activeId, onSelect, onNew, onDelete, onRename, onOpenLibrary }) {
   if (!open) return null;
-  return <div className="drawer-layer" onMouseDown={onClose}><aside className="history-drawer" onMouseDown={e => e.stopPropagation()}><div className="drawer-head"><div><b>Conversations</b><small>{chats.length} saved</small></div><button className="icon-button" onClick={onClose}><X size={17}/></button></div><button className="new-chat-button" onClick={onNew}><Plus size={15}/> New conversation</button><div className="history-list">{chats.map(chat => <div className={`history-item ${chat._id === activeId ? 'active' : ''}`} key={chat._id}><button className="history-select" onClick={() => onSelect(chat._id)}><MessageSquare size={15}/><span><b>{chat.title || 'New chat'}</b><small>{dateLabel(chat.updatedAt)}</small></span></button><button className="delete-chat" onClick={() => onRename(chat)} title="Rename"><Pencil size={13}/></button><button className="delete-chat" onClick={() => onDelete(chat._id)} title="Delete"><Trash2 size={14}/></button></div>)}{!chats.length && <p className="empty-history">No conversations yet.</p>}</div></aside></div>;
+  return <div className="drawer-layer" onMouseDown={onClose}><aside className="history-drawer" onMouseDown={e => e.stopPropagation()}><div className="drawer-head"><div><b>Conversations</b><small>{chats.length} saved</small></div><button className="icon-button" onClick={onClose}><X size={17}/></button></div><button className="new-chat-button" onClick={onNew}><Plus size={15}/> New conversation</button><button className="library-nav-button" onClick={onOpenLibrary}><Files size={15}/> File Library <span>Generated files</span></button><div className="history-list">{chats.map(chat => <div className={`history-item ${chat._id === activeId ? 'active' : ''}`} key={chat._id}><button className="history-select" onClick={() => onSelect(chat._id)}><MessageSquare size={15}/><span><b>{chat.title || 'New chat'}</b><small>{dateLabel(chat.updatedAt)}</small></span></button><button className="delete-chat" onClick={() => onRename(chat)} title="Rename"><Pencil size={13}/></button><button className="delete-chat" onClick={() => onDelete(chat._id)} title="Delete"><Trash2 size={14}/></button></div>)}{!chats.length && <p className="empty-history">No conversations yet.</p>}</div></aside></div>;
 }
 function PreferencesDialog({ open, onClose, preferences, setPreferences, memories, addMemory, editMemory, deleteMemory, user, logout, saveProfile, linkProvider, shares, loadShares, revokeShare, providers }) {
   const [tab, setTab] = useState('profile'), [draft, setDraft] = useState(''), [editing, setEditing] = useState(null), [displayName, setDisplayName] = useState(user?.name || ''), [username, setUsername] = useState(user?.username || ''), [usernameState, setUsernameState] = useState('idle'), [profileError, setProfileError] = useState('');
@@ -266,29 +266,69 @@ function PublicSharePage({ shareId }) {
 export default function App() {
   const [auth, setAuth] = useState({ loading: true, user: null, providers: {}, error: '' });
   const [preferences, setPreferences] = useState(DEFAULT_PREFERENCES), [memories, setMemories] = useState([]), [shares, setShares] = useState([]);
-  const [chats, setChats] = useState([]), [activeId, setActiveId] = useState(null), [messages, setMessages] = useState([]), [activeBranchId, setActiveBranchId] = useState('main'), [branches, setBranches] = useState([]);
+  const [chats, setChats] = useState([]), [activeId, setActiveId] = useState(null), [messages, setMessages] = useState([]), [activeBranchId, setActiveBranchId] = useState('main'), [branches, setBranches] = useState([]), [chatLoading, setChatLoading] = useState(false), [chatLoadError, setChatLoadError] = useState('');
   const [busy, setBusy] = useState(false), [status, setStatus] = useState('Ready'), [drawer, setDrawer] = useState(false), [prefsOpen, setPrefsOpen] = useState(false), [libraryOpen, setLibraryOpen] = useState(false), [libraryRefresh, setLibraryRefresh] = useState(0);
   const [input, setInput] = useState(''), [files, setFiles] = useState([]), [fileError, setFileError] = useState(''), [thinking, setThinking] = useState(true), [scrollDown, setScrollDown] = useState(false);
-  const scrollRef = useRef(null), textareaRef = useRef(null), fileRef = useRef(null), abortRef = useRef(null), followScrollRef = useRef(true), titleRequestRef = useRef(0), activeIdRef = useRef(null), manualTitleIdsRef = useRef(new Set());
+  const scrollRef = useRef(null), textareaRef = useRef(null), fileRef = useRef(null), abortRef = useRef(null), followScrollRef = useRef(true), titleRequestRef = useRef(0), activeIdRef = useRef(null), manualTitleIdsRef = useRef(new Set()), chatLoadSeqRef = useRef(0);
   const activeChat = useMemo(() => chats.find(c => c._id === activeId), [chats, activeId]);
   const starterSuggestions = useMemo(() => { const recent = chats.filter(c => c.title && c.title !== 'New chat').slice(0, 2).map(chat => ({ icon: MessageSquare, label: `Continue: ${chat.title.slice(0, 28)}`, prompt: `Continue working on my conversation titled \"${chat.title}\". Use the available conversation history as context.` })); return [...recent, ...SUGGESTIONS].slice(0, 5); }, [chats]);
 
   const loadAccount = useCallback(async () => {
     try {
       const [meRes, healthRes] = await Promise.all([request('/api/auth/me'), request('/api/health')]);
-      const me = await meRes.json(), health = await healthRes.json();
-      if (!me.user) { setAuth({ loading: false, user: null, providers: health.oauth || {}, error: new URLSearchParams(location.search).get('auth_error') || '' }); return; }
+      const [me, health] = await Promise.all([meRes.json(), healthRes.json()]);
+      if (!me.user) {
+        setAuth({ loading: false, user: null, providers: health.oauth || {}, error: new URLSearchParams(location.search).get('auth_error') || '' });
+        return;
+      }
       setAuth({ loading: false, user: me.user, providers: health.oauth || {}, error: '' });
-      const query = new URLSearchParams(location.search); if (query.get('account_linked')) setStatus(`${query.get('account_linked')} account linked`); if (query.get('account_link_error')) setFileError(query.get('account_link_error'));
-      const [prefRes, memoryRes] = await Promise.all([request('/api/account/preferences'), request('/api/account/memories')]);
-      const [pref, memory] = await Promise.all([prefRes.json(), memoryRes.json()]);
-      setPreferences({ ...DEFAULT_PREFERENCES, ...pref.preferences }); setMemories(memory.memories || []);
-      const chatRes = await request('/api/chats'); const data = await chatRes.json(); setChats(data.chats || []);
-      if (data.chats?.length) { const preferred = localStorage.getItem('nemotron.activeChatId'); const chosen = data.chats.find(c => c._id === preferred) || data.chats[0]; const detail = await (await request(`/api/chats/${chosen._id}`)).json(); setActiveId(chosen._id); activeIdRef.current = chosen._id; setActiveBranchId(detail.chat.activeBranchId || 'main'); setBranches(detail.chat.branches || []); setMessages(detail.chat.messages || []); }
-      else await newChat();
+      setChatLoading(true); setChatLoadError('');
+      const query = new URLSearchParams(location.search);
+      if (query.get('account_linked')) setStatus(`${query.get('account_linked')} account linked`);
+      if (query.get('account_link_error')) setFileError(query.get('account_link_error'));
+
+      // Load independent account resources concurrently. The chat list endpoint
+      // returns metadata only; fetch the selected conversation once afterwards.
+      const [prefResult, memoryResult, chatResult] = await Promise.allSettled([
+        request('/api/account/preferences').then(r => r.json()),
+        request('/api/account/memories').then(r => r.json()),
+        request('/api/chats').then(r => r.json())
+      ]);
+      if (prefResult.status === 'fulfilled') setPreferences({ ...DEFAULT_PREFERENCES, ...prefResult.value.preferences });
+      if (memoryResult.status === 'fulfilled') setMemories(memoryResult.value.memories || []);
+      if (chatResult.status !== 'fulfilled') throw chatResult.reason;
+      const chatList = Array.isArray(chatResult.value.chats) ? chatResult.value.chats : [];
+      setChats(chatList);
+      if (chatList.length) {
+        const preferred = localStorage.getItem('nemotron.activeChatId');
+        const chosen = chatList.find(c => c._id === preferred) || chatList[0];
+        const sequence = ++chatLoadSeqRef.current;
+        setChatLoading(true); setChatLoadError('');
+        setActiveId(chosen._id); activeIdRef.current = chosen._id;
+        try {
+          const detail = await (await request(`/api/chats/${chosen._id}`)).json();
+          if (sequence === chatLoadSeqRef.current) {
+            setActiveBranchId(detail.chat.activeBranchId || 'main');
+            setBranches(detail.chat.branches || []);
+            setMessages(detail.chat.messages || []);
+          }
+        } catch (error) {
+          if (sequence === chatLoadSeqRef.current) setChatLoadError(`Couldn't load this conversation: ${error.message}. Select it again to retry.`);
+        } finally {
+          if (sequence === chatLoadSeqRef.current) setChatLoading(false);
+        }
+      } else {
+        await newChat();
+      }
     } catch (error) {
-      if (error.message === 'Authentication required.') { try { const h = await (await request('/api/health')).json(); setAuth({ loading: false, user: null, providers: h.oauth || {}, error: '' }); } catch { setAuth({ loading: false, user: null, providers: {}, error: error.message }); } }
-      else setAuth(a => ({ ...a, loading: false, error: error.message }));
+      if (error.message === 'Authentication required.') {
+        try { const h = await (await request('/api/health')).json(); setAuth({ loading: false, user: null, providers: h.oauth || {}, error: '' }); }
+        catch { setAuth({ loading: false, user: null, providers: {}, error: error.message }); }
+      } else {
+        setChatLoading(false);
+        setChatLoadError(`Workspace loading failed: ${error.message}. Refresh the page or retry a conversation.`);
+        setAuth(a => ({ ...a, loading: false, error: error.message }));
+      }
     }
   }, []);
   useEffect(() => { try { const pending = localStorage.getItem('nemotron.pendingGeneration'); if (pending) { localStorage.removeItem('nemotron.pendingGeneration'); setStatus('A previous generation was interrupted. Retry it when ready.'); } } catch {} loadAccount(); }, [loadAccount]);
@@ -300,11 +340,11 @@ export default function App() {
   useEffect(() => { const refresh = async () => { if (document.visibilityState !== 'visible') return; try { const data = await (await request('/api/account/memories')).json(); setMemories(data.memories || []); } catch {} }; window.addEventListener('focus', refresh); document.addEventListener('visibilitychange', refresh); return () => { window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); }; }, []);
 
   const newChat = async () => {
-    followScrollRef.current = true;
+    ++chatLoadSeqRef.current; setChatLoading(false); setChatLoadError(''); followScrollRef.current = true;
     const res = await request('/api/chats', { method: 'POST', body: JSON.stringify({ title: 'New chat' }) }); const { chat } = await res.json();
     setChats(current => [chat, ...current]); setActiveId(chat._id); activeIdRef.current = chat._id; setActiveBranchId('main'); setBranches(chat.branches || []); setMessages([]); setInput(''); setFiles([]); setDrawer(false); return chat;
   };
-  const selectChat = async id => { followScrollRef.current = true; const res = await request(`/api/chats/${id}`); const { chat } = await res.json(); setActiveId(id); activeIdRef.current = id; setActiveBranchId(chat.activeBranchId || 'main'); setBranches(chat.branches || []); setMessages(chat.messages || []); setDrawer(false); const savedTop = Number(localStorage.getItem(`nemotron.scroll.${id}`) || 0); requestAnimationFrame(() => { if (scrollRef.current) { scrollRef.current.scrollTop = savedTop; onScroll(); } }); };
+  const selectChat = async id => { const sequence = ++chatLoadSeqRef.current; followScrollRef.current = true; setActiveId(id); activeIdRef.current = id; setChatLoading(true); setChatLoadError(''); setDrawer(false); try { let detail; for (let attempt = 0; attempt < 2; attempt++) { try { const res = await request(`/api/chats/${id}`); detail = await res.json(); break; } catch (error) { if (attempt === 1 || (error.status && error.status < 500 && error.status !== 429)) throw error; await new Promise(resolve => setTimeout(resolve, 350)); } } if (sequence !== chatLoadSeqRef.current) return; const { chat } = detail; setActiveBranchId(chat.activeBranchId || 'main'); setBranches(chat.branches || []); setMessages(chat.messages || []); const savedTop = Number(localStorage.getItem(`nemotron.scroll.${id}`) || 0); requestAnimationFrame(() => { if (sequence === chatLoadSeqRef.current && scrollRef.current) { scrollRef.current.scrollTop = savedTop; onScroll(); } }); } catch (error) { if (sequence === chatLoadSeqRef.current) setChatLoadError(`Couldn't load this conversation: ${error.message}. Please try selecting it again.`); } finally { if (sequence === chatLoadSeqRef.current) setChatLoading(false); } };
   const saveMessages = async (id, next, title) => { const res = await request(`/api/chats/${id}`, { method: 'PATCH', body: JSON.stringify({ messages: next, branchId: activeBranchId, expectedRevision: activeChat?.revision || 0, ...(title ? { title } : {}) }) }); const { chat } = await res.json(); setChats(current => [chat, ...current.filter(c => c._id !== chat._id)]); };
   const renameChat = async chat => { const title = window.prompt('Rename conversation', chat.title || 'New chat'); if (!title?.trim()) return; titleRequestRef.current++; manualTitleIdsRef.current.add(chat._id); const res = await request(`/api/chats/${chat._id}`, { method: 'PATCH', body: JSON.stringify({ title: title.trim(), manualTitle: true }) }); const data = await res.json(); setChats(current => current.map(item => item._id === chat._id ? data.chat : item)); };
   const removeChat = async id => { await request(`/api/chats/${id}`, { method: 'DELETE' }); const next = chats.filter(c => c._id !== id); setChats(next); if (activeId === id) { if (next.length) selectChat(next[0]._id); else { setActiveId(null); activeIdRef.current = null; setMessages([]); await newChat(); } } };
@@ -429,10 +469,10 @@ export default function App() {
 
   return <div className="app agent-lab">
     <header className="topbar"><div className="brand-area"><button className="icon-button" title="Conversation history" onClick={() => setDrawer(true)}><PanelLeft size={17}/></button><div className="brand-mark">✦</div><div className="brand-text"><b>Nemotron Agent Lab</b><small>PERSONAL WORKSPACE</small></div></div>
-      <div className="top-actions"><span className="status-label"><i className={busy ? 'pulse-dot' : 'ready-dot'}/>{status}</span><button className="icon-button" title="Generate chat name" onClick={() => generateName()} disabled={!messages.length || busy}><Sparkles size={16}/></button><button className="icon-button" title="File Library" aria-label="Open File Library" onClick={() => setLibraryOpen(true)}><Files size={16}/></button><button className="icon-button" title="Export conversation" onClick={exportChat}><Download size={16}/></button><button className="icon-button" title="Personalization & memory" onClick={() => setPrefsOpen(true)}><Settings2 size={17}/></button><button className="icon-button" title="New chat" onClick={newChat}><SquarePen size={17}/></button>{busy && <button className="icon-button stop-button" title="Stop" onClick={() => abortRef.current?.abort()}><Square size={14}/></button>}<button className="profile-button" title={auth.user.name} onClick={() => setPrefsOpen(true)}>{auth.user.avatar ? <img src={auth.user.avatar} alt=""/> : <UserRound size={16}/>}</button></div>
+      <div className="top-actions"><span className="status-label"><i className={busy ? 'pulse-dot' : 'ready-dot'}/>{status}</span>{busy && <button className="icon-button stop-button" title="Stop" onClick={() => abortRef.current?.abort()}><Square size={14}/></button>}<button className="profile-button" title={auth.user.name} onClick={() => setPrefsOpen(true)}>{auth.user.avatar ? <img src={auth.user.avatar} alt=""/> : <UserRound size={16}/>}</button></div>
     </header>
-    <main className="workspace"><div className="workspace-top"><div><div className="eyebrow">AGENT WORKSPACE</div><h1>{activeChat?.title && activeChat.title !== 'New chat' ? activeChat.title : 'What are we working on?'}</h1><p>Research, create, explore and solve problems with tools.</p></div><div className="workspace-tools">{branches.length > 1 && <select aria-label="Conversation branch" value={activeBranchId} onChange={async e => { const id = e.target.value; const result = await request(`/api/chats/${activeId}/branches/${id}/activate`, { method: 'PATCH', body: JSON.stringify({ expectedRevision: activeChat?.revision || 0 }) }); const data = await result.json(); setActiveBranchId(id); setMessages(data.messages || []); setChats(current => [data.chat, ...current.filter(c => c._id !== data.chat._id)]); }}><option value={activeBranchId}>Branch {branches.findIndex(b => b.branchId === activeBranchId) + 1}</option>{branches.filter(b => b.branchId !== activeBranchId).map((b, i) => <option key={b.branchId} value={b.branchId}>Branch {branches.findIndex(x => x.branchId === b.branchId) + 1}</option>)}</select>}<button className="text-action" onClick={() => setDrawer(true)}><MessageSquare size={14}/> History</button></div></div>
-      <section className="chat-scroll" ref={scrollRef} onScroll={onScroll}><div className="chat-inner">{messages.length === 0 ? <div className="welcome"><div className="welcome-symbol"><Sparkles size={23}/></div><div className="eyebrow">READY WHEN YOU ARE</div><h2>Let's make<br/><em>something happen.</em></h2><p>Ask a question, analyze data, generate files, research the web or build something. Your agent capabilities are ready automatically.</p><div className="suggestions">{starterSuggestions.map(({ icon: Icon, label, prompt }) => <button key={label} onClick={() => setInput(prompt)}><Icon size={15}/><span>{label}</span><ArrowUp size={13}/></button>)}</div></div> : messages.map(m => <Message key={m.id || `${m.role}-${m.createdAt}`} message={m} onCopy={copyText} onEdit={editUserMessage} onBranch={createBranchFrom} onShare={shareResponse} onRegenerate={regenerateResponse} onVersion={changeVersion}/>)}</div>{scrollDown && <button className="scroll-bottom" onClick={() => { followScrollRef.current = true; scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }); }}><ArrowDown size={15}/></button>}</section>
+    <main className="workspace"><div className="workspace-top"><div><div className="eyebrow">AGENT WORKSPACE</div><h1>{activeChat?.title && activeChat.title !== 'New chat' ? activeChat.title : 'What are we working on?'}</h1><p>Research, create, explore and solve problems with tools.</p></div><div className="workspace-tools">{branches.length > 1 && <select aria-label="Conversation branch" value={activeBranchId} onChange={async e => { const id = e.target.value; const result = await request(`/api/chats/${activeId}/branches/${id}/activate`, { method: 'PATCH', body: JSON.stringify({ expectedRevision: activeChat?.revision || 0 }) }); const data = await result.json(); setActiveBranchId(id); setMessages(data.messages || []); setChats(current => [data.chat, ...current.filter(c => c._id !== data.chat._id)]); }}><option value={activeBranchId}>Branch {branches.findIndex(b => b.branchId === activeBranchId) + 1}</option>{branches.filter(b => b.branchId !== activeBranchId).map((b, i) => <option key={b.branchId} value={b.branchId}>Branch {branches.findIndex(x => x.branchId === b.branchId) + 1}</option>)}</select>}<button className="text-action" title="Generate conversation name" onClick={() => generateName()} disabled={!messages.some(m => m.role === 'user') || busy}><Sparkles size={14}/> Regenerate name</button><button className="text-action" title="Export conversation" onClick={exportChat} disabled={!messages.length}><Download size={14}/> Export</button></div></div>
+      <section className="chat-scroll" ref={scrollRef} onScroll={onScroll}><div className="chat-inner">{chatLoading ? <div className="chat-loading"><LoaderCircle className="spin" size={18}/> Loading conversation…</div> : chatLoadError ? <div className="chat-load-error"><AlertCircle size={17}/><span>{chatLoadError}</span><button onClick={() => activeId ? selectChat(activeId) : loadAccount()}>Retry</button></div> : messages.length === 0 ? <div className="welcome"><div className="welcome-symbol"><Sparkles size={23}/></div><div className="eyebrow">READY WHEN YOU ARE</div><h2>Let's make<br/><em>something happen.</em></h2><p>Ask a question, analyze data, generate files, research the web or build something. Your agent capabilities are ready automatically.</p><div className="suggestions">{starterSuggestions.map(({ icon: Icon, label, prompt }) => <button key={label} onClick={() => setInput(prompt)}><Icon size={15}/><span>{label}</span><ArrowUp size={13}/></button>)}</div></div> : messages.map(m => <Message key={m.id || `${m.role}-${m.createdAt}`} message={m} onCopy={copyText} onEdit={editUserMessage} onBranch={createBranchFrom} onShare={shareResponse} onRegenerate={regenerateResponse} onVersion={changeVersion}/>)}</div>{scrollDown && <button className="scroll-bottom" onClick={() => { followScrollRef.current = true; scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }); }}><ArrowDown size={15}/></button>}</section>
       <div className="composer-area">{fileError && <div className="attachment-error"><AlertCircle size={13}/>{fileError}<button onClick={() => setFileError('')}><X size={13}/></button></div>}{files.length > 0 && <div className="pending-files">{files.map((f, i) => <div className="pending-file" key={`${f.name}-${i}`}>{f.type.startsWith('video') ? <Video size={13}/> : f.type.startsWith('image') ? <FileImage size={13}/> : <FileText size={13}/>}<span>{f.name}</span><button onClick={() => setFiles(current => current.filter((_, n) => n !== i))}><X size={12}/></button></div>)}</div>}
         <form className="composer" onSubmit={e => { e.preventDefault(); sendMessage(); }}><textarea ref={textareaRef} value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = `${Math.min(e.target.scrollHeight, 180)}px`; }} onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendMessage(); } }} rows={1} placeholder="Ask anything, or give your agent a task…"/>
           <div className="composer-controls"><div className="composer-left"><button type="button" className="composer-icon" title="Attach images, videos or documents" onClick={() => fileRef.current?.click()}><Paperclip size={17}/></button><input ref={fileRef} hidden type="file" accept="image/*,video/mp4,video/webm,video/quicktime,.pdf,.txt,.md,.csv,.tsv,.json,.xml,.zip,.xls,.xlsx,.doc,.docx,.pptx,.py,.js,.jsx,.mjs,.cjs,.ts,.tsx,.html,.css,.sql,.yml,.yaml,.toml,.ini,.cfg,.conf,.log,.sh,.env" multiple onChange={e => { addFiles(e.target.files); e.target.value = ''; }}/>
@@ -440,7 +480,7 @@ export default function App() {
           </div><button className="send-button" type="submit" disabled={busy || (!input.trim() && !files.length)}>{busy ? <LoaderCircle size={16} className="spin"/> : <ArrowUp size={17}/>}</button></div></form><div className="composer-caption"><span><kbd>Enter</kbd> newline · <kbd>Ctrl + Enter</kbd> send</span><span>Agent tools run automatically · Think mode {thinking ? 'on' : 'off'}</span></div>
       </div>
     </main>
-    <HistoryDrawer open={drawer} onClose={() => setDrawer(false)} chats={chats} activeId={activeId} onSelect={selectChat} onNew={newChat} onDelete={removeChat} onRename={renameChat}/><FileLibraryDialog open={libraryOpen} onClose={() => setLibraryOpen(false)} refreshKey={libraryRefresh}/>
+    <HistoryDrawer open={drawer} onClose={() => setDrawer(false)} chats={chats} activeId={activeId} onSelect={selectChat} onNew={newChat} onDelete={removeChat} onRename={renameChat} onOpenLibrary={() => { setDrawer(false); setLibraryOpen(true); }}/><FileLibraryDialog open={libraryOpen} onClose={() => setLibraryOpen(false)} refreshKey={libraryRefresh}/>
     <PreferencesDialog open={prefsOpen} onClose={() => setPrefsOpen(false)} preferences={preferences} setPreferences={savePreferences} memories={memories} addMemory={addMemory} editMemory={editMemory} deleteMemory={deleteMemory} user={auth.user} logout={logout} saveProfile={saveProfile} linkProvider={linkProvider} providers={auth.providers} shares={shares} loadShares={loadShares} revokeShare={revokeShare}/>
   </div>;
 }

@@ -47,8 +47,8 @@ function cleanMessages(messages = []) {
 }
 
 export async function listChats(sessionId) {
-  if (mongoose.connection.readyState === 1) return Chat.find({ sessionId }).sort({ updatedAt: -1 }).select('_id title titleManuallyEdited activeBranchId revision messages createdAt updatedAt').lean();
-  return [...memory.values()].filter((x) => x.sessionId === sessionId).sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+  if (mongoose.connection.readyState === 1) return Chat.find({ sessionId }).sort({ updatedAt: -1 }).select('_id title titleManuallyEdited activeBranchId revision createdAt updatedAt').lean();
+  return [...memory.values()].filter((x) => x.sessionId === sessionId).sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)).map(({ _id, title, titleManuallyEdited, activeBranchId, revision, createdAt, updatedAt }) => ({ _id, title, titleManuallyEdited, activeBranchId, revision, createdAt, updatedAt }));
 }
 
 export async function getChat(sessionId, chatId) {

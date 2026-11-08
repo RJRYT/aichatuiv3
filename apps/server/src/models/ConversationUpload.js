@@ -8,6 +8,7 @@ const conversationUploadSchema = new mongoose.Schema({
   mimeType: { type: String, required: true, maxlength: 120 },
   sandboxPath: { type: String, required: true, maxlength: 240 },
   size: { type: Number, required: true, min: 1 },
+  sha256: { type: String, default: '', maxlength: 64 },
   data: { type: Buffer, required: true, select: false },
   createdAt: { type: Date, default: Date.now }
 }, { versionKey: false });

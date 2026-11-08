@@ -26,3 +26,22 @@ test('conversation uploads reject unsupported MIME types and malformed base64', 
   await assert.rejects(() => storeConversationUploads(owner, chat, [{ name: 'file.exe', mimeType: 'application/x-msdownload', dataUrl: 'data:application/x-msdownload;base64,YQ==' }]), /Unsupported file type/);
   await assert.rejects(() => storeConversationUploads(owner, chat, [{ name: 'file.csv', mimeType: 'text/csv', dataUrl: 'not-a-data-url' }]), /base64 data URL/);
 });
+
+
+test('conversation upload records normalize BSON Binary using logical byte length and verify checksum', async () => {
+  const { normalizeUploadRecord } = await import('../src/services/interpreter/uploadStore.js');
+  const { createHash } = await import('node:crypto');
+  const expected = Buffer.from('uploaded-json-content');
+  const backing = Buffer.alloc(expected.length + 32, 0xaa);
+  expected.copy(backing);
+  const record = normalizeUploadRecord({
+    uploadId: randomUUID(), ownerId: 'owner', chatId: 'chat', name: 'data.json',
+    mimeType: 'application/json', sandboxPath: 'uploads/data.json',
+    size: expected.byteLength, sha256: createHash('sha256').update(expected).digest('hex'),
+    data: { _bsontype: 'Binary', buffer: backing, position: expected.byteLength }
+  });
+  assert.ok(Buffer.isBuffer(record.data));
+  assert.deepEqual(record.data, expected);
+  assert.equal(record.size, expected.byteLength);
+  assert.throws(() => normalizeUploadRecord({ ...record, sha256: '0'.repeat(64) }), /checksum/);
+});

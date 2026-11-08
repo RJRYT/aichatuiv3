@@ -63,7 +63,7 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
     const files = Array.isArray(m.attachments) ? m.attachments.filter(file => file?.sandboxPath?.startsWith('uploads/')) : [];
     let content = m.content;
     if (files.length && m.role === 'user') {
-      const fileContext = `User-provided files are available to execute_python in this conversation's sandbox workspace:\n${files.map(file => `- ${file.name} (${file.type || 'file'}): ${file.sandboxPath}`).join('\n')}\nUse Python filesystem APIs to inspect or process these files.`;
+      const fileContext = `User-provided files are available to execute_python in this conversation's sandbox workspace:\n${files.map(file => `- ${file.name} (${file.type || 'file'}, ${Number(file.size) || 'unknown'} bytes): ${file.sandboxPath}`).join('\n')}\nUse these exact paths with Python pathlib/open; do not guess filenames. The execution service verifies each file's stored bytes and mounts it before running Python. If the execution tool reports a mount/integrity error, report that error rather than claiming the file is empty.`;
       content = Array.isArray(content) ? [{ type: 'text', text: fileContext }, ...content] : `${String(content || '')}\n\n${fileContext}`;
     }
     return { role: m.role, content, ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}), ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}), ...(m.name ? { name: m.name } : {}) };

@@ -139,7 +139,7 @@ test('common missing Python imports are installed automatically and persisted in
   } finally { restoreVercel(); }
 });
 
-test('conversation uploads are mounted into the persistent Python workspace', async () => {
+test('conversation uploads are byte-verified and stale zero-byte sandbox copies are repaired', async () => {
   configureVercel();
   const owner = 'vercel-upload-owner';
   const chatId = 'vercel-upload-chat';
@@ -150,8 +150,10 @@ test('conversation uploads are mounted into the persistent Python workspace', as
     const fake = {
       cwd: '/vercel/sandbox', async mkDir() {}, async writeFiles(files) { written.push(...files); }, async stop() {},
       async readFileToBuffer({ path }) {
-        if (path.endsWith('.nemotron-inputs.json')) return null;
-        if (path.endsWith('.nemotron-artifacts.json')) return null;
+        const saved = written.find(file => file.path === path);
+        if (saved) return Buffer.from(saved.content);
+        // Simulate a stale snapshot containing a zero-byte copy of the upload.
+        if (path.includes('/uploads/')) return Buffer.alloc(0);
         return null;
       },
       async runCommand(params) {
@@ -168,7 +170,11 @@ test('conversation uploads are mounted into the persistent Python workspace', as
     assert.equal(result.status, 'completed');
     assert.equal(result.inputFiles.length, 1);
     assert.match(result.inputFiles[0].path, /^uploads\/[a-f0-9-]{36}_input\.csv$/i);
-    assert.ok(written.some(file => file.path.endsWith(result.inputFiles[0].path)));
+    const mounted = written.find(file => file.path.endsWith(result.inputFiles[0].path));
+    assert.ok(mounted);
+    assert.deepEqual(Buffer.from(mounted.content), csv);
+    assert.equal(result.inputFiles[0].size, csv.byteLength);
+    assert.equal(result.inputFiles[0].sha256, createHash('sha256').update(csv).digest('hex'));
   } finally {
     await deleteConversationUploads(owner, chatId);
     restoreVercel();

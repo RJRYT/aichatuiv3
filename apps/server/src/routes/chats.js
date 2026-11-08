@@ -8,7 +8,7 @@ import { storeConversationUploads, deleteConversationUploads } from '../services
 const router = Router();
 const owner = req => String(req.user?._id || '');
 const log = logger.child({ component: 'routes:chats' });
-router.get('/', async (req, res, next) => { try { const chats = await listChats(owner(req)); log.debug('Listed chats', { userId: owner(req), count: chats.length }); res.json({ chats }); } catch (error) { next(error); } });
+router.get('/', async (req, res, next) => { try { res.set('Cache-Control', 'private, no-store'); const chats = await listChats(owner(req)); log.debug('Listed chats', { userId: owner(req), count: chats.length }); res.json({ chats }); } catch (error) { next(error); } });
 router.post('/', async (req, res, next) => { try { log.info('Creating chat', { userId: owner(req), title: req.body?.title }); const chat = await createChat(owner(req), req.body?.title); log.info('Chat created', { userId: owner(req), chatId: chat._id }); res.status(201).json({ chat }); } catch (error) { next(error); } });
 router.post('/:id/uploads', async (req, res, next) => {
   try {
@@ -21,6 +21,7 @@ router.post('/:id/uploads', async (req, res, next) => {
 });
 router.get('/:id', async (req, res, next) => {
   try {
+    res.set('Cache-Control', 'private, no-store');
     const chat = await getChat(owner(req), req.params.id);
     if (!chat) {
       log.warn('Chat not found', { userId: owner(req), chatId: req.params.id });

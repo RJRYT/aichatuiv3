@@ -222,26 +222,89 @@ async function ensureSandboxDirectory(sandbox, directoryPath, signal) {
   }
 }
 
+function normalizeSandboxFileBytes(value) {
+  if (Buffer.isBuffer(value)) return Buffer.from(value);
+  if (value instanceof Uint8Array) return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  if (value instanceof ArrayBuffer) return Buffer.from(value);
+  if (value && typeof value === 'object') {
+    if (value.buffer && (Buffer.isBuffer(value.buffer) || value.buffer instanceof Uint8Array)) {
+      const backing = value.buffer;
+      const length = Number.isInteger(value.position) ? value.position : backing.byteLength;
+      if (length >= 0 && length <= backing.byteLength) return Buffer.from(backing.buffer, backing.byteOffset, length);
+    }
+    if (typeof value.value === 'function') {
+      const unwrapped = value.value(true);
+      if (Buffer.isBuffer(unwrapped) || unwrapped instanceof Uint8Array) return Buffer.from(unwrapped);
+    }
+  }
+  throw new Error('Sandbox returned an unsupported file byte representation.');
+}
+
 async function syncConversationUploads({ sandbox, workspacePath, userId, chatId, signal }) {
   if (!chatId) return [];
-  const uploads = await listConversationUploadMetadata(userId, chatId);
-  if (!uploads.length) return [];
-  const manifestPath = path.posix.join(workspacePath, INPUT_MANIFEST_NAME);
-  let known = {};
-  try {
-    const saved = await sandbox.readFileToBuffer({ path: manifestPath });
-    if (saved) { const parsed = JSON.parse(saved.toString('utf8')); if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) known = parsed; }
-  } catch { known = {}; }
-  const pendingMetadata = uploads.filter(file => !known[file.uploadId]);
-  if (pendingMetadata.length) {
-    const pending = await getConversationUploads(userId, chatId, pendingMetadata.map(file => file.uploadId));
-    const uploadDirectory = path.posix.join(workspacePath, 'uploads');
-    await ensureSandboxDirectory(sandbox, uploadDirectory, signal);
-    await sandbox.writeFiles(pending.map(file => ({ path: path.posix.join(workspacePath, file.sandboxPath), content: Buffer.from(file.data), mode: 0o600 })), { signal });
-    for (const file of pending) known[file.uploadId] = file.sandboxPath;
-    await sandbox.writeFiles([{ path: manifestPath, content: Buffer.from(JSON.stringify(known), 'utf8'), mode: 0o600 }], { signal });
+  const metadata = await listConversationUploadMetadata(userId, chatId);
+  if (!metadata.length) return [];
+  const uploads = await getConversationUploads(userId, chatId, metadata.map(file => file.uploadId));
+  const byId = new Map(uploads.map(file => [file.uploadId, file]));
+  const uploadDirectory = path.posix.join(workspacePath, 'uploads');
+  await ensureSandboxDirectory(sandbox, uploadDirectory, signal);
+  const filesToWrite = [];
+  const mounted = [];
+
+  for (const item of metadata) {
+    const file = byId.get(item.uploadId);
+    if (!file) throw new Error(`Uploaded file "${item.name}" is missing from storage. Please attach it again.`);
+    const bytes = normalizeSandboxFileBytes(file.data);
+    if (bytes.byteLength !== Number(item.size)) {
+      throw new Error(`Uploaded file "${item.name}" is incomplete (expected ${item.size} bytes, received ${bytes.byteLength}). Please attach it again.`);
+    }
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    if (item.sha256 && digest !== item.sha256) {
+      throw new Error(`Uploaded file "${item.name}" failed its SHA-256 integrity check. Please attach it again.`);
+    }
+    const targetPath = path.posix.join(workspacePath, item.sandboxPath);
+    let alreadyMounted = false;
+    try {
+      const existing = await sandbox.readFileToBuffer({ path: targetPath });
+      if (existing) {
+        const remoteBytes = normalizeSandboxFileBytes(existing);
+        alreadyMounted = remoteBytes.byteLength === bytes.byteLength
+          && createHash('sha256').update(remoteBytes).digest('hex') === digest;
+      }
+    } catch { alreadyMounted = false; }
+    if (!alreadyMounted) filesToWrite.push({ path: targetPath, content: bytes, mode: 0o600 });
+    mounted.push({
+      uploadId: item.uploadId, name: item.name, mimeType: item.mimeType,
+      size: bytes.byteLength, sha256: digest, path: item.sandboxPath,
+      mounted: true
+    });
   }
-  return uploads.map(file => ({ name: file.name, mimeType: file.mimeType, size: file.size, path: file.sandboxPath }));
+
+  if (filesToWrite.length) {
+    await sandbox.writeFiles(filesToWrite, { signal });
+    for (const expected of filesToWrite) {
+      const verify = await sandbox.readFileToBuffer({ path: expected.path });
+      if (!verify) throw new Error(`Uploaded file "${path.posix.basename(expected.path)}" was not readable after mounting.`);
+      const actual = normalizeSandboxFileBytes(verify);
+      const expectedBytes = normalizeSandboxFileBytes(expected.content);
+      if (actual.byteLength !== expectedBytes.byteLength ||
+          createHash('sha256').update(actual).digest('hex') !== createHash('sha256').update(expectedBytes).digest('hex')) {
+        throw new Error(`Uploaded file "${path.posix.basename(expected.path)}" failed verification after mounting.`);
+      }
+    }
+  }
+
+  // The manifest is informational only; each execution verifies the actual
+  // remote bytes, so stale snapshots or previously empty files are repaired.
+  const manifest = Object.fromEntries(mounted.map(file => [file.uploadId, {
+    path: file.path, size: file.size, sha256: file.sha256
+  }]));
+  await sandbox.writeFiles([{
+    path: path.posix.join(workspacePath, INPUT_MANIFEST_NAME),
+    content: Buffer.from(JSON.stringify(manifest), 'utf8'),
+    mode: 0o600
+  }], { signal });
+  return mounted;
 }
 
 async function collectWorkspaceArtifacts({ sandbox, workspacePath, userId, chatId, executionId, signal }) {

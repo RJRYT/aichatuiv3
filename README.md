@@ -147,7 +147,7 @@ npm run sandbox:smoke
 - The sandbox is resumed for each execution and stopped after each tool call. Vercel snapshots the workspace and installed packages on stop, so the VM is not left running idle while files and pip-installed packages persist for later turns (subject to the seven-day snapshot retention configured below).
 - The default managed image is `vercel/sandbox/python:3.14`, which provides Python 3.14, pip, venv and uv but does **not** bundle common data-science/document libraries such as Matplotlib. The backend creates a private `.venv` inside each conversation workspace and runs code with that interpreter, avoiding system-Python package-management restrictions. Before each script, the backend statically scans Python imports and automatically installs missing, allowlisted common packages (including `matplotlib`, `numpy`, `pandas`, `scipy`, `seaborn`, `plotly`, `Pillow`, `opencv-python-headless`, `openpyxl`, `reportlab`, `python-docx`, `python-pptx`, `pypdf`, `requests`, `beautifulsoup4`, `lxml`, `PyYAML` and others). Only known import-to-PyPI mappings are installed automatically; unknown packages should be installed explicitly by the code with `subprocess.run([sys.executable, '-m', 'pip', 'install', 'package'], check=True)`. Installations persist within that conversation's sandbox snapshot.
 - Uploaded images and supported documents/code files (PDF, TXT/Markdown, CSV/TSV, JSON, XML, ZIP, Excel, Word, PowerPoint, Python, JavaScript/TypeScript, HTML, CSS, SQL, YAML and TOML) are stored per conversation and mounted under `uploads/` in the sandbox. Video is sent to the vision model as sampled frames. Python scripts run in the conversation workspace. Generated regular files outside `uploads/` are discovered after execution, validated and copied into the authenticated user's persistent File Library. Environment files, private-key files and known credential filenames are excluded from automatic artifact collection.
-- The top-bar File Library opens a cross-conversation collection with search, safe preview, download and delete actions. It stores file bytes and metadata in MongoDB, not in the ephemeral Node.js host filesystem. Files are private to the owner and survive backend restarts. Generated per-file size is capped at 10 MB; each account has a 50 MB / 100-file generated-artifact quota. Input uploads are capped at 8 MB per file, 20 MB per request, 50 MB per conversation and 100 MB / 100 files per account.
+- The conversation drawer contains the File Library entry and opens a cross-conversation collection with search, safe preview, download and delete actions. It stores file bytes and metadata in MongoDB, not in the ephemeral Node.js host filesystem. Files are private to the owner and survive backend restarts. Generated per-file size is capped at 10 MB; each account has a 50 MB / 100-file generated-artifact quota. Input uploads are capped at 8 MB per file, 20 MB per request, 50 MB per conversation and 100 MB / 100 files per account.
 - Execution has per-user and global concurrency limits, a configurable timeout, bounded stdout/stderr, file-count and artifact-size limits, and owner-scoped cancellation.
 - The default network policy allows public internet destinations while denying private, loopback, link-local and reserved IP ranges. Set `VERCEL_SANDBOX_NETWORK_MODE=deny-all` to disable sandbox egress; this also disables pip installation and outbound HTTP requests.
 - Deleting a conversation also requests deletion of its associated Vercel sandbox and orphan snapshots. File Library items are independent and remain until the owner deletes them.
@@ -222,7 +222,7 @@ The active chat ID is stored as a small local preference. The composer draft is 
 
 ## Verification notes
 
-The repository includes 22 Node.js unit tests covering conversation branches, interpreter input/queue limits, Vercel Sandbox provider behavior, idempotent persistent workspace creation, output caps, cancellation, persistent artifact ownership and BSON binary normalization. Run `npm test`. A successful unit-test run does not replace a live MongoDB migration rehearsal, OAuth-provider testing, frontend production build, live Vercel Sandbox credential and microVM verification, or deployment-level browser testing.
+The repository includes 23 Node.js unit tests covering conversation branches, interpreter input/queue limits, Vercel Sandbox provider behavior, idempotent persistent workspace creation, output caps, cancellation, persistent artifact ownership and BSON binary normalization. Run `npm test`. A successful unit-test run does not replace a live MongoDB migration rehearsal, OAuth-provider testing, frontend production build, live Vercel Sandbox credential and microVM verification, or deployment-level browser testing.
 
 
 ## v6.0.4 — Artifact integrity and in-chat previews
@@ -234,3 +234,35 @@ The repository includes 22 Node.js unit tests covering conversation branches, in
 - Replace the File Library's raw new-tab View link with an in-app preview dialog for images, PDFs and text formats.
 - Render generated artifact cards directly beneath assistant messages, with inline previews and verified download actions.
 - Added regression tests for BSON Binary logical-length handling and typed-array offsets.
+
+
+## v6.1.0 — Upload integrity, conversation loading and responsive navigation
+
+### Uploaded files are now verified end-to-end
+
+- Normalize MongoDB BSON `Binary` upload records using their logical byte length before attempting to mount them into Vercel Sandbox.
+- Compute and persist a SHA-256 digest for every new conversation upload. Existing uploads without a digest are safely normalized and hashed when read.
+- Before each Python execution, load the conversation's uploads from owner-scoped MongoDB records, verify byte length and checksum, and compare the actual remote sandbox file bytes against the expected bytes.
+- Repair stale or zero-byte copies left in persistent Vercel snapshots instead of trusting the old upload manifest. Uploads are re-written when missing, empty, truncated or checksum-mismatched, then read back and verified.
+- Return exact mounted file paths, byte sizes and checksums as `inputFiles` in the `execute_python` result. A mount failure now fails the execution clearly rather than allowing the model to report an empty file.
+- The system prompt and attachment context explicitly tell Nemotron to use the exact `uploads/...` paths and to report mount/integrity errors honestly.
+
+### Conversation loading performance and reliability
+
+- `GET /api/chats` now returns conversation metadata only; it no longer loads every conversation's full message and branch history just to populate the history drawer.
+- The selected conversation is fetched separately from `GET /api/chats/:id`, with private no-store cache headers.
+- Account preferences, memories and the conversation list load concurrently.
+- Conversation switching has stale-response protection, a bounded retry for transient failures, a visible loading state and an explicit retry action when a detail request fails.
+
+### Navigation and responsive settings
+
+- Removed the duplicate Personalization/Memory top-bar icon; the profile avatar remains the account entry point.
+- Removed the duplicate New Chat top-bar icon.
+- Moved File Library into the conversation drawer.
+- Removed the workspace History action and placed Regenerate name and Export in that toolbar position.
+- Reworked settings dialog tabs, account strip, preference grid, shared-link rows and footer for narrow screens; added mobile-safe widths, wrapping and scrolling.
+- Added mobile adjustments for the workspace toolbar and conversation drawer.
+
+### Verification
+
+`npm test` passes 23 tests, including BSON upload normalization, SHA-256 validation, and repair of stale zero-byte sandbox upload copies. JSX syntax parsing and backend JavaScript syntax checks pass. The Vite production build could not be run in this environment because frontend dependencies are not installed (`vite: not found`); run `npm install` before building locally.

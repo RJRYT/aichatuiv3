@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { normalizeStoredBinary } from './artifactStore.js';
 
 const memoryUploads = new Map();
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
@@ -43,8 +45,24 @@ function parseDataUrl(value) {
   if (data.toString('base64').replace(/=+$/, '') !== match[2].replace(/=+$/, '')) throw uploadError('Invalid base64 upload content.');
   return { mimeType, data };
 }
+function sha256(data) { return createHash('sha256').update(data).digest('hex'); }
+
 function toMetadata(item) {
-  return { uploadId: item.uploadId, name: item.name, mimeType: item.mimeType, size: item.size, sandboxPath: item.sandboxPath, createdAt: item.createdAt };
+  return { uploadId: item.uploadId, name: item.name, mimeType: item.mimeType, size: item.size, sha256: item.sha256 || '', sandboxPath: item.sandboxPath, createdAt: item.createdAt };
+}
+
+export function normalizeUploadRecord(file) {
+  let data;
+  try { data = normalizeStoredBinary(file.data); }
+  catch (error) { throw uploadError(`Uploaded file "${file.name}" could not be decoded from storage: ${error.message}`, 500); }
+  if (data.byteLength !== Number(file.size)) {
+    throw uploadError(`Uploaded file "${file.name}" is incomplete in storage (expected ${file.size} bytes, received ${data.byteLength}). Please upload it again.`, 500);
+  }
+  const digest = sha256(data);
+  if (file.sha256 && digest !== file.sha256) {
+    throw uploadError(`Uploaded file "${file.name}" failed its storage checksum. Please upload it again.`, 500);
+  }
+  return { ...file, data, sha256: digest };
 }
 
 export async function storeConversationUploads(ownerId, chatId, files = []) {
@@ -55,7 +73,7 @@ export async function storeConversationUploads(ownerId, chatId, files = []) {
     if (!file || typeof file !== 'object' || typeof file.name !== 'string' || typeof file.dataUrl !== 'string') throw uploadError('Each upload needs a filename and base64 file content.');
     const name = cleanName(file.name);
     const { mimeType, data } = parseDataUrl(file.dataUrl);
-    return { uploadId: randomUUID(), name, mimeType, data, size: data.byteLength };
+    return { uploadId: randomUUID(), name, mimeType, data, size: data.byteLength, sha256: sha256(data) };
   });
   const requestBytes = prepared.reduce((sum, file) => sum + file.size, 0);
   if (requestBytes > 20 * 1024 * 1024) throw uploadError('Combined upload size cannot exceed 20 MB per request.', 413);
@@ -74,7 +92,7 @@ export async function storeConversationUploads(ownerId, chatId, files = []) {
     if ((globalStats[0]?.count || 0) + prepared.length > MAX_GLOBAL_UPLOAD_FILES || (globalStats[0]?.bytes || 0) + requestBytes > MAX_GLOBAL_UPLOAD_BYTES) throw uploadError('The shared upload storage is temporarily full. Try again later.', 503);
     const records = prepared.map(file => ({
       ownerId: owner, chatId: chat, uploadId: file.uploadId, name: file.name, mimeType: file.mimeType,
-      sandboxPath: `uploads/${file.uploadId}_${file.name}`, size: file.size, data: file.data
+      sandboxPath: `uploads/${file.uploadId}_${file.name}`, size: file.size, sha256: file.sha256, data: file.data
     }));
     const saved = await ConversationUpload.insertMany(records, { ordered: true });
     return saved.map(toMetadata);
@@ -101,7 +119,7 @@ export async function listConversationUploadMetadata(ownerId, chatId) {
   const owner = String(ownerId), chat = String(chatId);
   if (useDatabase) {
     const ConversationUpload = await uploadModel();
-    return ConversationUpload.find({ ownerId: owner, chatId: chat }).select('uploadId name mimeType sandboxPath size createdAt').sort({ createdAt: 1 }).lean();
+    return ConversationUpload.find({ ownerId: owner, chatId: chat }).select('uploadId name mimeType sandboxPath size sha256 createdAt').sort({ createdAt: 1 }).lean();
   }
   return [...memoryUploads.values()].filter(file => file.ownerId === owner && file.chatId === chat).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)).map(toMetadata);
 }
@@ -112,9 +130,12 @@ export async function getConversationUploads(ownerId, chatId, uploadIds = []) {
   if (!Array.isArray(uploadIds) || !uploadIds.length) return [];
   if (useDatabase) {
     const ConversationUpload = await uploadModel();
-    return ConversationUpload.find({ ownerId: owner, chatId: chat, uploadId: { $in: uploadIds } }).select('+data').sort({ createdAt: 1 }).lean();
+    const records = await ConversationUpload.find({ ownerId: owner, chatId: chat, uploadId: { $in: uploadIds } }).select('+data').sort({ createdAt: 1 }).lean();
+    return records.map(normalizeUploadRecord);
   }
-  return uploadIds.map(id => memoryUploads.get(String(id))).filter(file => file && file.ownerId === owner && file.chatId === chat).map(file => ({ ...file, data: Buffer.from(file.data) }));
+  return uploadIds.map(id => memoryUploads.get(String(id)))
+    .filter(file => file && file.ownerId === owner && file.chatId === chat)
+    .map(file => normalizeUploadRecord({ ...file, data: Buffer.from(file.data) }));
 }
 
 export async function listConversationUploads(ownerId, chatId) {
