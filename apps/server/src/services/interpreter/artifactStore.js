@@ -1,148 +1,164 @@
 import { randomUUID } from 'node:crypto';
-import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import logger from '../../utils/logger.js';
 
 const log = logger.child({ component: 'artifacts' });
-const artifacts = new Map();
-const pendingReservations = new Map();
-const TTL_MS = 60 * 60 * 1000;
-const MAX_TOTAL_BYTES = 64 * 1024 * 1024;
-const MAX_OWNER_BYTES = 20 * 1024 * 1024;
-const MAX_TOTAL_COUNT = 256;
-const MAX_OWNER_COUNT = 32;
-const SAFE_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._ -]{0,119}$/;
+const memoryArtifacts = new Map();
+const MAX_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_OWNER_BYTES = 50 * 1024 * 1024;
+const MAX_OWNER_COUNT = 100;
+const MAX_TOTAL_BYTES = 256 * 1024 * 1024;
+const MAX_TOTAL_COUNT = 5000;
+const SAFE_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._ -]{0,139}$/;
 const MIME_TYPES = new Map([
-  ['text/plain', '.txt'],
-  ['text/csv', '.csv'],
-  ['application/json', '.json'],
-  ['application/pdf', '.pdf'],
-  ['image/png', '.png'],
-  ['image/jpeg', '.jpg'],
-  ['image/svg+xml', '.svg'],
-  ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '.xlsx'],
-  ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', '.docx'],
-  ['application/zip', '.zip'],
-  ['application/octet-stream', '.bin']
+  ['.txt', 'text/plain'], ['.md', 'text/markdown'], ['.csv', 'text/csv'], ['.tsv', 'text/tab-separated-values'],
+  ['.json', 'application/json'], ['.xml', 'application/xml'], ['.html', 'text/html'], ['.css', 'text/css'],
+  ['.js', 'text/javascript'], ['.py', 'text/x-python'], ['.log', 'text/plain'], ['.pdf', 'application/pdf'],
+  ['.png', 'image/png'], ['.jpg', 'image/jpeg'], ['.jpeg', 'image/jpeg'], ['.gif', 'image/gif'], ['.webp', 'image/webp'],
+  ['.svg', 'image/svg+xml'], ['.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+  ['.xls', 'application/vnd.ms-excel'], ['.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+  ['.doc', 'application/msword'], ['.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+  ['.zip', 'application/zip'], ['.gz', 'application/gzip'], ['.tar', 'application/x-tar'], ['.mp3', 'audio/mpeg'],
+  ['.wav', 'audio/wav'], ['.mp4', 'video/mp4'], ['.webm', 'video/webm'], ['.bin', 'application/octet-stream']
 ]);
 
-async function pruneExpired() {
-  const expired = [];
-  for (const [id, item] of artifacts) {
-    if (item.expiresAt <= Date.now()) {
-      artifacts.delete(id);
-      expired.push(item.dir);
-    }
-  }
-  for (const dir of new Set(expired)) {
-    if (![...artifacts.values()].some(item => item.dir === dir)) {
-      await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
-    }
-  }
+async function databaseReady() {
+  if (!process.env.MONGODB_URI) return false;
+  const mongoose = (await import('mongoose')).default;
+  if (mongoose.connection.readyState !== 1) throw Object.assign(new Error('MongoDB is temporarily unavailable; persistent File Library storage cannot be accessed.'), { status: 503 });
+  return true;
 }
-
-function normalizeArtifactName(rawName, mimeType) {
+async function artifactModel() { return (await import('../../models/Artifact.js')).Artifact; }
+function safeName(rawName) {
   const supplied = String(rawName || '').trim();
-  if (!supplied || supplied !== path.posix.basename(supplied) || supplied !== path.win32.basename(supplied) ||
-      supplied.includes('..') || !SAFE_NAME.test(supplied)) {
+  const base = path.posix.basename(supplied);
+  if (!supplied || supplied !== base || supplied.startsWith('.') || !SAFE_NAME.test(supplied)) {
     throw new Error('Artifact name must be a simple filename without folders or special characters.');
   }
-  const requiredExtension = MIME_TYPES.get(mimeType);
-  const currentExtension = path.extname(supplied).toLowerCase();
-  if (currentExtension && currentExtension !== requiredExtension) {
-    throw new Error(`The filename extension must be ${requiredExtension} for ${mimeType}.`);
-  }
-  return currentExtension ? supplied : `${supplied}${requiredExtension}`;
+  return supplied;
 }
-
-export async function storeArtifact({ ownerId, name, content, mimeType = 'text/plain' }) {
-  const owner = String(ownerId);
-  log.debug('Artifact store requested', { owner, name, mimeType });
-  await pruneExpired();
-  if (!MIME_TYPES.has(mimeType)) throw new Error('Unsupported artifact MIME type.');
-  const safeName = normalizeArtifactName(name, mimeType);
-  let data;
-  if (Buffer.isBuffer(content)) data = content;
-  else if (content instanceof Uint8Array) data = Buffer.from(content);
-  else if (typeof content === 'string') data = Buffer.from(content, 'utf8');
-  else throw new Error('Artifact content must be text or bytes.');
-  if (!data.byteLength) throw new Error('Empty artifacts are not allowed.');
-  if (data.byteLength > 10 * 1024 * 1024) throw new Error('An artifact cannot exceed 10 MB.');
-
-  // Reserve capacity before the first filesystem await so concurrent tool calls
-  // cannot race past the process-wide or per-owner storage budgets.
-  let totalBytes = 0;
-  let ownerBytes = 0;
-  let totalCount = artifacts.size;
-  let ownerCount = 0;
-  for (const item of artifacts.values()) {
-    totalBytes += item.size;
-    if (item.ownerId === owner) {
-      ownerBytes += item.size;
-      ownerCount += 1;
-    }
-  }
-  for (const item of pendingReservations.values()) {
-    totalBytes += item.size;
-    totalCount += 1;
-    if (item.ownerId === owner) {
-      ownerBytes += item.size;
-      ownerCount += 1;
-    }
-  }
-  if (totalCount + 1 > MAX_TOTAL_COUNT) throw new Error('The server artifact storage is currently full. Try again after older artifacts expire.');
-  if (ownerCount + 1 > MAX_OWNER_COUNT) throw new Error('You have reached the stored artifact count limit. Older artifacts expire after one hour.');
-  if (totalBytes + data.byteLength > MAX_TOTAL_BYTES) throw new Error('The server artifact storage limit has been reached. Try again later.');
-  if (ownerBytes + data.byteLength > MAX_OWNER_BYTES) throw new Error('Your stored artifact quota is 20 MB. Download or wait for older artifacts to expire.');
-
-  const reservationId = randomUUID();
-  pendingReservations.set(reservationId, { ownerId: owner, size: data.byteLength });
-  const id = randomUUID();
-  let dir;
-  try {
-    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'nemotron-monty-artifact-'));
-    const artifactPath = path.join(dir, safeName);
-    await fs.writeFile(artifactPath, data, { flag: 'wx', mode: 0o600 });
-    artifacts.set(id, {
-      ownerId: owner, name: safeName, path: artifactPath, size: data.byteLength,
-      mimeType, dir, expiresAt: Date.now() + TTL_MS
-    });
-  } catch (error) {
-    if (dir) await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
-    throw error;
-  } finally {
-    pendingReservations.delete(reservationId);
-  }
-  log.info('Artifact stored', { owner, name: safeName, size: data.byteLength, mimeType, artifactId: id });
+function toBuffer(content) {
+  if (Buffer.isBuffer(content)) return content;
+  if (content instanceof Uint8Array) return Buffer.from(content);
+  if (typeof content === 'string') return Buffer.from(content, 'utf8');
+  throw new Error('Artifact content must be text or bytes.');
+}
+function publicMetadata(item) {
   return {
-    id, name: safeName, size: data.byteLength, mimeType,
-    downloadUrl: `/api/interpreter/artifacts/${id}`
+    id: String(item._id || item.id), name: item.name, size: item.size,
+    mimeType: item.mimeType, chatId: item.chatId || '', executionId: item.executionId || '',
+    relativePath: item.relativePath || '', createdAt: item.updatedAt || item.createdAt,
+    downloadUrl: `/api/interpreter/artifacts/${item._id || item.id}`
   };
 }
 
+export function guessMimeType(name) {
+  return MIME_TYPES.get(path.extname(String(name || '')).toLowerCase()) || 'application/octet-stream';
+}
+
+export async function storeArtifact({ ownerId, chatId = '', executionId = '', name, relativePath = '', content, mimeType }) {
+  const useDatabase = await databaseReady();
+  const owner = String(ownerId);
+  const safeFileName = safeName(name);
+  const data = toBuffer(content);
+  if (!data.byteLength) throw new Error('Empty artifacts are not stored.');
+  if (data.byteLength > MAX_FILE_BYTES) throw new Error('An artifact cannot exceed 10 MB.');
+  const resolvedMime = String(mimeType || guessMimeType(safeFileName)).slice(0, 120);
+  const rel = String(relativePath || '').slice(0, 500);
+
+  if (useDatabase) {
+    const Artifact = await artifactModel();
+    const existing = rel ? await Artifact.findOne({ ownerId: owner, chatId: String(chatId || ''), relativePath: rel }).select('_id size').lean() : null;
+    const stats = await Artifact.aggregate([
+      { $match: { ownerId: owner } },
+      { $group: { _id: null, count: { $sum: 1 }, bytes: { $sum: '$size' } } }
+    ]);
+    const count = stats[0]?.count || 0;
+    const bytes = stats[0]?.bytes || 0;
+    const previousSize = existing?.size || 0;
+    if (!existing && count >= MAX_OWNER_COUNT) throw new Error('Your File Library is full (100 files). Delete files you no longer need.');
+    if (bytes - previousSize + data.byteLength > MAX_OWNER_BYTES) throw new Error('Your File Library storage limit is 50 MB. Delete older files before creating more.');
+    const global = await Artifact.aggregate([{ $group: { _id: null, count: { $sum: 1 }, bytes: { $sum: '$size' } } }]);
+    if (!existing && (global[0]?.count || 0) >= MAX_TOTAL_COUNT) throw new Error('File Library storage is temporarily full.');
+    if ((global[0]?.bytes || 0) - previousSize + data.byteLength > MAX_TOTAL_BYTES) throw new Error('File Library storage is temporarily full.');
+    const item = existing
+      ? await Artifact.findOneAndUpdate({ _id: existing._id, ownerId: owner }, { $set: { name: safeFileName, mimeType: resolvedMime, size: data.byteLength, data, executionId: String(executionId || ''), updatedAt: new Date() } }, { new: true }).select('+data')
+      : await Artifact.create({ ownerId: owner, chatId: String(chatId || ''), executionId: String(executionId || ''), name: safeFileName, relativePath: rel, mimeType: resolvedMime, size: data.byteLength, data });
+    log.info('Artifact saved to persistent library', { owner, name: safeFileName, size: data.byteLength, artifactId: String(item._id) });
+    return publicMetadata(item);
+  }
+
+  const existing = rel ? [...memoryArtifacts.values()].find(item => item.ownerId === owner && item.chatId === String(chatId || '') && item.relativePath === rel) : null;
+  const owned = [...memoryArtifacts.values()].filter(item => item.ownerId === owner);
+  const totalBytes = owned.reduce((sum, item) => sum + item.size, 0);
+  const allItems = [...memoryArtifacts.values()];
+  if (!existing && allItems.length >= MAX_TOTAL_COUNT) throw new Error('File Library storage is temporarily full.');
+  if (allItems.reduce((sum, item) => sum + item.size, 0) - (existing?.size || 0) + data.byteLength > MAX_TOTAL_BYTES) throw new Error('File Library storage is temporarily full.');
+  if (!existing && owned.length >= MAX_OWNER_COUNT) throw new Error('Your File Library is full (100 files).');
+  if (totalBytes - (existing?.size || 0) + data.byteLength > MAX_OWNER_BYTES) throw new Error('Your File Library storage limit is 50 MB.');
+  const id = existing?.id || randomUUID();
+  const item = { id, ownerId: owner, chatId: String(chatId || ''), executionId: String(executionId || ''), name: safeFileName, relativePath: rel, mimeType: resolvedMime, size: data.byteLength, data: Buffer.from(data), createdAt: existing?.createdAt || new Date(), updatedAt: new Date() };
+  memoryArtifacts.set(id, item);
+  return publicMetadata(item);
+}
+
+export async function listArtifacts(ownerId, { search = '', limit = 100 } = {}) {
+  const useDatabase = await databaseReady();
+  const owner = String(ownerId);
+  const safeLimit = Math.max(1, Math.min(100, Number(limit) || 100));
+  if (useDatabase) {
+    const Artifact = await artifactModel();
+    const filter = { ownerId: owner };
+    const term = String(search || '').trim().slice(0, 100);
+    if (term) filter.name = { $regex: term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
+    const items = await Artifact.find(filter).select('-data').sort({ updatedAt: -1, createdAt: -1 }).limit(safeLimit).lean();
+    const total = await Artifact.countDocuments({ ownerId: owner });
+    const totalBytes = await Artifact.aggregate([{ $match: { ownerId: owner } }, { $group: { _id: null, bytes: { $sum: '$size' } } }]);
+    return { files: items.map(publicMetadata), total, totalBytes: totalBytes[0]?.bytes || 0, quotaBytes: MAX_OWNER_BYTES, quotaFiles: MAX_OWNER_COUNT };
+  }
+  const all = [...memoryArtifacts.values()].filter(item => item.ownerId === owner).sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
+  const term = String(search || '').toLowerCase();
+  const filtered = term ? all.filter(item => item.name.toLowerCase().includes(term)) : all;
+  return { files: filtered.slice(0, safeLimit).map(publicMetadata), total: all.length, totalBytes: all.reduce((sum, item) => sum + item.size, 0), quotaBytes: MAX_OWNER_BYTES, quotaFiles: MAX_OWNER_COUNT };
+}
+
+export async function getArtifact(id, ownerId) {
+  const useDatabase = await databaseReady();
+  if (useDatabase) {
+    const Artifact = await artifactModel();
+    const item = await Artifact.findOne({ _id: id, ownerId: String(ownerId) }).select('+data').lean();
+    return item ? { ...publicMetadata(item), data: Buffer.from(item.data) } : null;
+  }
+  const item = memoryArtifacts.get(String(id));
+  return item && item.ownerId === String(ownerId) ? { ...publicMetadata(item), data: Buffer.from(item.data) } : null;
+}
+
+export async function deleteArtifact(id, ownerId) {
+  const useDatabase = await databaseReady();
+  if (useDatabase) {
+    const Artifact = await artifactModel();
+    const result = await Artifact.deleteOne({ _id: id, ownerId: String(ownerId) });
+    return result.deletedCount === 1;
+  }
+  const item = memoryArtifacts.get(String(id));
+  if (!item || item.ownerId !== String(ownerId)) return false;
+  memoryArtifacts.delete(String(id));
+  return true;
+}
+
 export async function deleteArtifacts(ids = [], ownerId) {
-  const dirs = new Set();
+  const useDatabase = await databaseReady();
+  const owner = String(ownerId);
+  if (useDatabase) {
+    const Artifact = await artifactModel();
+    const result = await Artifact.deleteMany({ _id: { $in: ids }, ownerId: owner });
+    return result.deletedCount || 0;
+  }
+  let deleted = 0;
   for (const id of ids) {
-    const item = artifacts.get(id);
-    if (item && item.ownerId === String(ownerId)) {
-      artifacts.delete(id);
-      dirs.add(item.dir);
-    }
+    const item = memoryArtifacts.get(String(id));
+    if (item?.ownerId === owner) { memoryArtifacts.delete(String(id)); deleted += 1; }
   }
-  for (const dir of dirs) {
-    if (![...artifacts.values()].some(item => item.dir === dir)) {
-      await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
-    }
-  }
+  return deleted;
 }
 
-export function getArtifact(id, ownerId) {
-  const item = artifacts.get(id);
-  if (!item || item.expiresAt <= Date.now() || item.ownerId !== String(ownerId)) return null;
-  return item;
-}
-
-export async function pruneArtifacts() {
-  await pruneExpired();
-}

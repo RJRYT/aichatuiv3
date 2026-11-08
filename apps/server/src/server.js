@@ -17,11 +17,11 @@ import publicShareRouter from './routes/publicShare.js';
 import { requireAuth } from './services/auth.js';
 import { getPluginCatalog } from './services/tools.js';
 import { MODEL_ID } from './services/nvidia.js';
-import { closeMontyPool } from './services/interpreter/sandboxManager.js';
-import { pruneArtifacts } from './services/interpreter/artifactStore.js';
+import { closeSandboxManager } from './services/interpreter/sandboxManager.js';
 import logger from './utils/logger.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../../.env.local'), override: true });
 const app = express(); const port = Number(process.env.PORT || 4000);
 const log = logger.child({ component: 'server' });
 app.use(logger.requestLogger());
@@ -49,23 +49,18 @@ if (process.env.NODE_ENV === 'production' && (!process.env.SESSION_SECRET || pro
 await connectDatabase();
 log.info('Nemotron Agent Lab API starting', { port, model: MODEL_ID, database: getDatabaseMode() });
 const httpServer = app.listen(port, () => log.info(`Nemotron Agent Lab API listening on http://localhost:${port}`, { model: MODEL_ID, database: getDatabaseMode() }));
-const artifactPruneTimer = setInterval(() => {
-  pruneArtifacts().catch(error => log.warn('Artifact expiry cleanup failed', { error: error instanceof Error ? error.message : String(error) }));
-}, 15 * 60 * 1000);
-artifactPruneTimer.unref();
 let shuttingDown = false;
 async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
-  log.info(`${signal} received; closing HTTP server and Monty workers...`);
-  clearInterval(artifactPruneTimer);
+  log.info(`${signal} received; closing HTTP server and Python execution manager...`);
   const forceExit = setTimeout(() => {
     logger.error('Graceful shutdown deadline exceeded.');
     process.exit(1);
   }, 15_000);
   forceExit.unref();
+  await closeSandboxManager();
   httpServer.close(async () => {
-    await closeMontyPool();
     clearTimeout(forceExit);
     process.exitCode = 0;
   });

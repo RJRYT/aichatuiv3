@@ -1,4 +1,6 @@
 import { executePython } from './interpreter/interpreter.js';
+import { getInterpreterStatus } from './interpreter/sandboxManager.js';
+import { getChat } from './chatStore.js';
 import { Parser } from 'expr-eval';
 import { User } from '../models/User.js';
 import { lookup } from 'node:dns/promises';
@@ -9,7 +11,7 @@ const log = logger.child({ component: 'tools' });
 const parser = new Parser({ operators: { logical: false, comparison: false, in: false, assignment: false } });
 
 const tools = [
-  { type: 'function', function: { name: 'execute_python', description: 'Execute Python with Pydantic Monty WebAssembly in a resource-limited sandbox. Use for calculations, algorithms, JSON/CSV/text processing and lightweight data analysis. This is a Python subset, not CPython: third-party packages such as pandas, numpy, matplotlib and scipy are unavailable, and the sandbox has no normal filesystem, network or environment access. For downloadable files use `await create_artifact(name, content, mime_type)` with text or bytes; do not use open() or pathlib to write files. In long loops call check_cancelled() periodically. Inspect stdout, stderr, result, status and artifact metadata. Do not claim success unless status is completed.', parameters: { type: 'object', properties: { code: { type: 'string', description: 'Python source for Pydantic Monty (supported Python subset and bundled standard library only). Use `await create_artifact(name, content, mime_type)` for downloadable output and check_cancelled() inside long loops.' }, task_context: { type: 'string', description: 'Brief description of the intended computation.' } }, required: ['code'] } } },
+  { type: 'function', function: { name: 'execute_python', description: 'Execute full CPython 3.14 code in an isolated Vercel Firecracker microVM. Use for calculations, data analysis, automation, document creation, image processing, charts, and general Python tasks. The sandbox has a persistent private workspace for this conversation, supports pip installs and normal filesystem operations, and has public network access with private/reserved IP ranges blocked. Supported uploaded images and documents for this conversation are mounted under uploads/; video attachments are provided as sampled frames to the vision model. Write generated files into the current working directory outside uploads/; the backend automatically collects supported files into the user File Library. Common missing libraries (including matplotlib, numpy, pandas, scipy, Pillow, openpyxl, reportlab, python-docx and python-pptx) are detected and installed automatically before execution; for other packages, install them with subprocess.run([sys.executable, "-m", "pip", "install", "package"], check=True). Install OS dependencies inside the VM with sudo apt-get if required. Never read host secrets or environment variables, attempt sandbox escape, or target private/internal networks. Treat uploaded files as private and do not transmit them externally unless the user explicitly requests it. Inspect stdout, stderr, exitCode, status and artifact metadata. Do not claim success unless status is completed.', parameters: { type: 'object', properties: { code: { type: 'string', description: 'Complete Python 3.14 source code. Use normal CPython, filesystem APIs and installed third-party libraries. Write output files into the current working directory so they are saved to the File Library. Common missing dependencies are auto-installed before execution; install any unrecognized package with subprocess.run([sys.executable, "-m", "pip", "install", "package"], check=True). Keep output concise.' }, task_context: { type: 'string', description: 'Brief description of the intended computation.' } }, required: ['code'] } } },
   { type: 'function', function: { name: 'web_search', description: 'Search the public web for current information. Return concise source titles, URLs, snippets and dates. Use for current facts, research, documentation and news.', parameters: { type: 'object', properties: { query: { type: 'string', description: 'Specific search query' }, topic: { type: 'string', enum: ['general', 'news', 'finance'], description: 'Search topic' }, max_results: { type: 'integer', minimum: 1, maximum: 8 } }, required: ['query'] } } },
   { type: 'function', function: { name: 'save_memory', description: 'Save a concise, useful fact or preference about the user to their long-term memory. Only use when the user explicitly asks you to remember or save something.', parameters: { type: 'object', properties: { memory: { type: 'string', description: 'A concise user fact or preference to remember' } }, required: ['memory'] } } },
   { type: 'function', function: { name: 'search_memories', description: "Search the current user's saved memories for relevant information.", parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } } },
@@ -60,8 +62,9 @@ async function executeTool(name, args, user, options = {}) {
       log.warn('Python execution denied: not signed in', { userId });
       throw new Error('A signed-in user is required for Python execution.');
     }
+    if (options.chatId && !await getChat(userId, String(options.chatId))) throw new Error('This conversation no longer exists. Start a new conversation before running Python.');
     log.debug('Python execution started', { userId, codeBytes: Buffer.byteLength(String(args.code || ''), 'utf8') });
-    const result = await executePython({ code: args.code }, String(user._id), { signal: options.signal });
+    const result = await executePython({ code: args.code, chatId: options.chatId }, String(user._id), { signal: options.signal, chatId: options.chatId });
     log.debug('Python execution completed', { userId, status: result.status, durationMs: result.durationMs });
     return { ...result, taskContext: String(args.task_context || '').slice(0, 500) };
   }
@@ -131,7 +134,7 @@ async function executeTool(name, args, user, options = {}) {
 export function getToolDefinitions() { return tools; }
 export function getPluginCatalog() {
   return [
-    { id: 'execute_python', name: 'Python interpreter', description: 'Run code in an isolated, network-disabled sandbox', icon: 'Code', configured: true },
+    { id: 'execute_python', name: 'Python interpreter', description: 'Full CPython in an isolated Vercel Sandbox microVM', icon: 'Code', configured: getInterpreterStatus().configured },
     { id: 'save_memory', name: 'Save memory', description: 'Save user-approved facts for future chats', icon: 'MemoryStick', configured: true },
     { id: 'search_memories', name: 'Search memory', description: 'Recall saved user context', icon: 'MemoryStick', configured: true },
     { id: 'web_search', name: 'Web search', description: 'Search current websites and news', icon: 'Globe', configured: Boolean(process.env.TAVILY_API_KEY) },

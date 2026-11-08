@@ -59,7 +59,15 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
   const userId = user?._id ? String(user._id) : 'unknown';
   log.info('Chat generation started', { userId, messageCount: body.messages.length, hasVision: body.messages.some(m => Array.isArray(m.content) && m.content.some(p => p.type === 'image_url')) });
   const tools = getToolDefinitions();
-  const input = body.messages.map(m => ({ role: m.role, content: m.content, ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}), ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}), ...(m.name ? { name: m.name } : {}) }));
+  const input = body.messages.map(m => {
+    const files = Array.isArray(m.attachments) ? m.attachments.filter(file => file?.sandboxPath?.startsWith('uploads/')) : [];
+    let content = m.content;
+    if (files.length && m.role === 'user') {
+      const fileContext = `User-provided files are available to execute_python in this conversation's sandbox workspace:\n${files.map(file => `- ${file.name} (${file.type || 'file'}): ${file.sandboxPath}`).join('\n')}\nUse Python filesystem APIs to inspect or process these files.`;
+      content = Array.isArray(content) ? [{ type: 'text', text: fileContext }, ...content] : `${String(content || '')}\n\n${fileContext}`;
+    }
+    return { role: m.role, content, ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}), ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}), ...(m.name ? { name: m.name } : {}) };
+  });
   const messages = [{ role: 'system', content: systemPrompt(user) }, ...input];
   const hasVision = input.some(m => Array.isArray(m.content) && m.content.some(p => p.type === 'image_url'));
   const controller = new AbortController(); const onClose = () => { if (!res.writableEnded) controller.abort(); }; res.on('close', onClose);
@@ -77,8 +85,9 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
         const name = call.function.name, args = parseToolArgs(call.function.arguments);
         const safeArgs = name === 'execute_python' ? { task_context: args.task_context || '', code_bytes: Buffer.byteLength(String(args.code || ''), 'utf8') } : args;
         sse(res, { type: 'tool_start', name, arguments: safeArgs, round });
-        const outcome = await runTool(name, args, user, { signal: controller.signal });
-        const event = { name, arguments: safeArgs, status: outcome.ok ? 'complete' : 'error', result: outcome.ok ? outcome.result : undefined, error: outcome.ok ? undefined : outcome.error };
+        const outcome = await runTool(name, args, user, { signal: controller.signal, chatId: body.chatId });
+        const toolCompleted = outcome.ok && (name !== 'execute_python' || outcome.result?.status === 'completed');
+        const event = { name, arguments: safeArgs, status: toolCompleted ? 'complete' : 'error', result: outcome.ok ? outcome.result : undefined, error: outcome.ok ? (name === 'execute_python' && outcome.result?.status !== 'completed' ? outcome.result?.stderr || `Python execution ${outcome.result?.status || 'failed'}.` : undefined) : outcome.error };
         toolEvents.push(event); sse(res, { type: 'tool_result', ...event, round });
         messages.push({ role: 'tool', tool_call_id: call.id, name, content: JSON.stringify(outcome) });
       }

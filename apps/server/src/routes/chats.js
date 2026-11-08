@@ -2,12 +2,23 @@ import { Router } from 'express';
 import { createChat, deleteChat, getChat, listChats, updateChat } from '../services/chatStore.js';
 import { ensureBranches, getBranchMessages, createBranch, setBranchMessages } from '../services/conversationBranches.js';
 import logger from '../utils/logger.js';
+import { deleteSandboxForChat } from '../services/interpreter/sandboxManager.js';
+import { storeConversationUploads, deleteConversationUploads } from '../services/interpreter/uploadStore.js';
 
 const router = Router();
 const owner = req => String(req.user?._id || '');
 const log = logger.child({ component: 'routes:chats' });
 router.get('/', async (req, res, next) => { try { const chats = await listChats(owner(req)); log.debug('Listed chats', { userId: owner(req), count: chats.length }); res.json({ chats }); } catch (error) { next(error); } });
 router.post('/', async (req, res, next) => { try { log.info('Creating chat', { userId: owner(req), title: req.body?.title }); const chat = await createChat(owner(req), req.body?.title); log.info('Chat created', { userId: owner(req), chatId: chat._id }); res.status(201).json({ chat }); } catch (error) { next(error); } });
+router.post('/:id/uploads', async (req, res, next) => {
+  try {
+    const chat = await getChat(owner(req), req.params.id);
+    if (!chat) return res.status(404).json({ error: 'Conversation not found.' });
+    const uploads = await storeConversationUploads(owner(req), req.params.id, req.body?.files || []);
+    log.info('Conversation files uploaded', { userId: owner(req), chatId: req.params.id, count: uploads.length, bytes: uploads.reduce((sum, file) => sum + file.size, 0) });
+    return res.status(201).json({ uploads });
+  } catch (error) { next(error); }
+});
 router.get('/:id', async (req, res, next) => {
   try {
     const chat = await getChat(owner(req), req.params.id);
@@ -108,5 +119,5 @@ router.patch('/:id/messages/:messageId/version', async (req, res, next) => {
     res.json({ chat: updated, messages });
   } catch (error) { next(error); }
 });
-router.delete('/:id', async (req, res, next) => { try { const deleted = await deleteChat(owner(req), req.params.id); if (!deleted) return res.status(404).json({ error: 'Chat not found.' }); res.json({ ok: true }); } catch (error) { next(error); } });
+router.delete('/:id', async (req, res, next) => { try { const deleted = await deleteChat(owner(req), req.params.id); if (!deleted) return res.status(404).json({ error: 'Chat not found.' }); await deleteSandboxForChat(owner(req), req.params.id); await deleteConversationUploads(owner(req), req.params.id); res.json({ ok: true }); } catch (error) { next(error); } });
 export default router;

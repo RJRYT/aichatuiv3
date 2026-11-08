@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   AlertCircle, ArrowDown, ArrowUp, Bot, Brain, Check, Copy, Download,
-  FileImage, LoaderCircle,
+  FileImage, FileText, FileSpreadsheet, FileArchive, Files, Eye, RefreshCw, HardDrive, LoaderCircle,
   LogOut, MessageSquare, Paperclip, PanelLeft, Plus, Search, Settings2, ShieldCheck,
   Sparkles, Square, SquarePen, Trash2, Video, Wrench, X, Pencil,
   UserRound, SlidersHorizontal, Code2, Github, Share2, GitBranch, PencilLine, ChevronLeft, ChevronRight
@@ -34,7 +34,7 @@ async function prepareImage(file) {
   const src = await readFile(file), img = await loadImage(src), scale = Math.min(1, 1600 / Math.max(img.width, img.height));
   const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(img.width * scale)); canvas.height = Math.max(1, Math.round(img.height * scale));
   canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-  return { name: file.name, type: file.type, dataUrl: canvas.toDataURL('image/jpeg', .84), preview: canvas.toDataURL('image/jpeg', .5) };
+  return { name: file.name, sandboxName: file.name.replace(/\.[^.]+$/, '') + '.jpg', type: file.type || 'image/jpeg', sandboxMimeType: 'image/jpeg', dataUrl: canvas.toDataURL('image/jpeg', .84), preview: canvas.toDataURL('image/jpeg', .5) };
 }
 async function prepareVideo(file) {
   if (file.size > 45 * 1024 * 1024) throw new Error(`${file.name} exceeds the 45 MB video limit.`);
@@ -50,7 +50,26 @@ async function prepareVideo(file) {
     return { name: file.name, type: file.type, frames, duration };
   } finally { URL.revokeObjectURL(url); }
 }
-async function prepareFiles(files) { const out = []; for (const file of files) { if (file.type.startsWith('image/')) out.push(await prepareImage(file)); else if (file.type.startsWith('video/')) out.push(await prepareVideo(file)); else throw new Error(`Unsupported file: ${file.name}`); } return out; }
+async function prepareFiles(files) {
+  if (files.length > 6) throw new Error('Attach up to 6 files per message.');
+  const out = [];
+  const supported = new Set(['application/pdf','text/plain','text/markdown','text/csv','text/tab-separated-values','application/json','application/xml','application/zip','application/vnd.ms-excel','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.openxmlformats-officedocument.presentationml.presentation','text/x-python','text/javascript','application/javascript','text/html','text/css','application/sql','text/x-sql','application/yaml','text/yaml','application/toml','text/x-shellscript','application/x-sh']);
+  const extensionMime = { pdf:'application/pdf', txt:'text/plain', md:'text/markdown', csv:'text/csv', tsv:'text/tab-separated-values', json:'application/json', xml:'application/xml', zip:'application/zip', xls:'application/vnd.ms-excel', xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', doc:'application/msword', docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document', pptx:'application/vnd.openxmlformats-officedocument.presentationml.presentation', py:'text/x-python', js:'text/javascript', jsx:'text/javascript', mjs:'text/javascript', cjs:'text/javascript', ts:'text/javascript', tsx:'text/javascript', html:'text/html', htm:'text/html', css:'text/css', sql:'application/sql', yml:'application/yaml', yaml:'application/yaml', toml:'application/toml', ini:'text/plain', cfg:'text/plain', conf:'text/plain', log:'text/plain', sh:'text/x-shellscript', env:'text/plain' };
+  for (const file of files) {
+    if (file.type.startsWith('image/')) out.push(await prepareImage(file));
+    else if (file.type.startsWith('video/')) out.push(await prepareVideo(file));
+    else if (supported.has(file.type) || /\.(pdf|txt|md|csv|tsv|json|xml|zip|xlsx?|docx?|pptx|py|jsx?|mjs|cjs|tsx?|html?|css|sql|ya?ml|toml|ini|cfg|conf|log|sh|env)$/i.test(file.name)) {
+      if (file.size > 8 * 1024 * 1024) throw new Error(`${file.name} exceeds the 8 MB document limit.`);
+      const ext = file.name.split('.').pop().toLowerCase();
+      const mimeType = supported.has(file.type) ? file.type : extensionMime[ext] || file.type;
+      if (!supported.has(mimeType)) throw new Error(`Unsupported file type: ${file.name}`);
+      const rawDataUrl = await readFile(file);
+      const dataUrl = rawDataUrl.replace(/^data:[^;]+;base64,/, `data:${mimeType};base64,`);
+      out.push({ name: file.name, type: mimeType, sandboxMimeType: mimeType, dataUrl, kind: 'document' });
+    } else throw new Error(`Unsupported file type: ${file.name}`);
+  }
+  return out;
+}
 
 function CodeBlock({ children, className = '' }) {
   const [copied, setCopied] = useState(false);
@@ -75,7 +94,7 @@ function Message({ message, onCopy, onEdit, onBranch, onShare, onRegenerate, onV
   return <article className={`message ${user ? 'user-message' : 'assistant-message'}`} data-message-id={message.id}>
     <div className={`message-avatar ${user ? 'user-avatar' : ''}`}>{user ? <UserRound size={15}/> : <Bot size={17}/>}</div>
     <div className="message-main"><div className="message-heading"><span>{user ? 'You' : 'Assistant'}</span>{message.createdAt && <time>{dateLabel(message.createdAt)}</time>}{!user && content && <button className="tiny-action" title="Copy response" onClick={() => onCopy(content)}><Copy size={13}/></button>}</div>
-      {message.attachments?.length > 0 && <div className="attachment-list">{message.attachments.map((f, i) => <span className="attachment-pill" key={`${f.name}-${i}`}>{f.type?.startsWith('video') ? <Video size={13}/> : <FileImage size={13}/>} {f.name}</span>)}</div>}
+      {message.attachments?.length > 0 && <div className="attachment-list">{message.attachments.map((f, i) => <span className="attachment-pill" key={`${f.name}-${i}`}>{f.type?.startsWith('video') ? <Video size={13}/> : f.type?.startsWith('image') ? <FileImage size={13}/> : <FileText size={13}/>} {f.name}</span>)}</div>}
       {message.reasoning && <details className="reasoning-block"><summary><Brain size={13}/> Thinking process</summary><div>{message.reasoning}</div></details>}
       {message.toolEvents?.length > 0 && <ToolActivity events={message.toolEvents}/>}
       {content && (user ? (editing ? <div className="inline-edit"><textarea value={editDraft} onChange={e => setEditDraft(e.target.value)} rows={Math.min(8, Math.max(2, editDraft.split('\n').length))}/><div><button onClick={() => { setEditing(false); setEditDraft(content); }}>Cancel</button><button disabled={!editDraft.trim()} onClick={() => { setEditing(false); onEdit(message, editDraft); }}>Save & regenerate</button></div></div> : <div className="user-text">{content}</div>) : <Markdown content={content}/>)}
@@ -92,6 +111,50 @@ function LoginScreen({ providers, error }) {
   const icons = { google: 'G', github: '⌘', discord: '◉' };
   return <div className="login-page"><div className="login-card"><div className="brand-mark large">✦</div><p className="eyebrow">NEMOTRON AGENT LAB</p><h1>Your workspace,<br/><em>your agent.</em></h1><p className="login-sub">Sign in to access your conversations, saved memories and personal preferences.</p>{error && <div className="notice error-notice">{error}</div>}<div className="oauth-list">{Object.keys(labels).map(provider => <a className={`oauth-button ${providers?.[provider] ? '' : 'disabled'}`} href={providers?.[provider] ? api(`/api/auth/${provider}`) : undefined} key={provider} onClick={e => !providers?.[provider] && e.preventDefault()}><b>{icons[provider]}</b>{labels[provider]}{!providers?.[provider] && <small>Not configured</small>}</a>)}</div><p className="login-foot"><ShieldCheck size={13}/> Your account data is private and tied to your sign-in.</p></div></div>;
 }
+
+function formatBytes(bytes = 0) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+function artifactIcon(file) {
+  const mime = file.mimeType || '';
+  if (mime.startsWith('image/')) return FileImage;
+  if (mime.includes('spreadsheet') || mime.includes('excel') || mime === 'text/csv') return FileSpreadsheet;
+  if (mime.includes('zip') || mime.includes('compressed')) return FileArchive;
+  return FileText;
+}
+function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
+  const [files, setFiles] = useState([]), [total, setTotal] = useState(0), [totalBytes, setTotalBytes] = useState(0);
+  const [quotaBytes, setQuotaBytes] = useState(50 * 1024 * 1024), [loading, setLoading] = useState(false), [error, setError] = useState(''), [search, setSearch] = useState('');
+  const load = useCallback(async () => {
+    if (!open) return;
+    setLoading(true); setError('');
+    try {
+      const response = await request('/api/interpreter/artifacts?limit=100');
+      const data = await response.json();
+      setFiles(data.files || []); setTotal(data.total || 0); setTotalBytes(data.totalBytes || 0); setQuotaBytes(data.quotaBytes || 50 * 1024 * 1024);
+    } catch (err) { setError(err.message || 'Could not load your File Library.'); }
+    finally { setLoading(false); }
+  }, [open]);
+  useEffect(() => { load(); }, [load, refreshKey]);
+  if (!open) return null;
+  const filtered = files.filter(file => `${file.name} ${file.mimeType} ${file.relativePath}`.toLowerCase().includes(search.toLowerCase()));
+  const remove = async file => {
+    if (!window.confirm(`Delete ${file.name} from your File Library?`)) return;
+    try { await request(`/api/interpreter/artifacts/${encodeURIComponent(file.id)}`, { method: 'DELETE' }); await load(); }
+    catch (err) { setError(err.message || 'Could not delete file.'); }
+  };
+  return <div className="modal-layer" onMouseDown={onClose}><section className="file-library-modal" onMouseDown={e => e.stopPropagation()}>
+    <div className="modal-head"><div><div className="eyebrow">YOUR WORKSPACE</div><h2><Files size={19}/> File Library</h2><p>Files generated by Python across your conversations.</p></div><button className="icon-button" onClick={onClose} aria-label="Close File Library"><X size={17}/></button></div>
+    <div className="library-summary"><div><b>{total}</b><span>saved files</span></div><div><b>{formatBytes(totalBytes)}</b><span>of {formatBytes(quotaBytes)} used</span></div><button className="secondary-button compact" onClick={load} disabled={loading}><RefreshCw size={12} className={loading ? 'spin' : ''}/> Refresh</button></div>
+    <div className="library-search"><Search size={15}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search files by name or type…"/><span>{filtered.length}</span></div>
+    {error && <div className="notice error-notice">{error}</div>}
+    <div className="library-list">{loading && !files.length ? <div className="library-empty"><LoaderCircle className="spin" size={19}/> Loading files…</div> : filtered.length ? filtered.map(file => { const Icon = artifactIcon(file); const previewable = ['text/plain','text/csv','text/markdown','application/json','application/pdf','image/png','image/jpeg','image/gif','image/webp'].includes(file.mimeType); return <div className="library-file" key={file.id}><div className="library-file-icon"><Icon size={17}/></div><div className="library-file-info"><b title={file.name}>{file.name}</b><small>{formatBytes(file.size)} · {dateLabel(file.createdAt)}{file.relativePath && file.relativePath !== file.name ? ` · ${file.relativePath}` : ''}</small></div><div className="library-file-actions">{previewable && <a className="library-action" href={api(`${file.downloadUrl}?inline=1`)} target="_blank" rel="noreferrer" title="Open file"><Eye size={14}/></a>}<a className="library-action" href={api(file.downloadUrl)} title="Download file"><Download size={14}/></a><button className="library-action danger" onClick={() => remove(file)} title="Delete file"><Trash2 size={14}/></button></div></div>; }) : <div className="library-empty"><HardDrive size={24}/><b>{search ? 'No matching files' : 'Your File Library is empty'}</b><span>{search ? 'Try another search term.' : 'Ask Nemotron to create a spreadsheet, PDF, chart, image or other file. Generated files will appear here.'}</span></div>}</div>
+    <div className="library-footer"><span>Files are private to your account and remain until you delete them.</span><button className="secondary-button compact" onClick={onClose}>Close</button></div>
+  </section></div>;
+}
+
 function HistoryDrawer({ open, onClose, chats, activeId, onSelect, onNew, onDelete, onRename }) {
   if (!open) return null;
   return <div className="drawer-layer" onMouseDown={onClose}><aside className="history-drawer" onMouseDown={e => e.stopPropagation()}><div className="drawer-head"><div><b>Conversations</b><small>{chats.length} saved</small></div><button className="icon-button" onClick={onClose}><X size={17}/></button></div><button className="new-chat-button" onClick={onNew}><Plus size={15}/> New conversation</button><div className="history-list">{chats.map(chat => <div className={`history-item ${chat._id === activeId ? 'active' : ''}`} key={chat._id}><button className="history-select" onClick={() => onSelect(chat._id)}><MessageSquare size={15}/><span><b>{chat.title || 'New chat'}</b><small>{dateLabel(chat.updatedAt)}</small></span></button><button className="delete-chat" onClick={() => onRename(chat)} title="Rename"><Pencil size={13}/></button><button className="delete-chat" onClick={() => onDelete(chat._id)} title="Delete"><Trash2 size={14}/></button></div>)}{!chats.length && <p className="empty-history">No conversations yet.</p>}</div></aside></div>;
@@ -133,7 +196,7 @@ export default function App() {
   const [auth, setAuth] = useState({ loading: true, user: null, providers: {}, error: '' });
   const [preferences, setPreferences] = useState(DEFAULT_PREFERENCES), [memories, setMemories] = useState([]), [shares, setShares] = useState([]);
   const [chats, setChats] = useState([]), [activeId, setActiveId] = useState(null), [messages, setMessages] = useState([]), [activeBranchId, setActiveBranchId] = useState('main'), [branches, setBranches] = useState([]);
-  const [busy, setBusy] = useState(false), [status, setStatus] = useState('Ready'), [drawer, setDrawer] = useState(false), [prefsOpen, setPrefsOpen] = useState(false);
+  const [busy, setBusy] = useState(false), [status, setStatus] = useState('Ready'), [drawer, setDrawer] = useState(false), [prefsOpen, setPrefsOpen] = useState(false), [libraryOpen, setLibraryOpen] = useState(false), [libraryRefresh, setLibraryRefresh] = useState(0);
   const [input, setInput] = useState(''), [files, setFiles] = useState([]), [fileError, setFileError] = useState(''), [thinking, setThinking] = useState(true), [scrollDown, setScrollDown] = useState(false);
   const scrollRef = useRef(null), textareaRef = useRef(null), fileRef = useRef(null), abortRef = useRef(null), followScrollRef = useRef(true), titleRequestRef = useRef(0), activeIdRef = useRef(null), manualTitleIdsRef = useRef(new Set());
   const activeChat = useMemo(() => chats.find(c => c._id === activeId), [chats, activeId]);
@@ -199,7 +262,7 @@ export default function App() {
     const index = messages.findIndex(m => m.id === message.id); if (index < 1 || busy) return;
     setBusy(true); setStatus('Regenerating response…'); try { localStorage.setItem('nemotron.pendingGeneration', JSON.stringify({ chatId: activeId, startedAt: Date.now() })); } catch {} const controller = new AbortController(); abortRef.current = controller;
     try {
-      const res = await fetch(api('/api/chat/stream'), { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, signal: controller.signal, body: JSON.stringify({ chatId: activeId, branchId: activeBranchId, expectedRevision: activeChat?.revision || 0, preserveExistingMessageId: message.id, thinkingEnabled: thinking, messages: messages.slice(0, index).map(m => ({ role: m.role, content: m.apiContent || m.content })) }) });
+      const res = await fetch(api('/api/chat/stream'), { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, signal: controller.signal, body: JSON.stringify({ chatId: activeId, branchId: activeBranchId, expectedRevision: activeChat?.revision || 0, preserveExistingMessageId: message.id, thinkingEnabled: thinking, messages: messages.slice(0, index).map(m => ({ role: m.role, content: m.apiContent || m.content, ...(m.attachments?.length ? { attachments: m.attachments } : {}) })) }) });
       if (!res.ok) { const data = await res.json().catch(() => ({})); throw new Error(data.error || `Request failed (${res.status})`); }
       const reader = res.body.getReader(), decoder = new TextDecoder(); let buffer = '';
       while (true) { const part = await reader.read(); buffer += decoder.decode(part.value || new Uint8Array(), { stream: !part.done }); const blocks = buffer.split(/\r?\n\r?\n/); buffer = blocks.pop() || ''; for (const block of blocks) { const line = block.split(/\r?\n/).find(x => x.startsWith('data:')); if (!line) continue; const event = JSON.parse(line.slice(5).trim()); if (event.type === 'status') setStatus(event.status || 'Regenerating…'); if (event.type === 'error') throw new Error(event.error || 'Regeneration failed.'); } if (part.done) break; }
@@ -226,13 +289,28 @@ export default function App() {
     setFileError(''); setBusy(true); setStatus('Preparing request…');
     let chat = activeChat; if (!chat) { try { chat = await newChat(); } catch (error) { setBusy(false); setFileError(error.message); return; } }
     let prepared = []; try { if (attach.length) prepared = await prepareFiles(attach); } catch (error) { setBusy(false); setFileError(error.message); return; }
-    const payloadSize = prepared.reduce((n, item) => n + (item.dataUrl?.length || 0) + (item.frames || []).reduce((s, f) => s + f.dataUrl.length, 0), 0);
+    const payloadSize = prepared.reduce((n, item) => n + (item.type.startsWith('image/') ? (item.dataUrl?.length || 0) : 0) + (item.frames || []).reduce((s, f) => s + f.dataUrl.length, 0), 0);
     if (payloadSize > 22 * 1024 * 1024) { setBusy(false); setFileError('Compressed attachments exceed the 22 MB request limit.'); return; }
+    const sandboxFiles = prepared.filter(item => item.dataUrl && !item.frames);
+    const sandboxUploadBytes = sandboxFiles.reduce((sum, item) => sum + Math.floor(item.dataUrl.length * 0.75), 0);
+    if (sandboxFiles.some(item => Math.floor(item.dataUrl.length * 0.75) > 8 * 1024 * 1024)) { setBusy(false); setFileError('Each file sent to the Python workspace must be 8 MB or smaller.'); return; }
+    if (sandboxUploadBytes > 20 * 1024 * 1024) { setBusy(false); setFileError('Files sent to the Python workspace cannot exceed 20 MB per message.'); return; }
+    let uploaded = [];
+    try {
+      if (sandboxFiles.length && !options.reuseLastUser) {
+        const uploadResult = await request(`/api/chats/${chat._id}/uploads`, { method: 'POST', body: JSON.stringify({ files: sandboxFiles.map(item => ({ name: item.sandboxName || item.name, mimeType: item.sandboxMimeType || item.type, dataUrl: item.dataUrl })) }) });
+        uploaded = uploadResult.uploads || [];
+      }
+    } catch (error) { setBusy(false); setFileError(error.message || 'Could not upload files to the Python workspace.'); return; }
     try { localStorage.setItem('nemotron.pendingGeneration', JSON.stringify({ chatId: chat._id, startedAt: Date.now() })); } catch {}
-    const parts = []; if (text) parts.push({ type: 'text', text });
-    for (const item of prepared) { if (item.dataUrl) parts.push({ type: 'image_url', image_url: { url: item.dataUrl } }); if (item.frames) for (const frame of item.frames) { parts.push({ type: 'text', text: `Video frame at ${frame.time.toFixed(2)} seconds from ${item.name}.` }); parts.push({ type: 'image_url', image_url: { url: frame.dataUrl } }); } }
-    const attachments = prepared.map(x => ({ name: x.name, type: x.type }));
-    const userMessage = options.reuseLastUser ? null : { id: crypto.randomUUID(), role: 'user', content: text || 'Please analyze the attached media.', attachments, createdAt: new Date().toISOString(), ...(prepared.length ? { apiContent: parts } : {}) };
+    const parts = []; if (text) parts.push({ type: 'text', text }); else if (prepared.length) parts.push({ type: 'text', text: 'Please analyze the attached files and media.' });
+    for (const item of prepared) { if (item.dataUrl && item.type.startsWith('image/')) parts.push({ type: 'image_url', image_url: { url: item.dataUrl } }); if (item.frames) for (const frame of item.frames) { parts.push({ type: 'text', text: `Video frame at ${frame.time.toFixed(2)} seconds from ${item.name}.` }); parts.push({ type: 'image_url', image_url: { url: frame.dataUrl } }); } }
+    let uploadIndex = 0;
+    const attachments = prepared.map(item => {
+      const upload = sandboxFiles.includes(item) ? uploaded[uploadIndex++] : null;
+      return { name: item.name.slice(0, 140), type: item.type, ...(upload ? { uploadId: upload.uploadId, sandboxPath: upload.sandboxPath, size: upload.size } : {}) };
+    });
+    const userMessage = options.reuseLastUser ? null : { id: crypto.randomUUID(), role: 'user', content: text || 'Please analyze the attached files and media.', attachments, createdAt: new Date().toISOString(), ...(prepared.length ? { apiContent: parts } : {}) };
     const nextMessages = options.messages || (options.reuseLastUser ? messages : [...messages, userMessage]), titleBefore = chat.title || 'New chat';
     if (activeIdRef.current === chat._id) setMessages(nextMessages); setInput(''); setFiles([]); if (textareaRef.current) textareaRef.current.style.height = 'auto';
     const assistantId = crypto.randomUUID(), assistant = { id: assistantId, role: 'assistant', content: '', reasoning: '', toolEvents: [], createdAt: new Date().toISOString() };
@@ -241,7 +319,7 @@ export default function App() {
     const update = () => { if (activeIdRef.current === chat._id) setMessages(current => current.map(m => m.id === assistantId ? { ...liveAssistant, content: output, reasoning: thought, toolEvents: events, usage, durationMs } : m)); };
     try {
       setStatus('Connecting…');
-      const res = await fetch(api('/api/chat/stream'), { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, signal: controller.signal, body: JSON.stringify({ chatId: chat._id, branchId: options.branchId || activeBranchId, expectedRevision: options.expectedRevision ?? (chat.revision || 0), assistantMessageId: assistantId, thinkingEnabled: thinking, messages: nextMessages.map(m => ({ role: m.role, content: m.apiContent || m.content, ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}) })) }) });
+      const res = await fetch(api('/api/chat/stream'), { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, signal: controller.signal, body: JSON.stringify({ chatId: chat._id, branchId: options.branchId || activeBranchId, expectedRevision: options.expectedRevision ?? (chat.revision || 0), assistantMessageId: assistantId, thinkingEnabled: thinking, messages: nextMessages.map(m => ({ role: m.role, content: m.apiContent || m.content, ...(m.attachments?.length ? { attachments: m.attachments } : {}), ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}) })) }) });
       if (!res.ok) { let data = {}; try { data = await res.json(); } catch { data.error = await res.text(); } throw new Error(data.error || `Request failed (${res.status})`); }
       const reader = res.body.getReader(), decoder = new TextDecoder(); let buffer = '';
       while (true) {
@@ -254,7 +332,7 @@ export default function App() {
           if (event.type === 'chunk') { output += event.content || ''; setStatus('Generating…'); update(); }
           if (event.type === 'reasoning') { thought += event.content || ''; update(); }
           if (event.type === 'tool_start') { events = [...events, { name: event.name, status: 'running', arguments: event.arguments }]; setStatus(`Using ${event.name.replaceAll('_', ' ')}…`); update(); }
-          if (event.type === 'tool_result') { if (event.name === 'save_memory') { request('/api/account/memories').then(r => r.json()).then(data => setMemories(data.memories || [])).catch(() => {}); if (typeof BroadcastChannel !== 'undefined') { const channel = new BroadcastChannel('nemotron-memory-sync'); channel.postMessage({ type: 'refresh' }); channel.close(); } } const index = events.map(x => x.name).lastIndexOf(event.name); if (index >= 0) events = events.map((x, i) => i === index ? { ...x, status: event.status, error: event.error, result: event.result } : x); update(); }
+          if (event.type === 'tool_result') { if (event.name === 'execute_python' && event.result?.artifacts?.length) setLibraryRefresh(v => v + 1); if (event.name === 'save_memory') { request('/api/account/memories').then(r => r.json()).then(data => setMemories(data.memories || [])).catch(() => {}); if (typeof BroadcastChannel !== 'undefined') { const channel = new BroadcastChannel('nemotron-memory-sync'); channel.postMessage({ type: 'refresh' }); channel.close(); } } const index = events.map(x => x.name).lastIndexOf(event.name); if (index >= 0) events = events.map((x, i) => i === index ? { ...x, status: event.status, error: event.error, result: event.result } : x); update(); }
           if (event.type === 'done') { usage = event.usage || usage; durationMs = event.durationMs ?? Math.round(performance.now() - started); update(); }
           if (event.type === 'stopped') setStatus('Stopped');
           if (event.type === 'error') throw new Error(event.error || 'Generation failed.');
@@ -280,18 +358,18 @@ export default function App() {
 
   return <div className="app agent-lab">
     <header className="topbar"><div className="brand-area"><button className="icon-button" title="Conversation history" onClick={() => setDrawer(true)}><PanelLeft size={17}/></button><div className="brand-mark">✦</div><div className="brand-text"><b>Nemotron Agent Lab</b><small>PERSONAL WORKSPACE</small></div></div>
-      <div className="top-actions"><span className="status-label"><i className={busy ? 'pulse-dot' : 'ready-dot'}/>{status}</span><button className="icon-button" title="Generate chat name" onClick={() => generateName()} disabled={!messages.length || busy}><Sparkles size={16}/></button><button className="icon-button" title="Export conversation" onClick={exportChat}><Download size={16}/></button><button className="icon-button" title="Personalization & memory" onClick={() => setPrefsOpen(true)}><Settings2 size={17}/></button><button className="icon-button" title="New chat" onClick={newChat}><SquarePen size={17}/></button>{busy && <button className="icon-button stop-button" title="Stop" onClick={() => abortRef.current?.abort()}><Square size={14}/></button>}<button className="profile-button" title={auth.user.name} onClick={() => setPrefsOpen(true)}>{auth.user.avatar ? <img src={auth.user.avatar} alt=""/> : <UserRound size={16}/>}</button></div>
+      <div className="top-actions"><span className="status-label"><i className={busy ? 'pulse-dot' : 'ready-dot'}/>{status}</span><button className="icon-button" title="Generate chat name" onClick={() => generateName()} disabled={!messages.length || busy}><Sparkles size={16}/></button><button className="icon-button" title="File Library" aria-label="Open File Library" onClick={() => setLibraryOpen(true)}><Files size={16}/></button><button className="icon-button" title="Export conversation" onClick={exportChat}><Download size={16}/></button><button className="icon-button" title="Personalization & memory" onClick={() => setPrefsOpen(true)}><Settings2 size={17}/></button><button className="icon-button" title="New chat" onClick={newChat}><SquarePen size={17}/></button>{busy && <button className="icon-button stop-button" title="Stop" onClick={() => abortRef.current?.abort()}><Square size={14}/></button>}<button className="profile-button" title={auth.user.name} onClick={() => setPrefsOpen(true)}>{auth.user.avatar ? <img src={auth.user.avatar} alt=""/> : <UserRound size={16}/>}</button></div>
     </header>
     <main className="workspace"><div className="workspace-top"><div><div className="eyebrow">AGENT WORKSPACE</div><h1>{activeChat?.title && activeChat.title !== 'New chat' ? activeChat.title : 'What are we working on?'}</h1><p>Research, create, explore and solve problems with tools.</p></div><div className="workspace-tools">{branches.length > 1 && <select aria-label="Conversation branch" value={activeBranchId} onChange={async e => { const id = e.target.value; const result = await request(`/api/chats/${activeId}/branches/${id}/activate`, { method: 'PATCH', body: JSON.stringify({ expectedRevision: activeChat?.revision || 0 }) }); const data = await result.json(); setActiveBranchId(id); setMessages(data.messages || []); setChats(current => [data.chat, ...current.filter(c => c._id !== data.chat._id)]); }}><option value={activeBranchId}>Branch {branches.findIndex(b => b.branchId === activeBranchId) + 1}</option>{branches.filter(b => b.branchId !== activeBranchId).map((b, i) => <option key={b.branchId} value={b.branchId}>Branch {branches.findIndex(x => x.branchId === b.branchId) + 1}</option>)}</select>}<button className="text-action" onClick={() => setDrawer(true)}><MessageSquare size={14}/> History</button></div></div>
       <section className="chat-scroll" ref={scrollRef} onScroll={onScroll}><div className="chat-inner">{messages.length === 0 ? <div className="welcome"><div className="welcome-symbol"><Sparkles size={23}/></div><div className="eyebrow">READY WHEN YOU ARE</div><h2>Let's make<br/><em>something happen.</em></h2><p>Ask a question, analyze data, generate files, research the web or build something. Your agent capabilities are ready automatically.</p><div className="suggestions">{starterSuggestions.map(({ icon: Icon, label, prompt }) => <button key={label} onClick={() => setInput(prompt)}><Icon size={15}/><span>{label}</span><ArrowUp size={13}/></button>)}</div></div> : messages.map(m => <Message key={m.id || `${m.role}-${m.createdAt}`} message={m} onCopy={copyText} onEdit={editUserMessage} onBranch={createBranchFrom} onShare={shareResponse} onRegenerate={regenerateResponse} onVersion={changeVersion}/>)}</div>{scrollDown && <button className="scroll-bottom" onClick={() => { followScrollRef.current = true; scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }); }}><ArrowDown size={15}/></button>}</section>
-      <div className="composer-area">{fileError && <div className="attachment-error"><AlertCircle size={13}/>{fileError}<button onClick={() => setFileError('')}><X size={13}/></button></div>}{files.length > 0 && <div className="pending-files">{files.map((f, i) => <div className="pending-file" key={`${f.name}-${i}`}>{f.type.startsWith('video') ? <Video size={13}/> : <FileImage size={13}/>}<span>{f.name}</span><button onClick={() => setFiles(current => current.filter((_, n) => n !== i))}><X size={12}/></button></div>)}</div>}
+      <div className="composer-area">{fileError && <div className="attachment-error"><AlertCircle size={13}/>{fileError}<button onClick={() => setFileError('')}><X size={13}/></button></div>}{files.length > 0 && <div className="pending-files">{files.map((f, i) => <div className="pending-file" key={`${f.name}-${i}`}>{f.type.startsWith('video') ? <Video size={13}/> : f.type.startsWith('image') ? <FileImage size={13}/> : <FileText size={13}/>}<span>{f.name}</span><button onClick={() => setFiles(current => current.filter((_, n) => n !== i))}><X size={12}/></button></div>)}</div>}
         <form className="composer" onSubmit={e => { e.preventDefault(); sendMessage(); }}><textarea ref={textareaRef} value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = `${Math.min(e.target.scrollHeight, 180)}px`; }} onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendMessage(); } }} rows={1} placeholder="Ask anything, or give your agent a task…"/>
-          <div className="composer-controls"><div className="composer-left"><button type="button" className="composer-icon" title="Attach images or videos" onClick={() => fileRef.current?.click()}><Paperclip size={17}/></button><input ref={fileRef} hidden type="file" accept="image/*,video/mp4,video/webm,video/quicktime" multiple onChange={e => { addFiles(e.target.files); e.target.value = ''; }}/>
+          <div className="composer-controls"><div className="composer-left"><button type="button" className="composer-icon" title="Attach images, videos or documents" onClick={() => fileRef.current?.click()}><Paperclip size={17}/></button><input ref={fileRef} hidden type="file" accept="image/*,video/mp4,video/webm,video/quicktime,.pdf,.txt,.md,.csv,.tsv,.json,.xml,.zip,.xls,.xlsx,.doc,.docx,.pptx,.py,.js,.jsx,.mjs,.cjs,.ts,.tsx,.html,.css,.sql,.yml,.yaml,.toml,.ini,.cfg,.conf,.log,.sh,.env" multiple onChange={e => { addFiles(e.target.files); e.target.value = ''; }}/>
             <button type="button" className={`thinking-control ${thinking ? 'enabled' : ''}`} onClick={() => setThinking(v => !v)} title="Toggle model thinking"><Brain size={14}/><span>Thinking</span><i/></button>
           </div><button className="send-button" type="submit" disabled={busy || (!input.trim() && !files.length)}>{busy ? <LoaderCircle size={16} className="spin"/> : <ArrowUp size={17}/>}</button></div></form><div className="composer-caption"><span><kbd>Enter</kbd> newline · <kbd>Ctrl + Enter</kbd> send</span><span>Agent tools run automatically · Think mode {thinking ? 'on' : 'off'}</span></div>
       </div>
     </main>
-    <HistoryDrawer open={drawer} onClose={() => setDrawer(false)} chats={chats} activeId={activeId} onSelect={selectChat} onNew={newChat} onDelete={removeChat} onRename={renameChat}/>
+    <HistoryDrawer open={drawer} onClose={() => setDrawer(false)} chats={chats} activeId={activeId} onSelect={selectChat} onNew={newChat} onDelete={removeChat} onRename={renameChat}/><FileLibraryDialog open={libraryOpen} onClose={() => setLibraryOpen(false)} refreshKey={libraryRefresh}/>
     <PreferencesDialog open={prefsOpen} onClose={() => setPrefsOpen(false)} preferences={preferences} setPreferences={savePreferences} memories={memories} addMemory={addMemory} editMemory={editMemory} deleteMemory={deleteMemory} user={auth.user} logout={logout} saveProfile={saveProfile} linkProvider={linkProvider} providers={auth.providers} shares={shares} loadShares={loadShares} revokeShare={revokeShare}/>
   </div>;
 }

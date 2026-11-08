@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "monty:check": "node scripts/check-monty.js"
+    "sandbox:check": "node scripts/check-vercel-sandbox.js",
+    "sandbox:smoke": "node scripts/smoke-vercel-sandbox.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -16,9 +17,9 @@
     "expr-eval": "^2.0.2",
     "helmet": "^8.0.0",
     "mongoose": "^8.9.5",
-    "@pydantic/monty": "1.3.0"
+    "@vercel/sandbox": "3.9.1"
   },
   "engines": {
-    "node": "^20.19.0 || >=22.12.0"
+    "node": ">=20.19.0"
   }
 }

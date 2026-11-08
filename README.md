@@ -104,79 +104,77 @@ API reference: https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3_5-sup
 
 The model card advertises up to 1M context, text/image/video input and configurable thinking. Individual hosted deployments can enforce smaller limits. The agent does not assume that the full advertised context is always available.
 
-## Universal Python execution (v5 Monty upgrade)
+## Automatic Python dependency installation (v6.0.3)
 
-The agent now exposes one general-purpose `execute_python` function tool. The model decides when to call it; users do not need to select a tool in the composer. Tool calls and their status/arguments/results appear inside the assistant response activity panel. Fenced code blocks include a language label and a copy action. The composer uses **Enter for a newline** and **Ctrl+Enter (Cmd+Enter on macOS) to send**.
+The Vercel-managed Python image includes CPython, pip, venv and uv, but does not include Matplotlib or most third-party libraries by default. The execution backend now scans imports before running user code and automatically installs missing, explicitly allowlisted common packages into the conversation `.venv`. This fixes `ModuleNotFoundError: No module named 'matplotlib'` without requiring users or the model to add a manual installation step for common packages. Packages persist in the conversation sandbox snapshot. The default install timeout is 180 seconds and can be changed with `VERCEL_SANDBOX_PACKAGE_INSTALL_TIMEOUT_MS`. Unknown imports are not blindly installed from PyPI; the generated code should explicitly install those packages. Automatic installation requires sandbox network access.
 
-### Python runtime (Pydantic Monty OSS WebAssembly)
+## Vercel Sandbox directory-resume fix (v6.0.2)
 
-The v5 interpreter uses the open-source `@pydantic/monty` package through its
-`@pydantic/monty/wasm` entry point. Under Node.js, Monty WASM runs in
-`node:worker_threads`; the application does not spawn Python, invoke Docker, or need
-root access. A Node.js 20+ runtime with worker-thread support is required.
+Persistent Vercel sandboxes resume from snapshots with their conversation workspace already present. The Vercel SDK `sandbox.mkDir()` operation is not idempotent and can return HTTP 400 (`File exists`) when the application attempts to create that directory again. The provider now uses Linux `mkdir -p -- <absolute-path>` for both the conversation workspace and its `uploads/` directory. This is safe for first creation and repeated resumes. The behavior is covered by a regression test that executes twice against the same conversation sandbox. No environment-variable changes are required for this fix.
 
-Install dependencies and verify the runtime:
+## Universal Python execution (Vercel Sandbox)
+
+The model-facing `execute_python` tool now runs full CPython 3.14 in Vercel Sandbox Firecracker microVMs. This is a remote execution service: your Express application stays on its existing Node.js host and calls Vercel through `@vercel/sandbox`. No Python installation, Docker daemon, root access, or second VPS is required on the application host.
+
+### Configure Vercel Sandbox
+
+For an application hosted outside Vercel, create a Vercel project (it can be empty; you do not need to deploy your main app there), create an access token scoped to that team, and obtain the Vercel Team ID and Project ID. Set these backend-only environment variables:
+
+```env
+VERCEL_TOKEN=<vercel-access-token>
+VERCEL_TEAM_ID=team_...
+VERCEL_PROJECT_ID=prj_...
+```
+
+On a Vercel deployment, project OIDC authentication can be used instead. Never put these values in `VITE_` variables or send them to the browser. Optional resource settings are documented in `.env.example`. `VERCEL_SANDBOX_PACKAGE_INSTALL_TIMEOUT_MS` controls the maximum time allowed for automatic dependency installation (default 180 seconds). If your app host and users are in India, consider setting `VERCEL_SANDBOX_REGION=bom1` (Mumbai) to reduce execution latency.
+
+Use Node.js 20.19+ (or 22.12+) for the current Sandbox SDK. Install and verify the SDK configuration:
 
 ```bash
 npm install
-npm run monty:check
+npm run sandbox:check
 ```
 
-Configure the optional resource settings in `.env`:
+To make a real remote sandbox, execute CPython, upload and download a test file, then delete the test sandbox:
 
-```env
-MONTY_MAX_WORKERS=1
-MONTY_MAX_MEMORY_BYTES=33554432
-MONTY_MAX_FEED_SECONDS=12
+```bash
+npm run sandbox:smoke
 ```
 
-The backend clamps these values to safe ranges. Defaults are one worker, 32 MiB of
-Monty heap memory per session, and a 12-second maximum feed duration. Each session
-also has recursion, host-suspension and cumulative sleep limits. With a one-worker
-configuration, queued checkouts wait up to the feed limit plus a small margin. The
-worker pool is created lazily when the first Python execution arrives.
+### Execution model
 
-**Monty is a Python subset, not full CPython.** Its bundled standard library covers
-common tasks such as math, JSON, CSV, text processing, dates, regular expressions and
-collections. Third-party packages such as NumPy, Pandas, Matplotlib, SciPy, Pillow and
-openpyxl are not available. The WASM build does not support filesystem mounts. Python
-code cannot use `open()` or `pathlib` to access host files and has no ambient network
-or environment access.
+- A conversation receives a private persistent sandbox named from the authenticated owner and chat ID. Different accounts and conversations never share a sandbox.
+- The sandbox is resumed for each execution and stopped after each tool call. Vercel snapshots the workspace and installed packages on stop, so the VM is not left running idle while files and pip-installed packages persist for later turns (subject to the seven-day snapshot retention configured below).
+- The default managed image is `vercel/sandbox/python:3.14`, which provides Python 3.14, pip, venv and uv but does **not** bundle common data-science/document libraries such as Matplotlib. The backend creates a private `.venv` inside each conversation workspace and runs code with that interpreter, avoiding system-Python package-management restrictions. Before each script, the backend statically scans Python imports and automatically installs missing, allowlisted common packages (including `matplotlib`, `numpy`, `pandas`, `scipy`, `seaborn`, `plotly`, `Pillow`, `opencv-python-headless`, `openpyxl`, `reportlab`, `python-docx`, `python-pptx`, `pypdf`, `requests`, `beautifulsoup4`, `lxml`, `PyYAML` and others). Only known import-to-PyPI mappings are installed automatically; unknown packages should be installed explicitly by the code with `subprocess.run([sys.executable, '-m', 'pip', 'install', 'package'], check=True)`. Installations persist within that conversation's sandbox snapshot.
+- Uploaded images and supported documents/code files (PDF, TXT/Markdown, CSV/TSV, JSON, XML, ZIP, Excel, Word, PowerPoint, Python, JavaScript/TypeScript, HTML, CSS, SQL, YAML and TOML) are stored per conversation and mounted under `uploads/` in the sandbox. Video is sent to the vision model as sampled frames. Python scripts run in the conversation workspace. Generated regular files outside `uploads/` are discovered after execution, validated and copied into the authenticated user's persistent File Library. Environment files, private-key files and known credential filenames are excluded from automatic artifact collection.
+- The top-bar File Library opens a cross-conversation collection with search, safe preview, download and delete actions. It stores file bytes and metadata in MongoDB, not in the ephemeral Node.js host filesystem. Files are private to the owner and survive backend restarts. Generated per-file size is capped at 10 MB; each account has a 50 MB / 100-file generated-artifact quota. Input uploads are capped at 8 MB per file, 20 MB per request, 50 MB per conversation and 100 MB / 100 files per account.
+- Execution has per-user and global concurrency limits, a configurable timeout, bounded stdout/stderr, file-count and artifact-size limits, and owner-scoped cancellation.
+- The default network policy allows public internet destinations while denying private, loopback, link-local and reserved IP ranges. Set `VERCEL_SANDBOX_NETWORK_MODE=deny-all` to disable sandbox egress; this also disables pip installation and outbound HTTP requests.
+- Deleting a conversation also requests deletion of its associated Vercel sandbox and orphan snapshots. File Library items are independent and remain until the owner deletes them.
 
-To produce a downloadable file, the model must call the explicitly exposed
-`create_artifact(name, content, mime_type)` host function. The backend validates the
-name, MIME type, owner, size and artifact count before storing it. Artifacts are
-available through the existing authenticated download endpoint for one hour. Storage
-is capped at 20 MB per account and 64 MB per server process. Artifacts use temporary
-host storage and are process-local: they do not survive restarts or move between replicas.
-The other exposed host function, `check_cancelled()`, supports cooperative cancellation;
-Monty also enforces the feed-duration limit. Cancellation is not an instant hard kill:
-code that does not reach the cooperative check may continue until the execution limit.
+### API contracts
 
-The authenticated API contracts are preserved:
+The model-facing `execute_python` tool and these API routes remain available:
 
-- `POST /api/interpreter/execute` with `{ "code": "print(1 + 1)", "executionId": "optional-client-id" }`
-- `POST /api/interpreter/cancel/:id` requests cancellation.
-- `GET /api/interpreter/artifacts/:id` downloads an owner-checked artifact.
-- `GET /api/interpreter/status` reports the active interpreter provider and readiness.
+- `POST /api/chats/:id/uploads` stores supported user attachments and returns the safe `uploads/...` paths mounted into that conversation's sandbox.
+- `POST /api/interpreter/execute` with `{ "code": "print(1 + 1)", "executionId": "optional-client-id", "chatId": "optional-chat-id" }`
+- `POST /api/interpreter/cancel/:id` requests owner-scoped cancellation.
+- `GET /api/interpreter/status` reports provider configuration and active executions.
+- `GET /api/interpreter/artifacts` lists the signed-in user's File Library.
+- `GET /api/interpreter/artifacts/:id` downloads an owner-checked file. `?inline=1` previews supported safe MIME types.
+- `DELETE /api/interpreter/artifacts/:id` deletes an owner-owned file.
 
-Execution requires a signed-in account. The existing model-facing `execute_python`
-tool is unchanged at the API/schema level. The provider is reported as
-`pydantic-monty-wasm` in execution results.
+MongoDB is required for persistent File Library storage. When MongoDB is not configured in development mode, artifacts fall back to process-local memory and will not survive restarts. The Vercel sandbox workspace itself persists independently in Vercel snapshots.
 
-**Isolation note:** Monty evaluates Python in a constrained WebAssembly runtime and
-only the narrow host functions above are exposed. The Node WASM build uses worker
-threads, not separate OS processes or containers. Do not add broad host functions or
-pass secrets, unrestricted filesystem handles, or network clients into the sandbox.
-For deployments accepting hostile multi-tenant code, retain OS-level resource controls
-and conduct a security review of the actual hosting environment.
+### Cost and plan limits
 
-### Current upgrade scope
+Vercel Sandbox Hobby usage includes monthly quotas, not unlimited compute. The current published allowances include 5 active CPU-hours, 420 GB-hours of provisioned memory, 5,000 sandbox creations, 20 GB data transfer, 10 concurrent sandboxes, up to 4 vCPUs / 8 GB, and a 45-minute maximum session. Once Hobby quotas are exceeded, new sandbox creation pauses until the next billing cycle. Check the live [Vercel Sandbox pricing and quotas](https://vercel.com/docs/sandbox/pricing) before production use. Hobby is intended for personal, non-commercial use.
 
-This repository update includes the isolated Python execution foundation, the model tool registration and streaming activity, owner-checked artifact downloads, removal of the composer plugin drop-up, multiline keyboard behavior, richer activity details, code-block copy controls, context-based chat title input, centralized versioned system-prompt construction, memory duplicate avoidance, and private-app SEO/robots metadata.
+### Security and operational notes
 
-The continuity upgrade adds linked OAuth identities, editable profiles/usernames, conversation branches, response versions, prompt editing as a new branch, response regeneration, opt-in public snapshots with revocation, IndexedDB composer drafts, active-chat restoration, revision checks, context-aware/manual chat naming, and memory synchronization. The account migration is intentionally explicit and must be run before relying on the new linked-account/username fields. A production-grade end-to-end security audit, full attachment ingestion into Python, browser/device QA, and Monty WASM runtime compatibility and worker-thread behavior must still be verified on the target managed host. Do not treat those items as completed.
+Vercel Sandbox runs code in Firecracker microVMs, but application-level authorization and quotas still matter. Do not expose Vercel credentials to sandbox code. The sandbox network firewall is configured by the backend, and its policy should be reviewed before changing it. The public network is enabled by default for pip installs and internet tasks; private/reserved subnets are denied. Do not pass private service credentials or privileged host capabilities into generated code.
 
+The workspace is conversation-scoped and persistent. It is not an archival backup: Vercel snapshot retention is configured to seven days by default in this project. If a conversation is inactive long enough for its snapshot to expire, its installed packages and working-directory changes may need to be recreated; original user uploads are re-mounted from MongoDB on the next execution. Generated outputs that should remain available are copied to the MongoDB-backed File Library. Keep MongoDB backups and enforce your own retention policy for user files.
 
 ## Continuity upgrade — account and conversation architecture
 
@@ -224,4 +222,4 @@ The active chat ID is stored as a small local preference. The composer draft is 
 
 ## Verification notes
 
-The repository includes 17 Node.js unit tests covering conversation branches, interpreter input/queue limits, Monty provider behavior, output caps, cancellation and artifact ownership. Run `npm test`. A successful unit-test run does not replace a live MongoDB migration rehearsal, OAuth-provider testing, frontend production build, managed-host Monty WASM verification, or deployment-level browser testing.
+The repository includes 19 Node.js unit tests covering conversation branches, interpreter input/queue limits, Vercel Sandbox provider behavior, idempotent persistent workspace creation, output caps, cancellation and persistent artifact ownership. Run `npm test`. A successful unit-test run does not replace a live MongoDB migration rehearsal, OAuth-provider testing, frontend production build, live Vercel Sandbox credential and microVM verification, or deployment-level browser testing.

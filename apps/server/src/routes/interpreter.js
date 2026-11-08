@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { executePython, cancelExecution } from '../services/interpreter/interpreter.js';
-import { getArtifact } from '../services/interpreter/artifactStore.js';
+import { getArtifact, listArtifacts, deleteArtifact } from '../services/interpreter/artifactStore.js';
+import { getChat } from '../services/chatStore.js';
 import { getInterpreterStatus } from '../services/interpreter/sandboxManager.js';
 import logger from '../utils/logger.js';
 
@@ -18,6 +19,10 @@ router.post('/execute', async (req, res, next) => {
     if (!owner(req) || owner(req).startsWith('guest:')) {
       log.warn('Python execution denied: not signed in', { ip: req.ip });
       return res.status(401).json({ error: 'A signed-in account is required for Python execution.' });
+    }
+    if (req.body?.chatId) {
+      const chat = await getChat(owner(req), String(req.body.chatId));
+      if (!chat) return res.status(404).json({ error: 'Conversation not found.' });
     }
     log.info('Python execution started', { userId: owner(req) });
     const controller = new AbortController();
@@ -52,21 +57,46 @@ router.post('/cancel/:id', (req, res) => {
   res.status(cancelled ? 202 : 404).json({
     cancelled,
     message: cancelled
-      ? 'Cancellation requested. Monty will stop at its next cooperative cancellation check or execution limit.'
+      ? 'Cancellation requested. The remote Python command is being terminated.'
       : 'Execution not found or not owned by this account.'
   });
 });
 
-router.get('/artifacts/:id', (req, res) => {
-  const artifact = getArtifact(req.params.id, owner(req));
-  if (!artifact) {
-    log.warn('Artifact not found', { userId: owner(req), artifactId: req.params.id });
-    return res.status(404).json({ error: 'Artifact not found.' });
-  }
-  log.info('Artifact downloaded', { userId: owner(req), artifactId: req.params.id, name: artifact.name });
-  res.setHeader('Content-Type', artifact.mimeType || 'application/octet-stream');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  return res.download(artifact.path, artifact.name);
+router.get('/artifacts', async (req, res, next) => {
+  try {
+    const result = await listArtifacts(owner(req), { search: String(req.query.search || ''), limit: req.query.limit });
+    return res.json(result);
+  } catch (error) { next(error); }
+});
+
+router.get('/artifacts/:id', async (req, res, next) => {
+  try {
+    if (!/^(?:[a-f0-9]{24}|[a-f0-9-]{36})$/i.test(req.params.id)) return res.status(404).json({ error: 'Artifact not found.' });
+    const artifact = await getArtifact(req.params.id, owner(req));
+    if (!artifact) {
+      log.warn('Artifact not found', { userId: owner(req), artifactId: req.params.id });
+      return res.status(404).json({ error: 'Artifact not found.' });
+    }
+    log.info('Artifact downloaded', { userId: owner(req), artifactId: req.params.id, name: artifact.name });
+    const previewable = ['text/plain', 'text/csv', 'text/markdown', 'application/json', 'application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(artifact.mimeType);
+    const inline = req.query.inline === '1' && previewable;
+    res.setHeader('Content-Type', artifact.mimeType || 'application/octet-stream');
+    res.setHeader('Content-Length', artifact.size);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${artifact.name}"`);
+    if (inline) res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+    return res.send(artifact.data);
+  } catch (error) { next(error); }
+});
+
+router.delete('/artifacts/:id', async (req, res, next) => {
+  try {
+    if (!/^(?:[a-f0-9]{24}|[a-f0-9-]{36})$/i.test(req.params.id)) return res.status(404).json({ error: 'Artifact not found.' });
+    const deleted = await deleteArtifact(req.params.id, owner(req));
+    if (!deleted) return res.status(404).json({ error: 'Artifact not found.' });
+    return res.json({ ok: true });
+  } catch (error) { next(error); }
 });
 
 export default router;

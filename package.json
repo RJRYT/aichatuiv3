@@ -1,7 +1,7 @@
 {
   "name": "nemotron-chat-monorepo",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.3",
   "type": "module",
   "workspaces": [
     "apps/client",
@@ -15,7 +15,8 @@
     "start:api": "npm run start --workspace @nemotron/server",
     "test": "node --test apps/server/test/*.test.js",
     "migrate:users": "node apps/server/scripts/migrate-users.js",
-    "monty:check": "npm run monty:check --workspace @nemotron/server"
+    "sandbox:check": "npm run sandbox:check --workspace @nemotron/server",
+    "sandbox:smoke": "npm run sandbox:smoke --workspace @nemotron/server"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"
@@ -35,9 +36,9 @@
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "vite": "^7.1.7",
-    "@pydantic/monty": "1.3.0"
+    "@vercel/sandbox": "3.9.1"
   },
   "engines": {
-    "node": "^20.19.0 || >=22.12.0"
+    "node": ">=20.19.0"
   }
 }

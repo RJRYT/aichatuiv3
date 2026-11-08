@@ -23,7 +23,17 @@ function cleanMessages(messages = []) {
     if (message.name) safe.name = String(message.name).slice(0, 100);
     if (Array.isArray(message.tool_calls)) safe.tool_calls = message.tool_calls;
     if (message.tool_call_id) safe.tool_call_id = message.tool_call_id;
-    if (Array.isArray(message.attachments)) safe.attachments = message.attachments.slice(0, 8).map((x) => ({ name: String(x.name || 'attachment').slice(0, 150), type: String(x.type || '').slice(0, 80) }));
+    if (Array.isArray(message.attachments)) safe.attachments = message.attachments.slice(0, 8).map((x) => {
+      const attachment = { name: String(x.name || 'attachment').slice(0, 150), type: String(x.type || '').slice(0, 80) };
+      const uploadId = String(x.uploadId || '');
+      const sandboxPath = String(x.sandboxPath || '');
+      if (/^[a-f0-9-]{36}$/i.test(uploadId) && sandboxPath.startsWith(`uploads/${uploadId}_`) && sandboxPath.length <= 240) {
+        attachment.uploadId = uploadId;
+        attachment.sandboxPath = sandboxPath;
+        if (Number.isInteger(x.size) && x.size > 0 && x.size <= 8 * 1024 * 1024) attachment.size = x.size;
+      }
+      return attachment;
+    });
     if (message.reasoning) safe.reasoning = String(message.reasoning).slice(0, 50000);
     if (message.usage) safe.usage = message.usage;
     if (message.durationMs != null) safe.durationMs = Number(message.durationMs);
