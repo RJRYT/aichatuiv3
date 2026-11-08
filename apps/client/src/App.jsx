@@ -82,9 +82,76 @@ function Markdown({ content }) {
   return <div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ node, ...p }) => <a {...p} target="_blank" rel="noreferrer" />, pre: ({ node, children }) => <CodeBlock className={children?.props?.className || ''}>{children?.props?.children ?? children}</CodeBlock>, code: ({ node, className, children, ...p }) => <code className={className || 'inline-code'} {...p}>{children}</code>, table: ({ node, ...p }) => <div className="table-wrap"><table {...p}/></div> }}>{content || ''}</ReactMarkdown></div>;
 }
 function PluginIcon({ name, size = 15 }) { const Icon = name === 'execute_python' ? Code2 : name.includes('memory') ? Brain : Wrench; return <Icon size={size}/>; }
+function artifactPreviewKind(file) {
+  const mime = String(file?.mimeType || '').toLowerCase();
+  if (mime.startsWith('image/') && mime !== 'image/svg+xml') return 'image';
+  if (mime === 'application/pdf') return 'pdf';
+  if (mime.startsWith('text/') || ['application/json', 'application/xml', 'application/javascript'].includes(mime)) return 'text';
+  return 'none';
+}
+async function fetchArtifactBlob(file) {
+  const response = await fetch(api(file.downloadUrl), { credentials: 'include', cache: 'no-store' });
+  if (!response.ok) {
+    let message = `Could not retrieve ${file.name} (${response.status}).`;
+    try { const data = await response.json(); message = data.error || message; } catch { /* keep status message */ }
+    throw new Error(message);
+  }
+  const blob = await response.blob();
+  if (!blob.size) throw new Error(`${file.name} was returned as an empty file. The stored artifact may be damaged.`);
+  if (Number(file.size) > 0 && blob.size !== Number(file.size)) throw new Error(`${file.name} failed its size check (expected ${formatBytes(file.size)}, received ${formatBytes(blob.size)}).`);
+  return blob;
+}
+async function downloadArtifact(file) {
+  const blob = await fetchArtifactBlob(file);
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = file.name || 'generated-file';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+function ArtifactPreview({ file, expanded = false }) {
+  const [state, setState] = useState({ loading: true, error: '', text: '', url: '' });
+  const kind = artifactPreviewKind(file);
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl = '';
+    setState({ loading: true, error: '', text: '', url: '' });
+    if (kind === 'none') { setState({ loading: false, error: '', text: '', url: '' }); return () => {}; }
+    fetchArtifactBlob(file).then(async blob => {
+      if (kind === 'text') {
+        const text = await blob.text();
+        if (!cancelled) setState({ loading: false, error: '', text: text.slice(0, 12000), url: '' });
+      } else {
+        objectUrl = URL.createObjectURL(blob);
+        if (!cancelled) setState({ loading: false, error: '', text: '', url: objectUrl });
+        else URL.revokeObjectURL(objectUrl);
+      }
+    }).catch(error => { if (!cancelled) setState({ loading: false, error: error.message || 'Preview could not be loaded.', text: '', url: '' }); });
+    return () => { cancelled = true; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [file.id, file.downloadUrl, file.size, kind]);
+  if (kind === 'none') return <div className="artifact-preview-unavailable">Preview isn't available for this format. Download the original file to open it.</div>;
+  if (state.loading) return <div className="artifact-preview-loading"><LoaderCircle size={15} className="spin"/> Loading verified preview…</div>;
+  if (state.error) return <div className="artifact-preview-error"><AlertCircle size={14}/>{state.error}</div>;
+  if (kind === 'image') return <div className={`artifact-preview-image ${expanded ? 'expanded' : ''}`}><img src={state.url} alt={file.name}/></div>;
+  if (kind === 'pdf') return <iframe className={`artifact-preview-pdf ${expanded ? 'expanded' : ''}`} src={state.url} title={`Preview of ${file.name}`}/>;
+  return <pre className={`artifact-preview-text ${expanded ? 'expanded' : ''}`}>{state.text}{state.text.length >= 12000 ? '\n… preview truncated; download the complete file.' : ''}</pre>;
+}
+function ArtifactCard({ file, expanded = false, onPreview }) {
+  const Icon = artifactIcon(file);
+  const [downloadError, setDownloadError] = useState('');
+  const onDownload = async () => { setDownloadError(''); try { await downloadArtifact(file); } catch (error) { setDownloadError(error.message || 'Download failed.'); } };
+  return <div className={`artifact-card ${expanded ? 'expanded' : ''}`}>
+    <div className="artifact-card-head"><div className="library-file-icon"><Icon size={16}/></div><div className="artifact-card-meta"><b title={file.name}>{file.name}</b><small>{formatBytes(file.size)} · {file.mimeType || 'file'}{file.createdAt ? ` · ${dateLabel(file.createdAt)}` : ''}</small></div><div className="artifact-card-actions">{onPreview && <button className="library-action" onClick={() => onPreview(file)} title="Open preview"><Eye size={14}/></button>}<button className="library-action" onClick={onDownload} title="Download verified file"><Download size={14}/></button></div></div>
+    {downloadError && <div className="artifact-preview-error"><AlertCircle size={13}/>{downloadError}</div>}
+    <ArtifactPreview file={file} expanded={expanded}/>
+  </div>;
+}
 function ToolActivity({ events = [] }) {
   if (!events.length) return null;
-  return <details className="tool-activity" open><summary><Wrench size={13}/> Agent activity <span>{events.length}</span></summary><div className="tool-list">{events.map((event, i) => <div className={`tool-row ${event.status}`} key={`${event.name}-${i}`}><div className="tool-row-title"><PluginIcon name={event.name}/><b>{event.name.replaceAll('_', ' ')}</b><span>{event.status === 'complete' ? 'Completed' : event.status === 'error' ? 'Failed' : event.status === 'cancelled' ? 'Cancelled' : 'Running'}</span></div>{event.arguments && <details className="tool-detail"><summary>Arguments</summary><pre>{JSON.stringify(event.arguments, null, 2)}</pre></details>}{event.result !== undefined && <details className="tool-detail"><summary>Result</summary><pre>{JSON.stringify(event.result, null, 2).slice(0, 5000)}</pre></details>}{event.result?.artifacts?.length > 0 && <div className="tool-artifacts">{event.result.artifacts.map(file => <a key={file.id} href={api(file.downloadUrl)}><Download size={12}/>{file.name} <small>{Math.ceil(file.size / 1024)} KB</small></a>)}</div>}{event.error && <p className="tool-error">{event.error}</p>}</div>)}</div></details>;
+  return <details className="tool-activity" open><summary><Wrench size={13}/> Agent activity <span>{events.length}</span></summary><div className="tool-list">{events.map((event, i) => <div className={`tool-row ${event.status}`} key={`${event.name}-${i}`}><div className="tool-row-title"><PluginIcon name={event.name}/><b>{event.name.replaceAll('_', ' ')}</b><span>{event.status === 'complete' ? 'Completed' : event.status === 'error' ? 'Failed' : event.status === 'cancelled' ? 'Cancelled' : 'Running'}</span></div>{event.arguments && <details className="tool-detail"><summary>Arguments</summary><pre>{JSON.stringify(event.arguments, null, 2)}</pre></details>}{event.result !== undefined && <details className="tool-detail"><summary>Result</summary><pre>{JSON.stringify(event.result, null, 2).slice(0, 5000)}</pre></details>}{event.error && <p className="tool-error">{event.error}</p>}</div>)}</div></details>;
 }
 function Message({ message, onCopy, onEdit, onBranch, onShare, onRegenerate, onVersion }) {
   const [editing, setEditing] = useState(false), [editDraft, setEditDraft] = useState(textOf(message.content));
@@ -97,6 +164,7 @@ function Message({ message, onCopy, onEdit, onBranch, onShare, onRegenerate, onV
       {message.attachments?.length > 0 && <div className="attachment-list">{message.attachments.map((f, i) => <span className="attachment-pill" key={`${f.name}-${i}`}>{f.type?.startsWith('video') ? <Video size={13}/> : f.type?.startsWith('image') ? <FileImage size={13}/> : <FileText size={13}/>} {f.name}</span>)}</div>}
       {message.reasoning && <details className="reasoning-block"><summary><Brain size={13}/> Thinking process</summary><div>{message.reasoning}</div></details>}
       {message.toolEvents?.length > 0 && <ToolActivity events={message.toolEvents}/>}
+      {!user && (() => { const generated = [...new Map((message.toolEvents || []).flatMap(event => event.result?.artifacts || []).map(file => [file.id, file])).values()]; return generated.length ? <section className="message-artifacts"><div className="message-artifacts-title"><Files size={14}/> Generated files <span>{generated.length}</span></div><div className="message-artifacts-grid">{generated.map(file => <ArtifactCard key={file.id} file={file}/>)}</div></section> : null; })()}
       {content && (user ? (editing ? <div className="inline-edit"><textarea value={editDraft} onChange={e => setEditDraft(e.target.value)} rows={Math.min(8, Math.max(2, editDraft.split('\n').length))}/><div><button onClick={() => { setEditing(false); setEditDraft(content); }}>Cancel</button><button disabled={!editDraft.trim()} onClick={() => { setEditing(false); onEdit(message, editDraft); }}>Save & regenerate</button></div></div> : <div className="user-text">{content}</div>) : <Markdown content={content}/>)}
       {message.error && <div className="message-error"><AlertCircle size={14}/>{message.error}</div>}
       {message.usage && <details className="stats"><summary>Response details</summary><div>{message.usage.prompt_tokens != null && <span>Input {Number(message.usage.prompt_tokens).toLocaleString()}</span>}{message.usage.completion_tokens != null && <span>Output {Number(message.usage.completion_tokens).toLocaleString()}</span>}{message.durationMs != null && <span>{(message.durationMs / 1000).toFixed(1)}s</span>}</div></details>}
@@ -126,7 +194,7 @@ function artifactIcon(file) {
 }
 function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
   const [files, setFiles] = useState([]), [total, setTotal] = useState(0), [totalBytes, setTotalBytes] = useState(0);
-  const [quotaBytes, setQuotaBytes] = useState(50 * 1024 * 1024), [loading, setLoading] = useState(false), [error, setError] = useState(''), [search, setSearch] = useState('');
+  const [quotaBytes, setQuotaBytes] = useState(50 * 1024 * 1024), [loading, setLoading] = useState(false), [error, setError] = useState(''), [search, setSearch] = useState(''), [previewFile, setPreviewFile] = useState(null);
   const load = useCallback(async () => {
     if (!open) return;
     setLoading(true); setError('');
@@ -138,20 +206,23 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
     finally { setLoading(false); }
   }, [open]);
   useEffect(() => { load(); }, [load, refreshKey]);
+  useEffect(() => { if (!open) setPreviewFile(null); }, [open]);
   if (!open) return null;
   const filtered = files.filter(file => `${file.name} ${file.mimeType} ${file.relativePath}`.toLowerCase().includes(search.toLowerCase()));
   const remove = async file => {
     if (!window.confirm(`Delete ${file.name} from your File Library?`)) return;
-    try { await request(`/api/interpreter/artifacts/${encodeURIComponent(file.id)}`, { method: 'DELETE' }); await load(); }
+    try { await request(`/api/interpreter/artifacts/${encodeURIComponent(file.id)}`, { method: 'DELETE' }); if (previewFile?.id === file.id) setPreviewFile(null); await load(); }
     catch (err) { setError(err.message || 'Could not delete file.'); }
   };
+  const handleDownload = async file => { setError(''); try { await downloadArtifact(file); } catch (err) { setError(err.message || 'Download failed.'); } };
   return <div className="modal-layer" onMouseDown={onClose}><section className="file-library-modal" onMouseDown={e => e.stopPropagation()}>
     <div className="modal-head"><div><div className="eyebrow">YOUR WORKSPACE</div><h2><Files size={19}/> File Library</h2><p>Files generated by Python across your conversations.</p></div><button className="icon-button" onClick={onClose} aria-label="Close File Library"><X size={17}/></button></div>
     <div className="library-summary"><div><b>{total}</b><span>saved files</span></div><div><b>{formatBytes(totalBytes)}</b><span>of {formatBytes(quotaBytes)} used</span></div><button className="secondary-button compact" onClick={load} disabled={loading}><RefreshCw size={12} className={loading ? 'spin' : ''}/> Refresh</button></div>
     <div className="library-search"><Search size={15}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search files by name or type…"/><span>{filtered.length}</span></div>
     {error && <div className="notice error-notice">{error}</div>}
-    <div className="library-list">{loading && !files.length ? <div className="library-empty"><LoaderCircle className="spin" size={19}/> Loading files…</div> : filtered.length ? filtered.map(file => { const Icon = artifactIcon(file); const previewable = ['text/plain','text/csv','text/markdown','application/json','application/pdf','image/png','image/jpeg','image/gif','image/webp'].includes(file.mimeType); return <div className="library-file" key={file.id}><div className="library-file-icon"><Icon size={17}/></div><div className="library-file-info"><b title={file.name}>{file.name}</b><small>{formatBytes(file.size)} · {dateLabel(file.createdAt)}{file.relativePath && file.relativePath !== file.name ? ` · ${file.relativePath}` : ''}</small></div><div className="library-file-actions">{previewable && <a className="library-action" href={api(`${file.downloadUrl}?inline=1`)} target="_blank" rel="noreferrer" title="Open file"><Eye size={14}/></a>}<a className="library-action" href={api(file.downloadUrl)} title="Download file"><Download size={14}/></a><button className="library-action danger" onClick={() => remove(file)} title="Delete file"><Trash2 size={14}/></button></div></div>; }) : <div className="library-empty"><HardDrive size={24}/><b>{search ? 'No matching files' : 'Your File Library is empty'}</b><span>{search ? 'Try another search term.' : 'Ask Nemotron to create a spreadsheet, PDF, chart, image or other file. Generated files will appear here.'}</span></div>}</div>
+    <div className="library-list">{loading && !files.length ? <div className="library-empty"><LoaderCircle className="spin" size={19}/> Loading files…</div> : filtered.length ? filtered.map(file => { const Icon = artifactIcon(file); return <div className="library-file" key={file.id}><div className="library-file-icon"><Icon size={17}/></div><div className="library-file-info"><b title={file.name}>{file.name}</b><small>{formatBytes(file.size)} · {dateLabel(file.createdAt)}{file.relativePath && file.relativePath !== file.name ? ` · ${file.relativePath}` : ''}</small></div><div className="library-file-actions"><button className="library-action" onClick={() => setPreviewFile(file)} title="View file"><Eye size={14}/></button><button className="library-action" onClick={() => handleDownload(file)} title="Download file"><Download size={14}/></button><button className="library-action danger" onClick={() => remove(file)} title="Delete file"><Trash2 size={14}/></button></div></div>; }) : <div className="library-empty"><HardDrive size={24}/><b>{search ? 'No matching files' : 'Your File Library is empty'}</b><span>{search ? 'Try another search term.' : 'Ask Nemotron to create a spreadsheet, PDF, chart, image or other file. Generated files will appear here.'}</span></div>}</div>
     <div className="library-footer"><span>Files are private to your account and remain until you delete them.</span><button className="secondary-button compact" onClick={onClose}>Close</button></div>
+    {previewFile && <div className="artifact-preview-layer" onMouseDown={event => { event.stopPropagation(); setPreviewFile(null); }}><section className="artifact-preview-dialog" onMouseDown={event => event.stopPropagation()}><div className="modal-head"><div><div className="eyebrow">FILE PREVIEW</div><h2>{previewFile.name}</h2><p>{formatBytes(previewFile.size)} · {previewFile.mimeType}</p></div><button className="icon-button" onClick={() => setPreviewFile(null)} aria-label="Close preview"><X size={17}/></button></div><ArtifactCard file={previewFile} expanded/><div className="artifact-preview-dialog-actions"><button className="secondary-button compact" onClick={() => handleDownload(previewFile)}><Download size={13}/> Download original</button><button className="secondary-button compact" onClick={() => setPreviewFile(null)}>Close</button></div></section></div>}
   </section></div>;
 }
 

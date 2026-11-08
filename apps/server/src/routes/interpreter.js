@@ -80,8 +80,12 @@ router.get('/artifacts/:id', async (req, res, next) => {
     log.info('Artifact downloaded', { userId: owner(req), artifactId: req.params.id, name: artifact.name });
     const previewable = ['text/plain', 'text/csv', 'text/markdown', 'application/json', 'application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(artifact.mimeType);
     const inline = req.query.inline === '1' && previewable;
+    if (!Buffer.isBuffer(artifact.data) || artifact.data.byteLength !== Number(artifact.size)) {
+      return res.status(500).json({ error: 'The stored file failed its integrity check. Please regenerate it.' });
+    }
     res.setHeader('Content-Type', artifact.mimeType || 'application/octet-stream');
-    res.setHeader('Content-Length', artifact.size);
+    res.setHeader('Content-Length', String(artifact.data.byteLength));
+    if (artifact.sha256) res.setHeader('ETag', `\"sha256-${artifact.sha256}\"`);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${artifact.name}"`);

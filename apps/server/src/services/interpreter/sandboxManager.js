@@ -261,8 +261,12 @@ async function collectWorkspaceArtifacts({ sandbox, workspacePath, userId, chatI
     const relativePath = safeRelativePath(entry.path);
     const size = Number(entry.size);
     if (!relativePath || !Number.isInteger(size) || size <= 0 || size > EXECUTION_LIMITS.maxArtifactFileBytes || totalBytes + size > EXECUTION_LIMITS.maxArtifactBytes) continue;
-    const buffer = await sandbox.readFileToBuffer({ path: path.posix.join(workspacePath, relativePath) });
-    if (!buffer || buffer.byteLength !== size) continue;
+    const sandboxBytes = await sandbox.readFileToBuffer({ path: path.posix.join(workspacePath, relativePath) });
+    if (!sandboxBytes) { warnings.push(`${relativePath}: sandbox returned no file data`); continue; }
+    const buffer = Buffer.isBuffer(sandboxBytes) ? sandboxBytes : Buffer.from(sandboxBytes.buffer || sandboxBytes, sandboxBytes.byteOffset || 0, sandboxBytes.byteLength);
+    if (buffer.byteLength !== size) { warnings.push(`${relativePath}: expected ${size} bytes but received ${buffer.byteLength}; file was not saved`); continue; }
+    const actualSha256 = createHash('sha256').update(buffer).digest('hex');
+    if (entry.sha256 && actualSha256 !== entry.sha256) { warnings.push(`${relativePath}: checksum mismatch while retrieving from sandbox; file was not saved`); continue; }
     try {
       const artifact = await storeArtifact({
         ownerId: userId, chatId, executionId, name: safeArtifactName(relativePath),

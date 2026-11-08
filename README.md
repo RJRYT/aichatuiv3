@@ -222,4 +222,15 @@ The active chat ID is stored as a small local preference. The composer draft is 
 
 ## Verification notes
 
-The repository includes 19 Node.js unit tests covering conversation branches, interpreter input/queue limits, Vercel Sandbox provider behavior, idempotent persistent workspace creation, output caps, cancellation and persistent artifact ownership. Run `npm test`. A successful unit-test run does not replace a live MongoDB migration rehearsal, OAuth-provider testing, frontend production build, live Vercel Sandbox credential and microVM verification, or deployment-level browser testing.
+The repository includes 22 Node.js unit tests covering conversation branches, interpreter input/queue limits, Vercel Sandbox provider behavior, idempotent persistent workspace creation, output caps, cancellation, persistent artifact ownership and BSON binary normalization. Run `npm test`. A successful unit-test run does not replace a live MongoDB migration rehearsal, OAuth-provider testing, frontend production build, live Vercel Sandbox credential and microVM verification, or deployment-level browser testing.
+
+
+## v6.0.4 — Artifact integrity and in-chat previews
+
+- Normalize MongoDB BSON `Binary` values to Node.js Buffers using the logical byte length instead of passing BSON wrapper objects to `Buffer.from()`.
+- Persist SHA-256 checksums with generated artifacts and verify size/checksum before serving downloads. Corrupt or truncated records now fail clearly instead of returning a zero-byte file.
+- Verify Vercel Sandbox file bytes against the Python scanner's size and SHA-256 before saving them to MongoDB; collection warnings explain missing, truncated or changed files.
+- Replace direct raw-file navigation with authenticated fetch-and-blob downloads, exact size checks and object-URL cleanup.
+- Replace the File Library's raw new-tab View link with an in-app preview dialog for images, PDFs and text formats.
+- Render generated artifact cards directly beneath assistant messages, with inline previews and verified download actions.
+- Added regression tests for BSON Binary logical-length handling and typed-array offsets.

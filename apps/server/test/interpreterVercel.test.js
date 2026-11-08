@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { executeWithVercelSandbox, cancelExecution, getSandboxNameForContext } from '../src/services/interpreter/sandboxManager.js';
 import { getArtifact, listArtifacts, deleteArtifact } from '../src/services/interpreter/artifactStore.js';
 import { storeConversationUploads, deleteConversationUploads } from '../src/services/interpreter/uploadStore.js';
@@ -33,7 +34,7 @@ function fakeSandbox({ python = { exitCode: 0, stdout: '42\n', stderr: '' }, fil
       };
       return {
         exitCode: 0,
-        async stdout() { return '__NEMOTRON_FILE_INDEX__:' + JSON.stringify({ files: files.map(file => ({ path: file.path, size: file.content.length, sha256: 'fake-hash' })), known: {}, skipped: 0 }); },
+        async stdout() { return '__NEMOTRON_FILE_INDEX__:' + JSON.stringify({ files: files.map(file => ({ path: file.path, size: Buffer.byteLength(file.content), sha256: createHash('sha256').update(file.content).digest('hex') })), known: {}, skipped: 0 }); },
         async stderr() { return ''; }
       };
     },
@@ -107,8 +108,10 @@ test('Vercel provider captures Python output and persists generated files in the
     assert.equal(result.artifacts.length, 1);
     assert.equal(result.artifacts[0].name, 'summary.csv');
     assert.equal(result.artifacts[0].mimeType, 'text/csv');
+    assert.match(result.artifacts[0].sha256, /^[a-f0-9]{64}$/);
     const artifact = await getArtifact(result.artifacts[0].id, 'vercel-test-user');
     assert.equal(artifact.data.toString(), 'name,value\nalpha,42\n');
+    assert.equal(artifact.data.byteLength, result.artifacts[0].size);
     assert.equal(await getArtifact(result.artifacts[0].id, 'other-user'), null);
     const library = await listArtifacts('vercel-test-user');
     assert.equal(library.total, 1);
@@ -229,4 +232,23 @@ test('Vercel provider rejects duplicate active execution IDs', async () => {
     finish({ exitCode: 0, async stdout() { return ''; }, async stderr() { return ''; } });
     assert.equal((await first).status, 'completed');
   } finally { restoreVercel(); }
+});
+
+test('MongoDB BSON Binary artifact data is normalized using its logical byte length', async () => {
+  const { normalizeStoredBinary } = await import('../src/services/interpreter/artifactStore.js');
+  const expected = Buffer.from([0, 1, 2, 3, 254, 255]);
+  const backing = Buffer.alloc(32, 99);
+  expected.copy(backing);
+  const bsonBinary = { _bsontype: 'Binary', buffer: backing, position: expected.length };
+  const actual = normalizeStoredBinary(bsonBinary);
+  assert.ok(Buffer.isBuffer(actual));
+  assert.deepEqual(actual, expected);
+  assert.equal(actual.byteLength, expected.byteLength);
+});
+
+test('artifact binary normalization supports typed-array views without copying unrelated backing bytes', async () => {
+  const { normalizeStoredBinary } = await import('../src/services/interpreter/artifactStore.js');
+  const backing = new Uint8Array([90, 91, 10, 11, 12, 92]);
+  const view = backing.subarray(2, 5);
+  assert.deepEqual(normalizeStoredBinary(view), Buffer.from([10, 11, 12]));
 });

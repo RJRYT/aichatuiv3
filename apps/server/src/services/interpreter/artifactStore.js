@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import logger from '../../utils/logger.js';
 
@@ -38,16 +38,45 @@ function safeName(rawName) {
   return supplied;
 }
 function toBuffer(content) {
-  if (Buffer.isBuffer(content)) return content;
-  if (content instanceof Uint8Array) return Buffer.from(content);
+  if (Buffer.isBuffer(content)) return Buffer.from(content);
+  if (content instanceof Uint8Array) return Buffer.from(content.buffer, content.byteOffset, content.byteLength);
+  if (content instanceof ArrayBuffer) return Buffer.from(content);
   if (typeof content === 'string') return Buffer.from(content, 'utf8');
   throw new Error('Artifact content must be text or bytes.');
 }
+
+// MongoDB's BSON decoder returns Binary for Buffer fields in lean() queries.
+// Buffer.from(Binary) is not a reliable conversion: BSON Binary stores the
+// backing Buffer separately from its logical `position` (used byte length).
+export function normalizeStoredBinary(value) {
+  if (Buffer.isBuffer(value)) return Buffer.from(value);
+  if (value instanceof Uint8Array) return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  if (value instanceof ArrayBuffer) return Buffer.from(value);
+  if (value && typeof value === 'object') {
+    if (value.buffer && (Buffer.isBuffer(value.buffer) || value.buffer instanceof Uint8Array)) {
+      const backing = value.buffer;
+      const available = backing.byteLength;
+      const logicalLength = Number.isInteger(value.position) ? value.position : available;
+      if (logicalLength >= 0 && logicalLength <= available) {
+        return Buffer.from(backing.buffer, backing.byteOffset, logicalLength);
+      }
+    }
+    if (typeof value.value === 'function') {
+      const unwrapped = value.value(true);
+      if (Buffer.isBuffer(unwrapped) || unwrapped instanceof Uint8Array) return toBuffer(unwrapped);
+    }
+    if (Array.isArray(value.data)) return Buffer.from(value.data);
+  }
+  throw new Error('Stored artifact data is not a supported binary value.');
+}
+
+function sha256(data) { return createHash('sha256').update(data).digest('hex'); }
+
 function publicMetadata(item) {
   return {
     id: String(item._id || item.id), name: item.name, size: item.size,
     mimeType: item.mimeType, chatId: item.chatId || '', executionId: item.executionId || '',
-    relativePath: item.relativePath || '', createdAt: item.updatedAt || item.createdAt,
+    relativePath: item.relativePath || '', sha256: item.sha256 || '', createdAt: item.updatedAt || item.createdAt,
     downloadUrl: `/api/interpreter/artifacts/${item._id || item.id}`
   };
 }
@@ -64,6 +93,7 @@ export async function storeArtifact({ ownerId, chatId = '', executionId = '', na
   if (!data.byteLength) throw new Error('Empty artifacts are not stored.');
   if (data.byteLength > MAX_FILE_BYTES) throw new Error('An artifact cannot exceed 10 MB.');
   const resolvedMime = String(mimeType || guessMimeType(safeFileName)).slice(0, 120);
+  const checksum = sha256(data);
   const rel = String(relativePath || '').slice(0, 500);
 
   if (useDatabase) {
@@ -82,8 +112,8 @@ export async function storeArtifact({ ownerId, chatId = '', executionId = '', na
     if (!existing && (global[0]?.count || 0) >= MAX_TOTAL_COUNT) throw new Error('File Library storage is temporarily full.');
     if ((global[0]?.bytes || 0) - previousSize + data.byteLength > MAX_TOTAL_BYTES) throw new Error('File Library storage is temporarily full.');
     const item = existing
-      ? await Artifact.findOneAndUpdate({ _id: existing._id, ownerId: owner }, { $set: { name: safeFileName, mimeType: resolvedMime, size: data.byteLength, data, executionId: String(executionId || ''), updatedAt: new Date() } }, { new: true }).select('+data')
-      : await Artifact.create({ ownerId: owner, chatId: String(chatId || ''), executionId: String(executionId || ''), name: safeFileName, relativePath: rel, mimeType: resolvedMime, size: data.byteLength, data });
+      ? await Artifact.findOneAndUpdate({ _id: existing._id, ownerId: owner }, { $set: { name: safeFileName, mimeType: resolvedMime, size: data.byteLength, data, sha256: checksum, executionId: String(executionId || ''), updatedAt: new Date() } }, { new: true }).select('+data')
+      : await Artifact.create({ ownerId: owner, chatId: String(chatId || ''), executionId: String(executionId || ''), name: safeFileName, relativePath: rel, mimeType: resolvedMime, size: data.byteLength, sha256: checksum, data });
     log.info('Artifact saved to persistent library', { owner, name: safeFileName, size: data.byteLength, artifactId: String(item._id) });
     return publicMetadata(item);
   }
@@ -97,7 +127,7 @@ export async function storeArtifact({ ownerId, chatId = '', executionId = '', na
   if (!existing && owned.length >= MAX_OWNER_COUNT) throw new Error('Your File Library is full (100 files).');
   if (totalBytes - (existing?.size || 0) + data.byteLength > MAX_OWNER_BYTES) throw new Error('Your File Library storage limit is 50 MB.');
   const id = existing?.id || randomUUID();
-  const item = { id, ownerId: owner, chatId: String(chatId || ''), executionId: String(executionId || ''), name: safeFileName, relativePath: rel, mimeType: resolvedMime, size: data.byteLength, data: Buffer.from(data), createdAt: existing?.createdAt || new Date(), updatedAt: new Date() };
+  const item = { id, ownerId: owner, chatId: String(chatId || ''), executionId: String(executionId || ''), name: safeFileName, relativePath: rel, mimeType: resolvedMime, size: data.byteLength, sha256: checksum, data: Buffer.from(data), createdAt: existing?.createdAt || new Date(), updatedAt: new Date() };
   memoryArtifacts.set(id, item);
   return publicMetadata(item);
 }
@@ -127,7 +157,17 @@ export async function getArtifact(id, ownerId) {
   if (useDatabase) {
     const Artifact = await artifactModel();
     const item = await Artifact.findOne({ _id: id, ownerId: String(ownerId) }).select('+data').lean();
-    return item ? { ...publicMetadata(item), data: Buffer.from(item.data) } : null;
+    if (!item) return null;
+    const data = normalizeStoredBinary(item.data);
+    if (data.byteLength !== Number(item.size)) {
+      log.error('Artifact integrity check failed: stored size mismatch', { artifactId: String(item._id), expectedBytes: item.size, actualBytes: data.byteLength });
+      throw Object.assign(new Error('This file is incomplete in storage and cannot be downloaded safely. Please regenerate it.'), { status: 500, code: 'ARTIFACT_SIZE_MISMATCH' });
+    }
+    if (item.sha256 && sha256(data) !== item.sha256) {
+      log.error('Artifact integrity check failed: checksum mismatch', { artifactId: String(item._id) });
+      throw Object.assign(new Error('This file failed its integrity check and cannot be downloaded safely. Please regenerate it.'), { status: 500, code: 'ARTIFACT_CHECKSUM_MISMATCH' });
+    }
+    return { ...publicMetadata(item), data };
   }
   const item = memoryArtifacts.get(String(id));
   return item && item.ownerId === String(ownerId) ? { ...publicMetadata(item), data: Buffer.from(item.data) } : null;
