@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import logger from '../../utils/logger.js';
 
+const log = logger.child({ component: 'artifacts' });
 const artifacts = new Map();
 const pendingReservations = new Map();
 const TTL_MS = 60 * 60 * 1000;
@@ -55,8 +57,9 @@ function normalizeArtifactName(rawName, mimeType) {
 }
 
 export async function storeArtifact({ ownerId, name, content, mimeType = 'text/plain' }) {
-  await pruneExpired();
   const owner = String(ownerId);
+  log.debug('Artifact store requested', { owner, name, mimeType });
+  await pruneExpired();
   if (!MIME_TYPES.has(mimeType)) throw new Error('Unsupported artifact MIME type.');
   const safeName = normalizeArtifactName(name, mimeType);
   let data;
@@ -111,6 +114,7 @@ export async function storeArtifact({ ownerId, name, content, mimeType = 'text/p
   } finally {
     pendingReservations.delete(reservationId);
   }
+  log.info('Artifact stored', { owner, name: safeName, size: data.byteLength, mimeType, artifactId: id });
   return {
     id, name: safeName, size: data.byteLength, mimeType,
     downloadUrl: `/api/interpreter/artifacts/${id}`

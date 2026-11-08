@@ -1,3 +1,7 @@
+import logger from '../../utils/logger.js';
+
+const log = logger.child({ component: 'executionSchemas' });
+
 export const EXECUTION_LIMITS = Object.freeze({
   codeBytes: 64 * 1024,
   maxFeedDurationSecs: 12,
@@ -13,12 +17,15 @@ export const EXECUTION_LIMITS = Object.freeze({
 
 export function validateExecutionInput(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    log.warn('Invalid execution input: not a JSON object');
     throw Object.assign(new Error('A JSON object is required.'), { status: 400 });
   }
   if (typeof input.code !== 'string' || !input.code.trim()) {
+    log.warn('Invalid execution input: missing code');
     throw Object.assign(new Error('Python source code is required.'), { status: 400 });
   }
   if (Buffer.byteLength(input.code, 'utf8') > EXECUTION_LIMITS.codeBytes) {
+    log.warn('Python source exceeds size limit', { bytes: Buffer.byteLength(input.code, 'utf8'), limit: EXECUTION_LIMITS.codeBytes });
     throw Object.assign(new Error('Python source exceeds the 64 KB limit.'), { status: 413 });
   }
   return {

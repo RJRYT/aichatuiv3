@@ -3,6 +3,9 @@ import { Parser } from 'expr-eval';
 import { User } from '../models/User.js';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import logger from '../utils/logger.js';
+
+const log = logger.child({ component: 'tools' });
 const parser = new Parser({ operators: { logical: false, comparison: false, in: false, assignment: false } });
 
 const tools = [
@@ -50,26 +53,43 @@ async function tavilySearch(args) {
   return { query: args.query, answer: data.answer || null, results: (data.results || []).map(item => ({ title: item.title, url: item.url, content: item.content, score: item.score, published_date: item.published_date || null })) };
 }
 async function executeTool(name, args, user, options = {}) {
+  const userId = user?._id ? String(user._id) : 'unknown';
+  log.debug('Executing tool', { name, userId });
   if (name === 'execute_python') {
-    if (!user?._id || String(user._id).startsWith('guest:')) throw new Error('A signed-in user is required for Python execution.');
+    if (!user?._id || String(user._id).startsWith('guest:')) {
+      log.warn('Python execution denied: not signed in', { userId });
+      throw new Error('A signed-in user is required for Python execution.');
+    }
+    log.debug('Python execution started', { userId, codeBytes: Buffer.byteLength(String(args.code || ''), 'utf8') });
     const result = await executePython({ code: args.code }, String(user._id), { signal: options.signal });
+    log.debug('Python execution completed', { userId, status: result.status, durationMs: result.durationMs });
     return { ...result, taskContext: String(args.task_context || '').slice(0, 500) };
   }
   if (name === 'save_memory') {
-    if (!user?._id || String(user._id).startsWith('guest:')) throw new Error('Sign in is required to save memories.');
+    if (!user?._id || String(user._id).startsWith('guest:')) {
+      log.warn('Save memory denied: not signed in', { userId });
+      throw new Error('Sign in is required to save memories.');
+    }
     const memory = String(args.memory || '').trim(); if (!memory || memory.length > 2000) throw new Error('Memory must be between 1 and 2,000 characters.');
     const existed = Boolean(await User.exists({ _id: user._id, 'memories.text': memory }));
     let updated = await User.findOneAndUpdate({ _id: user._id, 'memories.text': { $ne: memory } }, { $push: { memories: { text: memory, source: 'assistant' } } }, { new: true }).select('memories').lean();
     if (!updated) updated = await User.findById(user._id).select('memories').lean();
+    log.info('Memory saved', { userId, duplicate: existed, memory });
     return { saved: true, duplicate: existed, memory, totalMemories: updated?.memories?.length || 0 };
   }
   if (name === 'search_memories') {
     if (!user?._id || String(user._id).startsWith('guest:')) return { memories: [] };
     const query = String(args.query || '').toLowerCase(); const doc = await User.findById(user._id).select('memories').lean();
     const found = (doc?.memories || []).filter(m => !query || m.text.toLowerCase().includes(query)).slice(0, 15).map(m => ({ id: m._id, text: m.text }));
+    log.debug('Memory search completed', { userId, query, foundCount: found.length });
     return { memories: found };
   }
-  if (name === 'web_search') return tavilySearch(args);
+  if (name === 'web_search') {
+    log.info('Web search started', { userId, query: args.query });
+    const result = await tavilySearch(args);
+    log.info('Web search completed', { userId, query: args.query, resultCount: result.results?.length || 0 });
+    return result;
+  }
   if (name === 'calculator') {
     const expression = String(args.expression || ''); if (expression.length > 300) throw new Error('Expression is too long.');
     const result = parser.parse(expression).evaluate({}); if (!Number.isFinite(result)) throw new Error('Expression did not return a finite number.'); return { result };
@@ -80,24 +100,31 @@ async function executeTool(name, args, user, options = {}) {
   }
   if (name === 'npm_search') {
     const query = String(args.query || '').trim(); if (!query) throw new Error('A search query is required.');
+    log.info('npm search started', { userId, query });
     const limit = Math.max(1, Math.min(10, Number(args.limit) || 5));
     const response = await fetch(`https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(query)}&size=${limit}`, { signal: AbortSignal.timeout(12000) });
     if (!response.ok) throw new Error(`npm registry returned HTTP ${response.status}`); const data = await response.json();
+    log.info('npm search completed', { userId, query, packageCount: (data.objects || []).length });
     return { packages: (data.objects || []).map(({ package: p }) => ({ name: p.name, version: p.version, description: p.description, links: p.links })) };
   }
   if (name === 'github_search') {
     const query = String(args.query || '').trim(); if (!query) throw new Error('A search query is required.');
+    log.info('GitHub search started', { userId, query });
     const limit = Math.max(1, Math.min(10, Number(args.limit) || 5));
     const response = await fetch(`https://api.github.com/search/repositories?q=${encodeURIComponent(query)}&per_page=${limit}`, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Nemotron-Agent-Lab' }, signal: AbortSignal.timeout(12000) });
     if (!response.ok) throw new Error(`GitHub API returned HTTP ${response.status}`); const data = await response.json();
+    log.info('GitHub search completed', { userId, query, repositoryCount: (data.items || []).length });
     return { repositories: (data.items || []).map(repo => ({ full_name: repo.full_name, description: repo.description, html_url: repo.html_url, stargazers_count: repo.stargazers_count, language: repo.language })) };
   }
   if (name === 'fetch_public_url') {
     const url = await safeUrl(String(args.url || ''));
+    log.info('URL fetch started', { userId, url: url.toString() });
     const response = await fetch(url, { headers: { 'User-Agent': 'Nemotron-Agent-Lab/1.0', Accept: 'text/html,text/plain,application/json' }, redirect: 'error', signal: AbortSignal.timeout(15000) });
     if (!response.ok) throw new Error(`URL returned HTTP ${response.status}`);
     const type = response.headers.get('content-type') || ''; if (!/text\//i.test(type) && !/json/i.test(type)) throw new Error('Only text, HTML and JSON responses can be fetched.');
-    return { url: url.toString(), contentType: type, content: (await response.text()).slice(0, 30000) };
+    const content = (await response.text()).slice(0, 30000);
+    log.info('URL fetch completed', { userId, url: url.toString(), contentType: type, contentBytes: content.length });
+    return { url: url.toString(), contentType: type, content };
   }
   throw new Error(`Unknown tool: ${name}`);
 }
@@ -116,6 +143,14 @@ export function getPluginCatalog() {
   ];
 }
 export async function runTool(name, args, user, options = {}) {
-  try { return { ok: true, result: await executeTool(name, args, user, options) }; }
-  catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
+  const userId = user?._id ? String(user._id) : 'unknown';
+  try {
+    log.debug('Tool execution started', { name, userId });
+    const result = await executeTool(name, args, user, options);
+    log.debug('Tool execution completed', { name, userId });
+    return { ok: true, result: result };
+  } catch (error) {
+    log.warn('Tool execution failed', { name, userId, error: error instanceof Error ? error.message : String(error) });
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }

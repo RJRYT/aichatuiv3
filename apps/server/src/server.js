@@ -19,9 +19,12 @@ import { getPluginCatalog } from './services/tools.js';
 import { MODEL_ID } from './services/nvidia.js';
 import { closeMontyPool } from './services/interpreter/sandboxManager.js';
 import { pruneArtifacts } from './services/interpreter/artifactStore.js';
+import logger from './utils/logger.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 const app = express(); const port = Number(process.env.PORT || 4000);
+const log = logger.child({ component: 'server' });
+app.use(logger.requestLogger());
 const frontendDist = path.resolve(__dirname, '../../client/dist');
 const allowedOrigins = String(process.env.CORS_ORIGIN || 'http://localhost:5173,http://127.0.0.1:5173').split(',').map(x => x.trim()).filter(Boolean);
 app.disable('x-powered-by');
@@ -41,22 +44,23 @@ app.get('/api/plugins', (_req, res) => res.json({ plugins: getPluginCatalog() })
 app.use('/api/chats', limiter, chatsRouter);
 app.use('/api/chat', limiter, chatRouter);
 if (process.env.SERVE_STATIC !== 'false' && fs.existsSync(frontendDist)) { app.use(express.static(frontendDist, { maxAge: process.env.NODE_ENV === 'production' ? '1y' : 0, immutable: process.env.NODE_ENV === 'production' })); app.get('*', (req, res, next) => req.path.startsWith('/api/') ? next() : res.sendFile(path.join(frontendDist, 'index.html'))); }
-app.use((error, _req, res, _next) => { console.error('[api]', error); if (res.headersSent) return res.end(); res.status(Number(error.status) || (error.message?.includes('CORS') ? 403 : 500)).json({ error: error.message || 'Internal server error.' }); });
-if (process.env.NODE_ENV === 'production' && (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32 || process.env.SESSION_SECRET === 'development-only-change-this-secret' || process.env.SESSION_SECRET.startsWith('replace-'))) throw new Error('Set a unique SESSION_SECRET of at least 32 characters in production.');
+app.use((error, _req, res, _next) => { logger.error('Unhandled request error', { error: error instanceof Error ? { message: error.message, stack: error.stack, name: error.name } : String(error) }); if (res.headersSent) return res.end(); res.status(Number(error.status) || (error.message?.includes('CORS') ? 403 : 500)).json({ error: error.message || 'Internal server error.' }); });
+if (process.env.NODE_ENV === 'production' && (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32 || process.env.SESSION_SECRET === 'development-only-change-this-secret' || process.env.SESSION_SECRET.startsWith('replace-'))) { log.warn('Weak or default SESSION_SECRET detected in production.'); throw new Error('Set a unique SESSION_SECRET of at least 32 characters in production.'); }
 await connectDatabase();
-const httpServer = app.listen(port, () => console.log(`[api] Nemotron Agent Lab API listening on http://localhost:${port} · model=${MODEL_ID} · db=${getDatabaseMode()}`));
+log.info('Nemotron Agent Lab API starting', { port, model: MODEL_ID, database: getDatabaseMode() });
+const httpServer = app.listen(port, () => log.info(`Nemotron Agent Lab API listening on http://localhost:${port}`, { model: MODEL_ID, database: getDatabaseMode() }));
 const artifactPruneTimer = setInterval(() => {
-  pruneArtifacts().catch(error => console.warn('[artifacts] expiry cleanup failed:', error?.message || error));
+  pruneArtifacts().catch(error => log.warn('Artifact expiry cleanup failed', { error: error instanceof Error ? error.message : String(error) }));
 }, 15 * 60 * 1000);
 artifactPruneTimer.unref();
 let shuttingDown = false;
 async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`[api] ${signal} received; closing HTTP server and Monty workers...`);
+  log.info(`${signal} received; closing HTTP server and Monty workers...`);
   clearInterval(artifactPruneTimer);
   const forceExit = setTimeout(() => {
-    console.error('[api] graceful shutdown deadline exceeded.');
+    logger.error('Graceful shutdown deadline exceeded.');
     process.exit(1);
   }, 15_000);
   forceExit.unref();

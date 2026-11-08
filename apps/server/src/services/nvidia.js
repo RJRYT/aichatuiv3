@@ -1,13 +1,17 @@
 import crypto from 'node:crypto';
 import { getToolDefinitions, runTool } from './tools.js';
 import { buildSystemPrompt } from './systemPrompt.js';
+import logger from '../utils/logger.js';
+
 export const MODEL_ID = 'nvidia/nemotron-3.5-super-vl-120b-a12b';
+const log = logger.child({ component: 'nvidia' });
 const NVIDIA_ENDPOINT = 'https://integrate.api.nvidia.com/v1/chat/completions';
 const MAX_TOOL_ROUNDS = 8;
 function sse(res, payload) { if (!res.writableEnded) res.write(`data: ${JSON.stringify(payload)}\n\n`); }
 function parseToolArgs(raw) { try { return typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {}); } catch { return {}; } }
 function systemPrompt(user) { return buildSystemPrompt(user); }
 async function requestRound({ messages, tools, thinkingEnabled, signal, res, round, hasVision }) {
+  log.debug('NVIDIA request round', { round, toolCount: tools.length, hasVision });
   const body = {
     model: MODEL_ID, messages, temperature: hasVision ? 0.6 : 1.0, top_p: 0.95,
     stream: true,
@@ -44,8 +48,16 @@ async function requestRound({ messages, tools, thinkingEnabled, signal, res, rou
   return { content, reasoning, finishReason, usage, toolCalls: [...calls.values()].sort((a, b) => a.index - b.index) };
 }
 export async function runNemotronChat({ body, req, res, persist, user }) {
-  if (!process.env.NVIDIA_API_KEY) throw Object.assign(new Error('NVIDIA_API_KEY is missing on the backend.'), { status: 503 });
-  if (!Array.isArray(body.messages) || !body.messages.length) throw Object.assign(new Error('A non-empty messages array is required.'), { status: 400 });
+  if (!process.env.NVIDIA_API_KEY) {
+    log.error('NVIDIA_API_KEY is missing on the backend.');
+    throw Object.assign(new Error('NVIDIA_API_KEY is missing on the backend.'), { status: 503 });
+  }
+  if (!Array.isArray(body.messages) || !body.messages.length) {
+    log.warn('Invalid chat request: empty messages');
+    throw Object.assign(new Error('A non-empty messages array is required.'), { status: 400 });
+  }
+  const userId = user?._id ? String(user._id) : 'unknown';
+  log.info('Chat generation started', { userId, messageCount: body.messages.length, hasVision: body.messages.some(m => Array.isArray(m.content) && m.content.some(p => p.type === 'image_url')) });
   const tools = getToolDefinitions();
   const input = body.messages.map(m => ({ role: m.role, content: m.content, ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}), ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}), ...(m.name ? { name: m.name } : {}) }));
   const messages = [{ role: 'system', content: systemPrompt(user) }, ...input];
@@ -73,10 +85,16 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
     }
     const visible = body.messages.filter(m => m.role !== 'system' && m.role !== 'tool');
     await persist?.([...visible, { id: String(body.assistantMessageId || crypto.randomUUID()), role: 'assistant', content: finalText, reasoning: finalReasoning, usage: finalUsage, toolEvents, createdAt: new Date().toISOString() }]);
+    log.info('Chat generation completed', { userId, rounds, durationMs: Date.now() - startedAt, toolEventCount: toolEvents.length, usage: finalUsage });
     sse(res, { type: 'done', usage: finalUsage, durationMs: Date.now() - startedAt, toolRounds: rounds });
   } catch (error) {
-    if (error.name === 'AbortError') sse(res, { type: 'stopped' });
-    else sse(res, { type: 'error', status: error.status || 502, error: error.message || 'NVIDIA request failed.' });
+    if (error.name === 'AbortError') {
+      log.warn('Chat generation aborted by client', { userId });
+      sse(res, { type: 'stopped' });
+    } else {
+      log.error('Chat generation failed', { userId, error: error instanceof Error ? { message: error.message, stack: error.stack, status: error.status } : String(error) });
+      sse(res, { type: 'error', status: error.status || 502, error: error.message || 'NVIDIA request failed.' });
+    }
   } finally { res.off('close', onClose); if (!res.writableEnded) res.end(); }
 }
 export async function generateChatTitle(text) {

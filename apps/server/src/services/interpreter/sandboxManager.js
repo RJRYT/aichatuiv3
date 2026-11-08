@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { storeArtifact, deleteArtifacts } from './artifactStore.js';
 import { EXECUTION_LIMITS, getMontyRuntimeConfig } from './executionSchemas.js';
+import logger from '../../utils/logger.js';
 
+const log = logger.child({ component: 'sandbox' });
 const active = new Map();
 let poolPromise;
 let poolReady = false;
@@ -132,6 +134,7 @@ export async function executeWithMonty({ code, userId, executionId, signal, getP
   const config = getMontyRuntimeConfig();
 
   try {
+    log.debug('Checkout Monty pool session', { userId: job.userId, executionId: id });
     const pool = await getPoolOverride();
     if (job.cancelled) throw Object.assign(new Error('Execution cancelled by the user.'), { name: 'ExecutionCancelledError' });
     session = await pool.checkout({
@@ -166,6 +169,7 @@ export async function executeWithMonty({ code, userId, executionId, signal, getP
       };
     }
 
+    log.info('Python execution completed', { userId: job.userId, executionId: id, status: 'completed', durationMs: Date.now() - startedAt, artifactCount: created.length });
     return {
       executionId: id,
       status: 'completed',
@@ -178,6 +182,7 @@ export async function executeWithMonty({ code, userId, executionId, signal, getP
       provider: 'pydantic-monty-wasm'
     };
   } catch (error) {
+    log.warn('Python execution failed', { userId: job.userId, executionId: id, error: error instanceof Error ? error.message : String(error) });
     const exceptionType = getExceptionType(error);
     const timedOut = exceptionType === 'TimeoutError' || Boolean(error?.timedOut) || /feed time limit exceeded|timed out/i.test(String(error?.message || ''));
     const cancelled = job.cancelled || exceptionType === 'ExecutionCancelledError';
@@ -200,7 +205,7 @@ export async function executeWithMonty({ code, userId, executionId, signal, getP
     active.delete(id);
     if (session) {
       try { await session.close(); }
-      catch (error) { console.warn('[monty] session cleanup failed:', error?.message || error); }
+      catch (error) { log.warn('Monty session cleanup failed', { userId: job.userId, executionId: id, error: error instanceof Error ? error.message : String(error) }); }
     }
   }
 }
@@ -224,8 +229,9 @@ export async function closeMontyPool() {
   try {
     const pool = await current;
     await pool.close();
+    log.info('Monty pool closed');
   } catch (error) {
-    console.warn('[monty] pool shutdown failed:', error?.message || error);
+    log.error('Monty pool shutdown failed', { error: error instanceof Error ? error.message : String(error) });
   } finally {
     poolReady = false;
   }

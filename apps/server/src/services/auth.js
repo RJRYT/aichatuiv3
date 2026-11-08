@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
 import { User } from '../models/User.js';
+import logger from '../utils/logger.js';
 
+const log = logger.child({ component: 'auth' });
 const cookieName = 'nemotron_session';
 const stateCookie = 'nemotron_oauth_state';
 const secret = () => process.env.SESSION_SECRET || 'development-only-change-this-secret';
@@ -42,13 +44,19 @@ export async function requireAuth(req, res, next) {
       const payload = JSON.parse(Buffer.from(raw, 'base64url').toString());
       if (payload.exp > Date.now()) {
         const user = await User.findById(payload.sub).lean();
-        if (user) { req.user = user; return next(); }
+        if (user) {
+          req.user = user;
+          log.debug('Authenticated session', { userId: String(user._id) });
+          return next();
+        }
       }
     }
     if (process.env.AUTH_REQUIRED === 'false' && process.env.NODE_ENV !== 'production') {
       req.user = { _id: `guest:${req.ip}`, name: 'Guest', preferences: {}, memories: [] };
+      log.debug('Guest session created', { ip: req.ip });
       return next();
     }
+    log.warn('Authentication required, no valid session');
     return res.status(401).json({ error: 'Authentication required.' });
   } catch (error) { return next(error); }
 }
@@ -65,7 +73,11 @@ function providerConfig(provider) {
 
 export function oauthStart(req, res, provider) {
   const config = providerConfig(provider);
-  if (!config.clientId || !config.clientSecret) return res.status(503).send(`${provider} OAuth is not configured on the server.`);
+  if (!config.clientId || !config.clientSecret) {
+    log.warn('OAuth provider not configured', { provider });
+    return res.status(503).send(`${provider} OAuth is not configured on the server.`);
+  }
+  log.info('OAuth authorization started', { provider });
   const state = crypto.randomBytes(24).toString('hex');
   const linkUserId = req.authLinkUserId || null;
   setCookie(res, stateCookie, signed(b64(JSON.stringify({ state, provider, linkUserId, exp: Date.now() + 10 * 60 * 1000 }))), 600);
@@ -109,6 +121,7 @@ async function fetchProfile(provider, token) {
 export async function oauthCallback(req, res, provider) {
   const frontend = process.env.FRONTEND_URL || 'http://localhost:5173';
   let linkAttempt = false;
+  log.info('OAuth callback received', { provider });
   try {
     const cookies = parseCookies(req.headers.cookie || '');
     const raw = verify(cookies[stateCookie]);
@@ -164,8 +177,10 @@ export async function oauthCallback(req, res, provider) {
       await user.save();
     }
     createSessionCookie(res, user._id);
+    log.info('OAuth sign-in completed', { provider, userId: String(user._id), linked: linkAttempt });
     res.redirect(frontend);
   } catch (error) {
+    log.error('OAuth sign-in failed', { provider, error: error instanceof Error ? error.message : String(error) });
     const key = linkAttempt ? 'account_link_error' : 'auth_error';
     res.redirect(`${frontend}/?${key}=${encodeURIComponent(error.message || 'Sign-in failed')}`);
   }

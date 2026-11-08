@@ -1,6 +1,8 @@
 import mongoose from 'mongoose';
 import { Chat } from '../models/Chat.js';
+import logger from '../utils/logger.js';
 
+const log = logger.child({ component: 'chatStore' });
 const memory = new Map();
 const now = () => new Date();
 const id = () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -48,12 +50,15 @@ export async function getChat(sessionId, chatId) {
 export async function createChat(sessionId, title = 'New chat') {
   const initialMessages = [];
   const doc = { sessionId, title: String(title).slice(0, 120) || 'New chat', titleManuallyEdited: false, messages: initialMessages, branches: [{ branchId: 'main', parentBranchId: null, forkedFromMessageId: null, messages: initialMessages, createdAt: now(), updatedAt: now() }], activeBranchId: 'main', revision: 0, createdAt: now(), updatedAt: now() };
+  log.debug('Creating chat', { sessionId, title });
   if (mongoose.connection.readyState === 1) {
     const created = await Chat.create(doc);
+    log.info('Chat created', { sessionId, chatId: String(created._id), title });
     return created.toObject();
   }
   const created = { ...doc, _id: id() };
   memory.set(created._id, created);
+  log.info('Chat created (in-memory)', { sessionId, chatId: String(created._id), title });
   return created;
 }
 
@@ -63,21 +68,44 @@ export async function updateChat(sessionId, chatId, patch) {
   if (values.messages) values.messages = cleanMessages(values.messages);
   if (values.title) values.title = String(values.title).slice(0, 120);
   if (Array.isArray(values.branches)) values.branches = values.branches.map(branch => ({ ...branch, messages: cleanMessages(branch.messages || []) }));
-  if (mongoose.connection.readyState === 1) return Chat.findOneAndUpdate({ _id: chatId, sessionId, ...(Number.isInteger(expectedRevision) ? { revision: expectedRevision } : {}) }, { $set: values }, { new: true }).lean();
+  log.debug('Updating chat', { sessionId, chatId, expectedRevision });
+  if (mongoose.connection.readyState === 1) {
+    const updated = await Chat.findOneAndUpdate({ _id: chatId, sessionId, ...(Number.isInteger(expectedRevision) ? { revision: expectedRevision } : {}) }, { $set: values }, { new: true }).lean();
+    if (!updated) {
+      log.warn('Chat update failed: not found or revision conflict', { sessionId, chatId });
+      return null;
+    }
+    log.info('Chat updated', { sessionId, chatId });
+    return updated;
+  }
   const current = memory.get(chatId);
-  if (!current || current.sessionId !== sessionId || (Number.isInteger(expectedRevision) && (current.revision || 0) !== expectedRevision)) return null;
+  if (!current || current.sessionId !== sessionId || (Number.isInteger(expectedRevision) && (current.revision || 0) !== expectedRevision)) {
+    log.warn('Chat update failed: not found or revision conflict (in-memory)', { sessionId, chatId });
+    return null;
+  }
   const next = { ...current, ...values };
   memory.set(chatId, next);
+  log.info('Chat updated (in-memory)', { sessionId, chatId });
   return next;
 }
 
 export async function deleteChat(sessionId, chatId) {
+  log.debug('Deleting chat', { sessionId, chatId });
   if (mongoose.connection.readyState === 1) {
     const result = await Chat.deleteOne({ _id: chatId, sessionId });
-    return result.deletedCount > 0;
+    if (result.deletedCount > 0) {
+      log.info('Chat deleted', { sessionId, chatId });
+      return true;
+    }
+    log.warn('Chat delete failed: not found', { sessionId, chatId });
+    return false;
   }
   const current = memory.get(chatId);
-  if (!current || current.sessionId !== sessionId) return false;
+  if (!current || current.sessionId !== sessionId) {
+    log.warn('Chat delete failed: not found (in-memory)', { sessionId, chatId });
+    return false;
+  }
   memory.delete(chatId);
+  log.info('Chat deleted (in-memory)', { sessionId, chatId });
   return true;
 }
