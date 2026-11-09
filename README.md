@@ -2,15 +2,15 @@
 
 A single-model, Agent Lab interface for NVIDIA Nemotron 3.5 Super VL. The frontend is a static React/Vite build; the Express backend owns model inference, OAuth, web search, plugin execution, personalization and memory. MongoDB persists user accounts, preferences, memories and chats.
 
-## v7.3.1 — Inline progress refinement
+## v7.3.2 — Live thinking and tool visibility
 
 Backend regression suite: 42/42 passing. Frontend JSX syntax parsing: passed. Production Vite build: not run successfully because the Vite executable is absent from the supplied dependency tree.
 
-- Replaces the Agent activity/workflow panels with understated inline tool-use disclosures (for example, “Used Python executor”) that expand to show arguments and results.
+- Shows the current tool-use list only while the assistant is actively working; repeated tools are grouped and their execution details can be expanded. The list disappears when the final response is ready.
 - Renders generated artifacts inline after the assistant response as compact filename/size rows with lazy preview and download.
 - Moves the persistent execution plan above the composer, collapsed by default, with editable objective/task text and explicit save.
 - Persists plan data in conversation messages and passes the current plan into subsequent turns so the agent can continue the same work.
-- Shows one live progress sentence directly between the latest user prompt and the assistant reply, with elapsed working time and time since last activity; short summaries are derived from real plan/tool events, not private chain-of-thought.
+- Shows concise, meaningful progress sentences directly between the latest user prompt and the assistant reply, with elapsed working time and time since last activity. Updates are derived from real plan/tool events, not private chain-of-thought.
 - Applies the animated glaze to status text only, groups repeated tool-use entries in a vertical list without arrows, and removes the “Response details” section.
 - Adds a subtle animated glaze only while generation is active and removes transient progress when generation ends.
 - Replaces the topbar status badge with in-chat progress and toast notifications.
