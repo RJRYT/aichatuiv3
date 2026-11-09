@@ -334,7 +334,7 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
       rounds = round + 1;
       sse(res, {
         type: 'status',
-        status: round === 0 ? 'Reviewing your request and planning the next step…' : 'Reviewing the latest results…',
+        status: round === 0 ? 'Thinking...' : 'Reviewing results...',
         round,
       });
       const planTasks = agentState.plan?.tasks || [];
@@ -394,7 +394,12 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
             ? { task_context: args.task_context || '', code_bytes: Buffer.byteLength(String(args.code || ''), 'utf8') }
             : args;
         sse(res, { type: 'tool_start', name, arguments: safeArgs, round });
-        emitAgentEvent('tool_started', { name, label: name.replaceAll('_', ' '), round });
+        const progressTarget = name === 'web_search'
+          ? String(args.query || args.search_query || args.q || args.search_terms || '').slice(0, 100)
+          : name === 'fetch_public_url'
+            ? String(args.url || args.uri || '').slice(0, 120)
+            : '';
+        emitAgentEvent('tool_started', { name, label: name.replaceAll('_', ' '), round, ...(progressTarget ? { progressTarget } : {}) });
         const previousFailures = consecutiveFailures.get(name) || 0;
         let outcome;
         if (previousFailures >= MAX_RECOVERY_ATTEMPTS_PER_TOOL) {

@@ -574,30 +574,72 @@ function toolDisplayName(name = '') {
   return labels[name] || name.replaceAll('_', ' ');
 }
 
+function toolProgressMessage(name, args = {}) {
+  const firstText = (...values) =>
+    values.find((value) => typeof value === 'string' && value.trim())?.trim();
+  if (name === 'web_search') {
+    const query = firstText(args.query, args.search_query, args.q, args.search_terms);
+    return query ? `Searching for ${query.slice(0, 90)}...` : 'Searching the web...';
+  }
+  if (name === 'fetch_public_url') {
+    const url = firstText(args.url, args.uri);
+    return url ? `Fetching URL ${url.slice(0, 100)}...` : 'Fetching requested URL...';
+  }
+  if (name === 'generate_image') return 'Generating image...';
+  if (name === 'create_task_plan') return 'Registering plans...';
+  if (name === 'update_task_status') return 'Marking task progress...';
+  if (name === 'execute_python') {
+    const context = firstText(args.task_context, args.description, args.task);
+    if (context && /zip|archive/i.test(context)) return 'Preparing your files as a ZIP...';
+    if (context && /patch|edit|modify|update/i.test(context)) return 'Verifying patches...';
+    return 'Working on requested files...';
+  }
+  return `Using ${toolDisplayName(name)}...`;
+}
+
 function ToolUsageInline({ events = [] }) {
   if (!events.length) return null;
+  const grouped = [
+    ...events
+      .reduce((map, event) => {
+        const key = `${event.name}:${event.status === 'error' ? 'error' : 'used'}`;
+        const current = map.get(key) || { name: event.name, status: event.status, events: [] };
+        current.events.push(event);
+        map.set(key, current);
+        return map;
+      }, new Map())
+      .values(),
+  ];
   return (
     <div className="tool-usage-inline">
-      {events.map((event, index) => (
-        <details className={`tool-usage-item ${event.status || ''}`} key={`${event.name}-${index}`}>
+      {grouped.map((group) => (
+        <details
+          className={`tool-usage-item ${group.status || ''}`}
+          key={`${group.name}-${group.status}`}
+        >
           <summary>
-            {event.status === 'error' ? 'Tool failed: ' : 'Used '}
-            {toolDisplayName(event.name)}
+            {group.status === 'error' ? 'Tool failed: ' : 'Used '}
+            {toolDisplayName(group.name)}
+            {group.events.length > 1 ? ` · ${group.events.length} times` : ''}
           </summary>
           <div className="tool-usage-details">
-            {event.error && <p className="tool-error">{event.error}</p>}
-            {event.arguments && (
-              <div>
-                <small>Arguments</small>
-                <pre>{JSON.stringify(event.arguments, null, 2)}</pre>
+            {group.events.map((event, index) => (
+              <div className="tool-usage-detail-entry" key={`${group.name}-${index}`}>
+                {event.error && <p className="tool-error">{event.error}</p>}
+                {event.arguments && (
+                  <div>
+                    <small>Arguments</small>
+                    <pre>{JSON.stringify(event.arguments, null, 2)}</pre>
+                  </div>
+                )}
+                {event.result !== undefined && (
+                  <div>
+                    <small>Result</small>
+                    <pre>{JSON.stringify(event.result, null, 2).slice(0, 5000)}</pre>
+                  </div>
+                )}
               </div>
-            )}
-            {event.result !== undefined && (
-              <div>
-                <small>Result</small>
-                <pre>{JSON.stringify(event.result, null, 2).slice(0, 5000)}</pre>
-              </div>
-            )}
+            ))}
           </div>
         </details>
       ))}
@@ -627,13 +669,15 @@ function InlineArtifact({ file }) {
         <small>{formatBytes(file.size)}</small>
         <span>Preview</span>
       </summary>
-      {isOpen && <div className="artifact-inline-body">
-        <ArtifactPreview file={file} expanded />
-        <button className="artifact-inline-download" onClick={onDownload}>
-          <Download size={13} /> Download file
-        </button>
-        {downloadError && <p className="artifact-preview-error">{downloadError}</p>}
-      </div>}
+      {isOpen && (
+        <div className="artifact-inline-body">
+          <ArtifactPreview file={file} expanded />
+          <button className="artifact-inline-download" onClick={onDownload}>
+            <Download size={13} /> Download file
+          </button>
+          {downloadError && <p className="artifact-preview-error">{downloadError}</p>}
+        </div>
+      )}
     </details>
   );
 }
@@ -643,24 +687,32 @@ function AgentPlanDock({ plan, onSave, disabled = false }) {
   const [saving, setSaving] = useState(false);
   useEffect(() => setDraft(plan), [plan]);
   if (!plan?.tasks?.length) return null;
-  const completed = plan.tasks.filter((task) => ['completed', 'skipped'].includes(task.status)).length;
+  const completed = plan.tasks.filter((task) =>
+    ['completed', 'skipped'].includes(task.status)
+  ).length;
   const changed = JSON.stringify(draft) !== JSON.stringify(plan);
   const updateTask = (taskId, patch) => {
     setDraft((current) => ({
       ...current,
-      tasks: current.tasks.map((task) => task.id === taskId ? { ...task, ...patch } : task),
+      tasks: current.tasks.map((task) => (task.id === taskId ? { ...task, ...patch } : task)),
     }));
   };
   const save = async () => {
     setSaving(true);
-    try { await onSave(draft); } finally { setSaving(false); }
+    try {
+      await onSave(draft);
+    } finally {
+      setSaving(false);
+    }
   };
   return (
     <details className="agent-plan-dock">
       <summary>
         <ListChecks size={14} />
         <span>Execution plan</span>
-        <small>{completed}/{plan.tasks.length} completed</small>
+        <small>
+          {completed}/{plan.tasks.length} completed
+        </small>
         <ChevronRight size={13} className="plan-chevron" />
       </summary>
       <div className="agent-plan-dock-body">
@@ -669,17 +721,38 @@ function AgentPlanDock({ plan, onSave, disabled = false }) {
           value={draft?.objective || ''}
           disabled={disabled}
           rows={2}
-          onChange={(event) => setDraft((current) => ({ ...current, objective: event.target.value }))}
+          onChange={(event) =>
+            setDraft((current) => ({ ...current, objective: event.target.value }))
+          }
         />
         <div className="plan-edit-list">
           {(draft?.tasks || []).map((task) => (
             <div className={`plan-edit-task ${task.status || 'pending'}`} key={task.id}>
               <div className="plan-edit-task-state">
-                {task.status === 'completed' ? <Check size={13} /> : task.status === 'running' ? <LoaderCircle size={13} className="spin" /> : task.status === 'failed' ? <AlertCircle size={13} /> : <i />}
+                {task.status === 'completed' ? (
+                  <Check size={13} />
+                ) : task.status === 'running' ? (
+                  <LoaderCircle size={13} className="spin" />
+                ) : task.status === 'failed' ? (
+                  <AlertCircle size={13} />
+                ) : (
+                  <i />
+                )}
               </div>
               <div className="plan-edit-fields">
-                <input value={task.title} disabled={disabled} onChange={(event) => updateTask(task.id, { title: event.target.value })} aria-label={`Task ${task.id} title`} />
-                <textarea value={task.description || ''} disabled={disabled} rows={2} onChange={(event) => updateTask(task.id, { description: event.target.value })} aria-label={`Task ${task.id} description`} />
+                <input
+                  value={task.title}
+                  disabled={disabled}
+                  onChange={(event) => updateTask(task.id, { title: event.target.value })}
+                  aria-label={`Task ${task.id} title`}
+                />
+                <textarea
+                  value={task.description || ''}
+                  disabled={disabled}
+                  rows={2}
+                  onChange={(event) => updateTask(task.id, { description: event.target.value })}
+                  aria-label={`Task ${task.id} description`}
+                />
                 <small>{(task.status || 'pending').replaceAll('_', ' ')}</small>
               </div>
             </div>
@@ -687,7 +760,9 @@ function AgentPlanDock({ plan, onSave, disabled = false }) {
         </div>
         <div className="plan-dock-footer">
           <span>Changes are saved to this conversation.</span>
-          <button disabled={disabled || saving || !changed} onClick={save}>{saving ? 'Saving…' : 'Save plan'}</button>
+          <button disabled={disabled || saving || !changed} onClick={save}>
+            {saving ? 'Saving…' : 'Save plan'}
+          </button>
         </div>
       </div>
     </details>
@@ -702,9 +777,13 @@ function LiveProgress({ progress, now }) {
   };
   return (
     <div className="live-progress" role="status" aria-live="polite">
-      <span className="live-progress-orb"><i /></span>
+      <span className="live-progress-orb">
+        <i />
+      </span>
       <span className="live-progress-message">{progress.message}</span>
-      <span className="live-progress-timing">Working {elapsed(progress.startedAt)} · Last worked {elapsed(progress.lastActivityAt)} ago</span>
+      <span className="live-progress-timing">
+        Working {elapsed(progress.startedAt)} · Last worked {elapsed(progress.lastActivityAt)} ago
+      </span>
     </div>
   );
 }
@@ -712,10 +791,15 @@ function LiveProgress({ progress, now }) {
 function Toast({ toast, onClose }) {
   if (!toast) return null;
   return (
-    <div className={`toast toast-${toast.type || 'error'}`} role={toast.type === 'success' ? 'status' : 'alert'}>
+    <div
+      className={`toast toast-${toast.type || 'error'}`}
+      role={toast.type === 'success' ? 'status' : 'alert'}
+    >
       {toast.type === 'success' ? <Check size={15} /> : <AlertCircle size={15} />}
       <span>{toast.message}</span>
-      <button onClick={onClose} aria-label="Dismiss notification"><X size={14} /></button>
+      <button onClick={onClose} aria-label="Dismiss notification">
+        <X size={14} />
+      </button>
     </div>
   );
 }
@@ -793,39 +877,33 @@ function Message({ message, onCopy, onEdit, onBranch, onShare, onRegenerate, onV
           ) : (
             <Markdown content={content} />
           ))}
-        {!user && !message.isStreaming && <ToolUsageInline events={message.toolEvents || []} />}
-        {!user && !message.isStreaming && (() => {
-          const generated = [...new Map((message.toolEvents || [])
-            .flatMap((event) => event.result?.artifacts || [])
-            .filter((file) => file?.id)
-            .map((file) => [file.id, file])).values()];
-          return generated.length ? (
-            <div className="message-inline-artifacts">
-              {generated.map((file) => <InlineArtifact key={file.id} file={file} />)}
-            </div>
-          ) : null;
-        })()}
+        {!user && message.isStreaming && <ToolUsageInline events={message.toolEvents || []} />}
+        {!user &&
+          !message.isStreaming &&
+          (() => {
+            const generated = [
+              ...new Map(
+                (message.toolEvents || [])
+                  .flatMap((event) => event.result?.artifacts || [])
+                  .filter((file) => file?.id)
+                  .map((file) => [file.id, file])
+              ).values(),
+            ];
+            return generated.length ? (
+              <div className="message-inline-artifacts">
+                {generated.map((file) => (
+                  <InlineArtifact key={file.id} file={file} />
+                ))}
+              </div>
+            ) : null;
+          })()}
         {message.error && (
           <div className="message-error">
             <AlertCircle size={14} />
             {message.error}
           </div>
         )}
-        {message.usage && (
-          <details className="stats">
-            <summary>Response details</summary>
-            <div>
-              {message.usage.prompt_tokens != null && (
-                <span>Input {Number(message.usage.prompt_tokens).toLocaleString()}</span>
-              )}
-              {message.usage.completion_tokens != null && (
-                <span>Output {Number(message.usage.completion_tokens).toLocaleString()}</span>
-              )}
-              {message.durationMs != null && <span>{(message.durationMs / 1000).toFixed(1)}s</span>}
-            </div>
-          </details>
-        )}
-        {!user && (
+        {!user && content && (
           <div className="message-actions">
             <button onClick={() => onShare(message)} title="Share response">
               <Share2 size={13} />
@@ -833,11 +911,9 @@ function Message({ message, onCopy, onEdit, onBranch, onShare, onRegenerate, onV
             <button onClick={() => onRegenerate(message)} title="Regenerate response">
               <Sparkles size={13} />
             </button>
-            {content && (
-              <button title="Copy response" onClick={() => onCopy(content)}>
-                <Copy size={13} />
-              </button>
-            )}
+            <button title="Copy response" onClick={() => onCopy(content)}>
+              <Copy size={13} />
+            </button>
             <button onClick={() => onBranch(message)} title="Continue in new branch">
               <GitBranch size={13} />
             </button>
@@ -1698,8 +1774,12 @@ export default function App() {
     manualTitleIdsRef = useRef(new Set()),
     chatLoadSeqRef = useRef(0);
   const activeChat = useMemo(() => chats.find((c) => c._id === activeId), [chats, activeId]);
-  const activePlan = useMemo(() => [...messages].reverse().find((message) => message.agentPlan)?.agentPlan || null, [messages]);
-  const setFileError = (message) => setToast(message ? { id: Date.now(), message: String(message), type: 'error' } : null);
+  const activePlan = useMemo(
+    () => [...messages].reverse().find((message) => message.agentPlan)?.agentPlan || null,
+    [messages]
+  );
+  const setFileError = (message) =>
+    setToast(message ? { id: Date.now(), message: String(message), type: 'error' } : null);
   const starterSuggestions = useMemo(() => {
     const recent = chats
       .filter((c) => c.title && c.title !== 'New chat')
@@ -1737,7 +1817,12 @@ export default function App() {
       setChatLoading(true);
       setChatLoadError('');
       const query = new URLSearchParams(location.search);
-      if (query.get('account_linked')) setToast({ id: Date.now(), message: `${query.get('account_linked')} account linked.`, type: 'success' });
+      if (query.get('account_linked'))
+        setToast({
+          id: Date.now(),
+          message: `${query.get('account_linked')} account linked.`,
+          type: 'success',
+        });
       if (query.get('account_link_error')) setFileError(query.get('account_link_error'));
 
       // Load independent account resources concurrently. The chat list endpoint
@@ -1762,8 +1847,9 @@ export default function App() {
       setActiveBranchId('main');
       setBranches([]);
       setChatLoading(false);
-      try { localStorage.removeItem('nemotron.activeChatId'); } catch {}
-
+      try {
+        localStorage.removeItem('nemotron.activeChatId');
+      } catch {}
     } catch (error) {
       if (error.message === 'Authentication required.') {
         try {
@@ -1806,7 +1892,11 @@ export default function App() {
       const pending = localStorage.getItem('nemotron.pendingGeneration');
       if (pending) {
         localStorage.removeItem('nemotron.pendingGeneration');
-        setToast({ id: Date.now(), message: 'A previous generation was interrupted. You can retry it when ready.', type: 'error' });
+        setToast({
+          id: Date.now(),
+          message: 'A previous generation was interrupted. You can retry it when ready.',
+          type: 'error',
+        });
       }
     } catch {}
     loadAccount();
@@ -1898,7 +1988,9 @@ export default function App() {
     setFiles([]);
     setLiveProgress(null);
     setDrawer(false);
-    try { localStorage.removeItem('nemotron.activeChatId'); } catch {}
+    try {
+      localStorage.removeItem('nemotron.activeChatId');
+    } catch {}
     return null;
   };
   const createChatRecord = async () => {
@@ -1974,13 +2066,19 @@ export default function App() {
     if (!activeId || busy) return;
     const targetIndex = messages.map((message) => Boolean(message.agentPlan)).lastIndexOf(true);
     if (targetIndex < 0) return;
-    const next = messages.map((message, messageIndex) => messageIndex === targetIndex ? { ...message, agentPlan: plan } : message);
+    const next = messages.map((message, messageIndex) =>
+      messageIndex === targetIndex ? { ...message, agentPlan: plan } : message
+    );
     setMessages(next);
     try {
       await saveMessages(activeId, next);
       setToast({ id: Date.now(), message: 'Execution plan saved.', type: 'success' });
     } catch (error) {
-      setToast({ id: Date.now(), message: error.message || 'Could not save the plan.', type: 'error' });
+      setToast({
+        id: Date.now(),
+        message: error.message || 'Could not save the plan.',
+        type: 'error',
+      });
     }
   };
   const renameChat = async (chat) => {
@@ -2007,7 +2105,9 @@ export default function App() {
       setActiveBranchId('main');
       setLiveProgress(null);
       setDrawer(false);
-      try { localStorage.removeItem('nemotron.activeChatId'); } catch {}
+      try {
+        localStorage.removeItem('nemotron.activeChatId');
+      } catch {}
     }
   };
   const logout = async () => {
@@ -2175,7 +2275,7 @@ export default function App() {
     if (index < 1 || busy) return;
     setBusy(true);
     setStatus('Regenerating response…');
-    setLiveProgress({ message: 'Reviewing the previous response…', startedAt: Date.now(), lastActivityAt: Date.now() });
+    setLiveProgress({ message: 'Thinking...', startedAt: Date.now(), lastActivityAt: Date.now() });
     try {
       localStorage.setItem(
         'nemotron.pendingGeneration',
@@ -2196,7 +2296,9 @@ export default function App() {
           expectedRevision: activeChat?.revision || 0,
           preserveExistingMessageId: message.id,
           thinkingEnabled: thinking,
-          activePlan: [...messages.slice(0, index)].reverse().find((item) => item.agentPlan)?.agentPlan || null,
+          activePlan:
+            [...messages.slice(0, index)].reverse().find((item) => item.agentPlan)?.agentPlan ||
+            null,
           messages: messages.slice(0, index).map((m) => ({
             role: m.role,
             content: m.apiContent || m.content,
@@ -2224,11 +2326,48 @@ export default function App() {
           const event = JSON.parse(line.slice(5).trim());
           if (event.type === 'status') {
             setStatus(event.status || 'Regenerating…');
-            setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: event.status || 'Regenerating…', lastActivityAt: Date.now() }));
+            setLiveProgress((current) => ({
+              ...(current || { startedAt: Date.now() }),
+              message: event.status || 'Regenerating…',
+              lastActivityAt: Date.now(),
+            }));
           }
           if (event.type === 'agent_event') {
             const item = event.event || {};
-            if (item.summary) setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: item.summary, lastActivityAt: Date.now() }));
+            const message =
+              item.type === 'plan_created'
+                ? 'Registering plans...'
+                : item.type === 'task_updated' && item.task
+                  ? item.task.status === 'completed'
+                    ? `Marking task as completed: ${item.task.title}`
+                    : `Working on: ${item.task.title}`
+                  : item.type === 'tool_started'
+                    ? item.progressTarget
+                      ? `${item.name === 'web_search' ? 'Searching for' : 'Fetching URL'} ${item.progressTarget}...`
+                      : item.name === 'generate_image'
+                        ? 'Generating image...'
+                        : item.name === 'fetch_public_url'
+                          ? 'Fetching requested URL...'
+                          : item.name === 'web_search'
+                            ? 'Searching the web...'
+                            : item.name === 'execute_python'
+                              ? 'Working on requested files...'
+                              : `Using ${toolDisplayName(item.name)}...`
+                    : item.type === 'tool_completed'
+                      ? item.name === 'execute_python'
+                        ? 'Verifying patches...'
+                        : 'Checking results...'
+                      : item.type === 'self_correction'
+                        ? 'Recovering from an issue...'
+                        : item.type === 'agent_completed'
+                          ? 'Generating response...'
+                          : '';
+            if (message)
+              setLiveProgress((current) => ({
+                ...(current || { startedAt: Date.now() }),
+                message,
+                lastActivityAt: Date.now(),
+              }));
           }
           if (event.type === 'error') throw new Error(event.error || 'Regeneration failed.');
         }
@@ -2444,7 +2583,8 @@ export default function App() {
     const nextMessages =
         options.messages || (options.reuseLastUser ? messages : [...messages, userMessage]),
       titleBefore = chat.title || 'New chat';
-    const continuingPlan = [...nextMessages].reverse().find((message) => message.agentPlan)?.agentPlan || null;
+    const continuingPlan =
+      [...nextMessages].reverse().find((message) => message.agentPlan)?.agentPlan || null;
     if (activeIdRef.current === chat._id) setMessages(nextMessages);
     setInput('');
     setFiles([]);
@@ -2463,7 +2603,11 @@ export default function App() {
     const controller = new AbortController();
     abortRef.current = controller;
     const started = performance.now();
-    setLiveProgress({ message: 'Reviewing your request…', startedAt: Date.now(), lastActivityAt: Date.now() });
+    setLiveProgress({
+      message: /\bzip\b|\.zip\b/i.test(raw) ? 'Preparing your requested ZIP...' : 'Thinking...',
+      startedAt: Date.now(),
+      lastActivityAt: Date.now(),
+    });
     let output = '',
       events = [],
       agentPlan = continuingPlan,
@@ -2479,7 +2623,7 @@ export default function App() {
               ? {
                   ...liveAssistant,
                   content: output,
-                            toolEvents: events,
+                  toolEvents: events,
                   agentPlan,
                   agentEvents,
                   usage,
@@ -2541,12 +2685,20 @@ export default function App() {
           }
           if (event.type === 'status') {
             setStatus(event.status || 'Working…');
-            setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: event.status || 'Working…', lastActivityAt: Date.now() }));
+            setLiveProgress((current) => ({
+              ...(current || { startedAt: Date.now() }),
+              message: event.status || 'Working…',
+              lastActivityAt: Date.now(),
+            }));
           }
           if (event.type === 'chunk') {
             output += event.content || '';
             setStatus('Generating…');
-            setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: 'Writing the response…', lastActivityAt: Date.now() }));
+            setLiveProgress((current) => ({
+              ...(current || { startedAt: Date.now() }),
+              message: 'Generating response...',
+              lastActivityAt: Date.now(),
+            }));
             update();
           }
           if (event.type === 'agent_event') {
@@ -2554,12 +2706,70 @@ export default function App() {
             agentEvents = [...agentEvents, item];
             if (item.type === 'plan_created' && item.plan) agentPlan = item.plan;
             if (item.type === 'task_updated' && item.plan) agentPlan = item.plan;
-            if (item.type === 'self_correction') { setStatus('Recovering from an error…'); setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: item.summary || 'Recovering from an issue…', lastActivityAt: Date.now() })); }
-            else if (item.type === 'agent_started') { setStatus('Planning…'); setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: 'Planning the next step…', lastActivityAt: Date.now() })); }
-            else if (item.type === 'plan_created') setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: item.summary || `Plan ready: ${item.plan?.objective || 'working through your request'}`, lastActivityAt: Date.now() }));
-            else if (item.type === 'task_updated' && item.task) setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: item.summary || `${item.task.status === 'completed' ? 'Completed' : item.task.status === 'running' ? 'Working on' : 'Updating'}: ${item.task.title}`, lastActivityAt: Date.now() }));
-            else if (item.type === 'tool_started') setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: item.summary || `Using ${toolDisplayName(item.name)}`, lastActivityAt: Date.now() }));
-            else if (item.type === 'tool_completed') setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: item.summary || 'Checking the result…', lastActivityAt: Date.now() }));
+            if (item.type === 'self_correction') {
+              setStatus('Recovering from an error…');
+              setLiveProgress((current) => ({
+                ...(current || { startedAt: Date.now() }),
+                message: item.summary || 'Recovering from an issue…',
+                lastActivityAt: Date.now(),
+              }));
+            } else if (item.type === 'agent_started') {
+              setStatus('Planning…');
+              setLiveProgress((current) => ({
+                ...(current || { startedAt: Date.now() }),
+                message: 'Registering plans...',
+                lastActivityAt: Date.now(),
+              }));
+            } else if (item.type === 'plan_created')
+              setLiveProgress((current) => ({
+                ...(current || { startedAt: Date.now() }),
+                message: 'Registering plans...',
+                lastActivityAt: Date.now(),
+              }));
+            else if (item.type === 'task_updated' && item.task)
+              setLiveProgress((current) => ({
+                ...(current || { startedAt: Date.now() }),
+                message:
+                  item.task.status === 'completed'
+                    ? `Marking task as completed: ${item.task.title}`
+                    : item.task.status === 'running'
+                      ? `Working on: ${item.task.title}`
+                      : `Updating task: ${item.task.title}`,
+                lastActivityAt: Date.now(),
+              }));
+            else if (item.type === 'tool_started')
+              setLiveProgress((current) => ({
+                ...(current || { startedAt: Date.now() }),
+                message: item.progressTarget
+                  ? item.name === 'web_search'
+                    ? `Searching for ${item.progressTarget}...`
+                    : `Fetching URL ${item.progressTarget}...`
+                  : item.name === 'generate_image'
+                    ? 'Generating image...'
+                    : item.name === 'fetch_public_url'
+                      ? 'Fetching requested URL...'
+                      : item.name === 'web_search'
+                        ? 'Searching the web...'
+                        : item.name === 'create_task_plan'
+                          ? 'Registering plans...'
+                          : item.name === 'update_task_status'
+                            ? 'Marking task progress...'
+                            : item.name === 'execute_python'
+                              ? 'Working on requested files...'
+                              : `Using ${toolDisplayName(item.name)}...`,
+                lastActivityAt: Date.now(),
+              }));
+            else if (item.type === 'tool_completed')
+              setLiveProgress((current) => ({
+                ...(current || { startedAt: Date.now() }),
+                message:
+                  item.name === 'generate_image'
+                    ? 'Image generated. Checking the result...'
+                    : item.name === 'execute_python'
+                      ? 'Verifying patches...'
+                      : 'Checking results...',
+                lastActivityAt: Date.now(),
+              }));
             update();
           }
           if (event.type === 'tool_start') {
@@ -2572,7 +2782,11 @@ export default function App() {
               },
             ];
             setStatus(`Using ${event.name.replaceAll('_', ' ')}…`);
-            setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: `Using ${toolDisplayName(event.name)}`, lastActivityAt: Date.now() }));
+            setLiveProgress((current) => ({
+              ...(current || { startedAt: Date.now() }),
+              message: toolProgressMessage(event.name, event.arguments),
+              lastActivityAt: Date.now(),
+            }));
             update();
           }
           if (event.type === 'tool_result') {
@@ -2604,7 +2818,11 @@ export default function App() {
                     }
                   : x
               );
-            setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: 'Reviewing tool results…', lastActivityAt: Date.now() }));
+            setLiveProgress((current) => ({
+              ...(current || { startedAt: Date.now() }),
+              message: 'Verifying results...',
+              lastActivityAt: Date.now(),
+            }));
             update();
           }
           if (event.type === 'done') {
@@ -2835,8 +3053,7 @@ export default function App() {
             </button>
           </div>
         </div>
-        <section className={`chat-scroll ${busy ? 'agent-is-working' : ''}`} ref={scrollRef} onScroll={onScroll}>
-          <LiveProgress progress={busy ? liveProgress : null} now={progressClock} />
+        <section className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
           <div className="chat-inner">
             {chatLoading ? (
               <div className="chat-loading">
@@ -2876,17 +3093,23 @@ export default function App() {
                 </div>
               </div>
             ) : (
-              messages.map((m) => (
-                <Message
-                  key={m.id || `${m.role}-${m.createdAt}`}
-                  message={m}
-                  onCopy={copyText}
-                  onEdit={editUserMessage}
-                  onBranch={createBranchFrom}
-                  onShare={shareResponse}
-                  onRegenerate={regenerateResponse}
-                  onVersion={changeVersion}
-                />
+              messages.map((m, index) => (
+                <React.Fragment key={m.id || `${m.role}-${m.createdAt}`}>
+                  <Message
+                    message={m}
+                    onCopy={copyText}
+                    onEdit={editUserMessage}
+                    onBranch={createBranchFrom}
+                    onShare={shareResponse}
+                    onRegenerate={regenerateResponse}
+                    onVersion={changeVersion}
+                  />
+                  {busy &&
+                    m.role === 'user' &&
+                    !messages.slice(index + 1).some((next) => next.role === 'user') && (
+                      <LiveProgress progress={liveProgress} now={progressClock} />
+                    )}
+                </React.Fragment>
               ))
             )}
           </div>
