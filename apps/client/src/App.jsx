@@ -6,7 +6,7 @@ import {
   FileImage, FileText, FileSpreadsheet, FileArchive, Files, Eye, RefreshCw, HardDrive, LoaderCircle,
   LogOut, MessageSquare, Paperclip, PanelLeft, Plus, Search, ShieldCheck,
   Sparkles, Square, Trash2, Video, Wrench, X, Pencil,
-  UserRound, SlidersHorizontal, Code2, Github, Share2, GitBranch, PencilLine, ChevronLeft, ChevronRight
+  UserRound, SlidersHorizontal, Code2, Github, Share2, GitBranch, PencilLine, ChevronLeft, ChevronRight, Image as ImageIcon, ListChecks
 } from 'lucide-react';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
@@ -81,7 +81,7 @@ function CodeBlock({ children, className = '' }) {
 function Markdown({ content }) {
   return <div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ node, ...p }) => <a {...p} target="_blank" rel="noreferrer" />, pre: ({ node, children }) => <CodeBlock className={children?.props?.className || ''}>{children?.props?.children ?? children}</CodeBlock>, code: ({ node, className, children, ...p }) => <code className={className || 'inline-code'} {...p}>{children}</code>, table: ({ node, ...p }) => <div className="table-wrap"><table {...p}/></div> }}>{content || ''}</ReactMarkdown></div>;
 }
-function PluginIcon({ name, size = 15 }) { const Icon = name === 'execute_python' ? Code2 : name.includes('memory') ? Brain : Wrench; return <Icon size={size}/>; }
+function PluginIcon({ name, size = 15 }) { const Icon = name === 'execute_python' ? Code2 : name === 'generate_image' ? ImageIcon : name.includes('task_plan') || name.includes('task_status') ? ListChecks : name.includes('memory') ? Brain : Wrench; return <Icon size={size}/>; }
 function artifactPreviewKind(file) {
   const mime = String(file?.mimeType || '').toLowerCase();
   if (mime.startsWith('image/') && mime !== 'image/svg+xml') return 'image';
@@ -90,7 +90,8 @@ function artifactPreviewKind(file) {
   return 'none';
 }
 async function fetchArtifactBlob(file) {
-  const response = await fetch(api(file.downloadUrl), { credentials: 'include', cache: 'no-store' });
+  const artifactPath = file.downloadUrl || `/api/interpreter/artifacts/${encodeURIComponent(file.id)}`;
+  const response = await fetch(api(artifactPath), { credentials: 'include', cache: 'no-store' });
   if (!response.ok) {
     let message = `Could not retrieve ${file.name} (${response.status}).`;
     try { const data = await response.json(); message = data.error || message; } catch { /* keep status message */ }
@@ -153,6 +154,21 @@ function ToolActivity({ events = [] }) {
   if (!events.length) return null;
   return <details className="tool-activity" open><summary><Wrench size={13}/> Agent activity <span>{events.length}</span></summary><div className="tool-list">{events.map((event, i) => <div className={`tool-row ${event.status}`} key={`${event.name}-${i}`}><div className="tool-row-title"><PluginIcon name={event.name}/><b>{event.name.replaceAll('_', ' ')}</b><span>{event.status === 'complete' ? 'Completed' : event.status === 'error' ? 'Failed' : event.status === 'cancelled' ? 'Cancelled' : 'Running'}</span></div>{event.arguments && <details className="tool-detail"><summary>Arguments</summary><pre>{JSON.stringify(event.arguments, null, 2)}</pre></details>}{event.result !== undefined && <details className="tool-detail"><summary>Result</summary><pre>{JSON.stringify(event.result, null, 2).slice(0, 5000)}</pre></details>}{event.error && <p className="tool-error">{event.error}</p>}</div>)}</div></details>;
 }
+function AgentTimeline({ plan, events = [] }) {
+  if (!plan && !events.length) return null;
+  const tasks = plan?.tasks || [];
+  const completed = tasks.filter(task => ['completed', 'skipped'].includes(task.status)).length;
+  const statusLabel = status => ({ pending: 'Queued', running: 'In progress', completed: 'Completed', failed: 'Needs attention', skipped: 'Skipped' }[status] || 'Queued');
+  const iconFor = status => status === 'completed' ? <Check size={13}/> : status === 'failed' ? <AlertCircle size={13}/> : status === 'running' ? <LoaderCircle size={13} className="spin"/> : <span className="agent-task-dot"/>;
+  return <details className="agent-timeline" open={Boolean(plan && tasks.some(task => task.status === 'running')) || events.some(event => event.type === 'self_correction' || event.type === 'tool_started')}>
+    <summary><Sparkles size={13}/> Agent workflow <span>{plan ? `${completed}/${tasks.length} tasks` : `${events.length} events`}</span></summary>
+    <div className="agent-timeline-body">
+      {plan && <section className="agent-plan"><div className="agent-plan-objective">{plan.objective}</div><ol>{tasks.map(task => <li className={`agent-task ${task.status || 'pending'}`} key={task.id}><span className="agent-task-icon">{iconFor(task.status)}</span><span className="agent-task-copy"><b>{task.title}</b>{task.description && <small>{task.description}</small>}{task.note && <small>{task.note}</small>}</span><em>{statusLabel(task.status)}</em></li>)}</ol></section>}
+      {events.length > 0 && <div className="agent-event-list">{events.slice(-14).map((event, index) => <div className={`agent-event ${event.type}`} key={event.id || `${event.type}-${index}`}><i /><span>{event.message || (event.type === 'tool_started' ? `Using ${event.label || event.name}` : event.type === 'tool_completed' ? `${event.label || event.name} completed` : event.type === 'task_updated' ? `Task ${event.task?.title || event.task?.id} — ${statusLabel(event.task?.status).toLowerCase()}` : event.type === 'plan_created' ? `Created a plan with ${event.plan?.tasks?.length || 0} tasks` : event.type === 'image_progress' ? `Saved image ${event.completed}/${event.total}` : event.type.replaceAll('_', ' '))}</span>{event.status === 'blocked' && <b>Stopped</b>}</div>)}</div>}
+    </div>
+  </details>;
+}
+
 function Message({ message, onCopy, onEdit, onBranch, onShare, onRegenerate, onVersion }) {
   const [editing, setEditing] = useState(false), [editDraft, setEditDraft] = useState(textOf(message.content));
   const user = message.role === 'user', content = textOf(message.content);
@@ -162,6 +178,7 @@ function Message({ message, onCopy, onEdit, onBranch, onShare, onRegenerate, onV
     <div className={`message-avatar ${user ? 'user-avatar' : ''}`}>{user ? <UserRound size={15}/> : <Bot size={17}/>}</div>
     <div className="message-main"><div className="message-heading"><span>{user ? 'You' : 'Assistant'}</span>{message.createdAt && <time>{dateLabel(message.createdAt)}</time>}{!user && content && <button className="tiny-action" title="Copy response" onClick={() => onCopy(content)}><Copy size={13}/></button>}</div>
       {message.attachments?.length > 0 && <div className="attachment-list">{message.attachments.map((f, i) => <span className="attachment-pill" key={`${f.name}-${i}`}>{f.type?.startsWith('video') ? <Video size={13}/> : f.type?.startsWith('image') ? <FileImage size={13}/> : <FileText size={13}/>} {f.name}</span>)}</div>}
+      {message.agentPlan || message.agentEvents?.length > 0 ? <AgentTimeline plan={message.agentPlan} events={message.agentEvents || []}/> : null}
       {message.reasoning && <details className="reasoning-block"><summary><Brain size={13}/> Thinking process</summary><div>{message.reasoning}</div></details>}
       {message.toolEvents?.length > 0 && <ToolActivity events={message.toolEvents}/>}
       {!user && (() => { const generated = [...new Map((message.toolEvents || []).flatMap(event => event.result?.artifacts || []).map(file => [file.id, file])).values()]; return generated.length ? <section className="message-artifacts"><div className="message-artifacts-title"><Files size={14}/> Generated files <span>{generated.length}</span></div><div className="message-artifacts-grid">{generated.map(file => <ArtifactCard key={file.id} file={file}/>)}</div></section> : null; })()}
@@ -426,8 +443,8 @@ export default function App() {
     if (activeIdRef.current === chat._id) setMessages(nextMessages); setInput(''); setFiles([]); if (textareaRef.current) textareaRef.current.style.height = 'auto';
     const assistantId = crypto.randomUUID(), assistant = { id: assistantId, role: 'assistant', content: '', reasoning: '', toolEvents: [], createdAt: new Date().toISOString() };
     if (activeIdRef.current === chat._id) setMessages([...nextMessages, assistant]); const controller = new AbortController(); abortRef.current = controller; const started = performance.now();
-    let output = '', thought = '', events = [], usage = null, durationMs = null, liveAssistant = assistant;
-    const update = () => { if (activeIdRef.current === chat._id) setMessages(current => current.map(m => m.id === assistantId ? { ...liveAssistant, content: output, reasoning: thought, toolEvents: events, usage, durationMs } : m)); };
+    let output = '', thought = '', events = [], agentPlan = null, agentEvents = [], usage = null, durationMs = null, liveAssistant = assistant;
+    const update = () => { if (activeIdRef.current === chat._id) setMessages(current => current.map(m => m.id === assistantId ? { ...liveAssistant, content: output, reasoning: thought, toolEvents: events, agentPlan, agentEvents, usage, durationMs } : m)); };
     try {
       setStatus('Connecting…');
       const res = await fetch(api('/api/chat/stream'), { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, signal: controller.signal, body: JSON.stringify({ chatId: chat._id, branchId: options.branchId || activeBranchId, expectedRevision: options.expectedRevision ?? (chat.revision || 0), assistantMessageId: assistantId, thinkingEnabled: thinking, messages: nextMessages.map(m => ({ role: m.role, content: m.apiContent || m.content, ...(m.attachments?.length ? { attachments: m.attachments } : {}), ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}) })) }) });
@@ -442,8 +459,17 @@ export default function App() {
           if (event.type === 'status') setStatus(event.status || 'Working…');
           if (event.type === 'chunk') { output += event.content || ''; setStatus('Generating…'); update(); }
           if (event.type === 'reasoning') { thought += event.content || ''; update(); }
+          if (event.type === 'agent_event') {
+            const item = event.event || {};
+            agentEvents = [...agentEvents, item];
+            if (item.type === 'plan_created' && item.plan) agentPlan = item.plan;
+            if (item.type === 'task_updated' && item.plan) agentPlan = item.plan;
+            if (item.type === 'self_correction') setStatus('Recovering from an error…');
+            else if (item.type === 'agent_started') setStatus('Planning…');
+            update();
+          }
           if (event.type === 'tool_start') { events = [...events, { name: event.name, status: 'running', arguments: event.arguments }]; setStatus(`Using ${event.name.replaceAll('_', ' ')}…`); update(); }
-          if (event.type === 'tool_result') { if (event.name === 'execute_python' && event.result?.artifacts?.length) setLibraryRefresh(v => v + 1); if (event.name === 'save_memory') { request('/api/account/memories').then(r => r.json()).then(data => setMemories(data.memories || [])).catch(() => {}); if (typeof BroadcastChannel !== 'undefined') { const channel = new BroadcastChannel('nemotron-memory-sync'); channel.postMessage({ type: 'refresh' }); channel.close(); } } const index = events.map(x => x.name).lastIndexOf(event.name); if (index >= 0) events = events.map((x, i) => i === index ? { ...x, status: event.status, error: event.error, result: event.result } : x); update(); }
+          if (event.type === 'tool_result') { if (['execute_python', 'generate_image'].includes(event.name) && event.result?.artifacts?.length) setLibraryRefresh(v => v + 1); if (event.name === 'save_memory') { request('/api/account/memories').then(r => r.json()).then(data => setMemories(data.memories || [])).catch(() => {}); if (typeof BroadcastChannel !== 'undefined') { const channel = new BroadcastChannel('nemotron-memory-sync'); channel.postMessage({ type: 'refresh' }); channel.close(); } } const index = events.map(x => x.name).lastIndexOf(event.name); if (index >= 0) events = events.map((x, i) => i === index ? { ...x, status: event.status, error: event.error, result: event.result } : x); update(); }
           if (event.type === 'done') { usage = event.usage || usage; durationMs = event.durationMs ?? Math.round(performance.now() - started); update(); }
           if (event.type === 'stopped') setStatus('Stopped');
           if (event.type === 'error') throw new Error(event.error || 'Generation failed.');
@@ -451,12 +477,12 @@ export default function App() {
         if (chunk.done) break;
       }
       if (!output && thought) output = '(The model returned thinking but no final answer.)';
-      liveAssistant = { ...assistant, content: output || '(No text was returned.)', reasoning: thought, toolEvents: events, usage, durationMs };
+      liveAssistant = { ...assistant, content: output || '(No text was returned.)', reasoning: thought, toolEvents: events, agentPlan, agentEvents, usage, durationMs };
       const saved = [...nextMessages, liveAssistant]; if (activeIdRef.current === chat._id) setMessages(saved); if (typeof indexedDB !== 'undefined') { const dbOpen = indexedDB.open('nemotron-agent-lab', 1); dbOpen.onsuccess = () => dbOpen.result.transaction('drafts', 'readwrite').objectStore('drafts').delete('composer'); } const refreshed = await (await request(`/api/chats/${chat._id}?branchId=${options.branchId || activeBranchId}`)).json(); setChats(current => [refreshed.chat, ...current.filter(c => c._id !== refreshed.chat._id)]);
       const userTurnCount = saved.filter(m => m.role === 'user').length; if (titleBefore === 'New chat' || (userTurnCount >= 4 && userTurnCount % 4 === 0)) { try { await generateName(chat._id, saved); } catch { const fallback = titleFallback(text || attachments[0]?.name || 'New chat'); await request(`/api/chats/${chat._id}`, { method: 'PATCH', body: JSON.stringify({ title: fallback }) }); setChats(current => current.map(c => c._id === chat._id ? { ...c, title: fallback } : c)); } }
       setStatus('Ready');
     } catch (error) {
-      const stopped = error.name === 'AbortError'; liveAssistant = { ...assistant, content: output, reasoning: thought, toolEvents: events, error: stopped ? 'Generation stopped.' : error.message, usage, durationMs: durationMs ?? Math.round(performance.now() - started) };
+      const stopped = error.name === 'AbortError'; liveAssistant = { ...assistant, content: output, reasoning: thought, toolEvents: events, agentPlan, agentEvents, error: stopped ? 'Generation stopped.' : error.message, usage, durationMs: durationMs ?? Math.round(performance.now() - started) };
       if (activeIdRef.current === chat._id) setMessages(current => current.map(m => m.id === assistantId ? liveAssistant : m)); setStatus(stopped ? 'Stopped' : 'Request failed'); try { if (options.branchId) await request(`/api/chats/${chat._id}`, { method: 'PATCH', body: JSON.stringify({ messages: [...nextMessages, liveAssistant], branchId: options.branchId, expectedRevision: options.expectedRevision ?? (chat.revision || 0) }) }); else await saveMessages(chat._id, [...nextMessages, liveAssistant]); } catch { /* display generation error */ }
     } finally { abortRef.current = null; try { localStorage.removeItem('nemotron.pendingGeneration'); } catch {} setBusy(false); }
   };

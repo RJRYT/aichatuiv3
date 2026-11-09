@@ -87,3 +87,20 @@
   .tab-row button svg { width:12px; height:12px; }
   .history-drawer { width:min(340px,94vw); padding:14px; }
 }
+
+/* v7 autonomous agent timeline */
+.agent-timeline{margin:10px 0 12px;border:1px solid #354537;background:linear-gradient(145deg,#121a14,#0e1510);border-radius:10px;overflow:hidden}
+.agent-timeline>summary{display:flex;align-items:center;gap:8px;padding:10px 12px;cursor:pointer;list-style:none;color:#c5ddb9;font:10px 'DM Mono';user-select:none}
+.agent-timeline>summary::-webkit-details-marker{display:none}
+.agent-timeline>summary span{margin-left:auto;color:#91a18e}
+.agent-timeline-body{padding:0 12px 12px}
+.agent-plan-objective{font-size:11px;line-height:1.5;color:#dce8d8;padding:8px 9px;background:#19251b;border:1px solid #2d3e2f;border-radius:7px;margin-bottom:9px}
+.agent-plan ol{list-style:none;margin:0;padding:0;display:grid;gap:5px}
+.agent-task{display:flex;align-items:center;gap:8px;padding:8px 9px;border:1px solid #263329;border-radius:7px;background:#101711;min-width:0}
+.agent-task-icon{width:19px;height:19px;display:grid;place-items:center;flex:none;color:#81917e}
+.agent-task.completed .agent-task-icon{color:#a7dc8c}.agent-task.running .agent-task-icon{color:#d9c17e}.agent-task.failed .agent-task-icon{color:#ff9f94}
+.agent-task-dot{width:6px;height:6px;border-radius:50%;background:#738071;display:block}
+.agent-task-copy{min-width:0;flex:1;display:grid;gap:2px}.agent-task-copy b{font-size:10px;color:#d8e4d5;font-weight:600}.agent-task-copy small{font-size:9px;color:#859486;line-height:1.4;overflow-wrap:anywhere}
+.agent-task em{font:9px 'DM Mono';font-style:normal;color:#879584;white-space:nowrap}.agent-task.running em{color:#d7c17f}.agent-task.failed em{color:#ff9f94}.agent-task.completed em{color:#a7dc8c}
+.agent-event-list{display:grid;gap:5px;margin-top:9px}.agent-event{display:flex;align-items:flex-start;gap:8px;color:#93a091;font-size:9px;line-height:1.45}.agent-event>i{width:6px;height:6px;border-radius:50%;background:#758574;flex:none;margin-top:4px}.agent-event.tool_completed>i{background:#9ed27f}.agent-event.self_correction>i{background:#e3b36d}.agent-event.self_correction{color:#d8bd92}.agent-event.agent_completed{color:#b4d8a2}.agent-event b{margin-left:auto;color:#ff9f94;font-size:8px;text-transform:uppercase;letter-spacing:.06em}
+@media(max-width:760px){.agent-timeline-body{padding:0 8px 9px}.agent-task{align-items:flex-start;flex-wrap:wrap}.agent-task em{margin-left:27px}.agent-task-copy b{font-size:10px}.agent-event{font-size:9px}}

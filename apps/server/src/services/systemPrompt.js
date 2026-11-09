@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-export const SYSTEM_PROMPT_VERSION = '6.2.0';
+export const SYSTEM_PROMPT_VERSION = '7.0.0';
 const SYSTEM_PROMPT_PATH = fileURLToPath(new URL('../../prompts/system-prompt.md', import.meta.url));
 const SYSTEM_PROMPT_BASE = readFileSync(SYSTEM_PROMPT_PATH, 'utf8').trim();
 

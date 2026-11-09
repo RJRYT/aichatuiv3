@@ -36,9 +36,9 @@ Web search uses Tavily's Search API from the backend. Create a key at https://ta
 
 The model receives the `web_search` function tool. Search results include source title, URL, snippet and publication date where available. The backend system prompt instructs the agent to cite returned URLs in Markdown.
 
-## System prompt and agent identity (v6.2.0)
+## System prompt and agent identity (v7.0.0)
 
-The authoritative agent prompt lives in `apps/server/prompts/system-prompt.md`. It defines Nemi’s identity and personality, product attribution, private runtime context, confidentiality rules, tool-selection policy, Python upload/output handling, network safety, and response standards. `apps/server/src/services/systemPrompt.js` loads the Markdown file at backend startup and appends sanitized user preferences and relevant saved memories. The prompt is deliberately not stored in environment variables; remove legacy `SYSTEM_PROMPT` and `INITIAL_INSTRUCTIONS` variables from deployment settings. The Docker image copies the prompt file into the runtime image.
+The authoritative agent prompt lives in `apps/server/prompts/system-prompt.md`. It defines Nemi’s identity and personality, product attribution, private runtime context, confidentiality rules, tool-selection policy, Python upload/output handling, network safety, and response standards. `apps/server/src/services/systemPrompt.js` loads the Markdown file at backend startup and appends sanitized user preferences and relevant saved memories. The prompt is deliberately not stored in environment variables; remove legacy `SYSTEM_PROMPT` and `INITIAL_INSTRUCTIONS` variables from deployment settings. The Docker image copies the prompt file into the runtime image. v7 adds autonomous task planning, truthful task-state updates, bounded self-correction, and image-generation guidance.
 
 ## Agent behavior
 
@@ -49,8 +49,33 @@ The authoritative agent prompt lives in `apps/server/prompts/system-prompt.md`. 
 - Temperature is fixed server-side to NVIDIA's recommended text value (1.0), or 0.6 for visual requests. No max-output-token cap is sent by default; the hosted deployment still enforces its own output/context limits.
 - The complete system prompt is maintained as a version-controlled Markdown file at `apps/server/prompts/system-prompt.md`; it is loaded by the backend and is not configured through environment variables.
 - Chat names are generated from conversation context. Manually renamed conversations are protected from automatic title replacement.
-- Plugins include web search, public URL reading, GitHub search, npm search, calculator, date/time, save memory and search memories.
+- Tools include web search, public URL reading, GitHub search, npm search, calculator, date/time, memory, full Python execution, autonomous task planning/status updates, and image generation.
 - Images and video are sent as images and sampled video frames, following the model's multimodal input format.
+
+
+## Autonomous agent and execution timeline (v7.0.0)
+
+For multi-step requests, Nemi can create a structured plan with up to 12 tasks, dependency validation, and explicit task states. The backend validates task IDs, dependency graphs, status transitions, and prerequisite completion. The frontend displays plan progress and a live event timeline. Events are emitted by actual backend actions; they are not inferred from model narration.
+
+Tool failures enter a bounded self-correction path. The model receives the actual tool error and recovery guidance, and may retry with a changed approach. Each tool is limited to three consecutive failed attempts per chat generation, and the model is instructed not to repeat an unchanged failing call. The overall tool loop is also bounded. This is a recovery aid, not a guarantee that every failure can be repaired.
+
+## Image generation (Cloudflare Workers AI)
+
+Nemi can generate original images using the Cloudflare Workers AI REST API and `@cf/black-forest-labs/flux-1-schnell`. The backend stores validated image bytes through the existing artifact store, so generated images appear in the File Library and inline chat previews. No Cloudflare credential is sent to the browser or to the model.
+
+Configure these backend-only variables:
+
+```env
+CLOUDFLARE_ACCOUNT_ID=<cloudflare-account-id>
+CLOUDFLARE_API_TOKEN=<workers-ai-api-token>
+CLOUDFLARE_IMAGE_MODEL=@cf/black-forest-labs/flux-1-schnell
+CLOUDFLARE_IMAGE_TIMEOUT_MS=120000
+IMAGE_GENERATION_DAILY_LIMIT=8
+```
+
+Create a Workers AI API token from the Cloudflare dashboard's Workers AI REST API setup. Use the token permissions requested by Cloudflare for Workers AI inference. Keep the token on the backend only. The default model accepts a text prompt (up to 2,048 characters) and a step count (up to 8); the application requests one image by default and allows at most two per tool call. Generated files are size-checked and format-sniffed before being saved.
+
+Workers AI currently includes 10,000 Neurons per day on the Free plan; the allowance is shared across Workers AI usage, resets at 00:00 UTC, and requests fail after a free-plan limit is exceeded. Paid Workers plans charge for usage above the included allocation. Image generation is therefore quota-limited, not unlimited free compute. See [Cloudflare Workers AI pricing](https://developers.cloudflare.com/workers-ai/platform/pricing/) and [FLUX.1 Schnell model documentation](https://developers.cloudflare.com/workers-ai/models/flux-1-schnell/). The application's per-process per-user daily image cap is a best-effort guardrail, not a billing boundary; use Cloudflare account limits and monitoring for authoritative usage control.
 
 ## Personalization and memory
 
@@ -282,3 +307,21 @@ The repository includes 23 Node.js unit tests covering conversation branches, in
 - The backend loads the Markdown prompt at startup, appends sanitized personalization and bounded memory context, and fails fast if the prompt file is missing or empty.
 - Updated the Docker image to include the prompt file.
 - Added system-prompt regression tests.
+
+## v7.0.0 — Autonomous Agent and Image Generation
+
+- Added validated autonomous task plans with dependency checks and explicit task-state transitions.
+- Added backend-emitted agent events for plans, task updates, tool execution, image progress, self-correction and completion.
+- Added a visual Agent Workflow timeline to assistant messages; plan and event data are persisted with conversation messages and branches.
+- Added bounded self-correction: tool failures are returned with actionable recovery guidance and the same tool is limited to three consecutive failed attempts per generation.
+- Added Cloudflare Workers AI FLUX.1 Schnell image generation, binary format validation, persistent File Library storage, inline image previews and downloads.
+- Added backend-only Cloudflare configuration to `.env.example`; no new frontend secret or npm dependency is required.
+- Updated Nemi's Markdown system prompt with planning, task execution, truthful progress, bounded recovery and image-generation policies.
+- Added tests for plan dependency validation, state transitions, cycle detection, and mocked image API/artifact integrity.
+
+### v7 verification status
+
+- Backend JavaScript syntax checks: passed.
+- Automated Node test suite: 30/30 passed, including task dependency/state tests and a mocked Cloudflare FLUX response with persisted artifact byte/checksum verification.
+- Frontend production build: not verified in the build environment because dependency installation timed out and Vite was unavailable (`vite: not found`). Run `npm ci` followed by `npm run build` after extracting the project.
+- Live Cloudflare Workers AI generation and live Vercel Sandbox execution: not performed; configure credentials and run the smoke tests in your deployment environment.

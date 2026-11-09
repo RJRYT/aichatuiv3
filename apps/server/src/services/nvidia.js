@@ -6,7 +6,8 @@ import logger from '../utils/logger.js';
 export const MODEL_ID = 'nvidia/nemotron-3.5-super-vl-120b-a12b';
 const log = logger.child({ component: 'nvidia' });
 const NVIDIA_ENDPOINT = 'https://integrate.api.nvidia.com/v1/chat/completions';
-const MAX_TOOL_ROUNDS = 8;
+const MAX_TOOL_ROUNDS = 12;
+const MAX_RECOVERY_ATTEMPTS_PER_TOOL = 3;
 function sse(res, payload) { if (!res.writableEnded) res.write(`data: ${JSON.stringify(payload)}\n\n`); }
 function parseToolArgs(raw) { try { return typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {}); } catch { return {}; } }
 function systemPrompt(user) { return buildSystemPrompt(user); }
@@ -72,6 +73,15 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
   const hasVision = input.some(m => Array.isArray(m.content) && m.content.some(p => p.type === 'image_url'));
   const controller = new AbortController(); const onClose = () => { if (!res.writableEnded) controller.abort(); }; res.on('close', onClose);
   const startedAt = Date.now(); let finalUsage = null, finalText = '', finalReasoning = '', rounds = 0, toolEvents = [];
+  const agentState = { plan: null };
+  const agentEvents = [];
+  const consecutiveFailures = new Map();
+  const emitAgentEvent = (eventType, data = {}) => {
+    const event = { id: crypto.randomUUID(), type: eventType, at: new Date().toISOString(), ...data };
+    agentEvents.push(event);
+    sse(res, { type: 'agent_event', event });
+    return event;
+  };
   try {
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
       rounds = round + 1; sse(res, { type: 'status', status: round === 0 ? 'Thinking…' : 'Reviewing plugin results…', round });
@@ -85,17 +95,46 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
         const name = call.function.name, args = parseToolArgs(call.function.arguments);
         const safeArgs = name === 'execute_python' ? { task_context: args.task_context || '', code_bytes: Buffer.byteLength(String(args.code || ''), 'utf8') } : args;
         sse(res, { type: 'tool_start', name, arguments: safeArgs, round });
-        const outcome = await runTool(name, args, user, { signal: controller.signal, chatId: body.chatId });
-        const toolCompleted = outcome.ok && (name !== 'execute_python' || outcome.result?.status === 'completed');
-        const event = { name, arguments: safeArgs, status: toolCompleted ? 'complete' : 'error', result: outcome.ok ? outcome.result : undefined, error: outcome.ok ? (name === 'execute_python' && outcome.result?.status !== 'completed' ? outcome.result?.stderr || `Python execution ${outcome.result?.status || 'failed'}.` : undefined) : outcome.error };
-        toolEvents.push(event); sse(res, { type: 'tool_result', ...event, round });
-        messages.push({ role: 'tool', tool_call_id: call.id, name, content: JSON.stringify(outcome) });
+        emitAgentEvent('tool_started', { name, label: name.replaceAll('_', ' '), round });
+        const previousFailures = consecutiveFailures.get(name) || 0;
+        let outcome;
+        if (previousFailures >= MAX_RECOVERY_ATTEMPTS_PER_TOOL) {
+          outcome = { ok: false, error: `Recovery limit reached for ${name}. Stop retrying this tool and explain the remaining limitation.` };
+        } else {
+          outcome = await runTool(name, args, user, {
+            signal: controller.signal, chatId: body.chatId, agentState,
+            onAgentEvent: (eventType, data) => {
+              if (eventType === 'plan_created' && data.plan) agentState.plan = data.plan;
+              emitAgentEvent(eventType, data);
+            }
+          });
+        }
+        const toolCompleted = outcome.ok && (name !== 'execute_python' || outcome.result?.status === 'completed') && (name !== 'generate_image' || outcome.result?.status === 'completed');
+        if (toolCompleted) consecutiveFailures.delete(name);
+        else consecutiveFailures.set(name, previousFailures + 1);
+        const errorText = outcome.ok
+          ? ((name === 'execute_python' && outcome.result?.status !== 'completed') ? outcome.result?.stderr || `Python execution ${outcome.result?.status || 'failed'}.` : (name === 'generate_image' && outcome.result?.status !== 'completed') ? (outcome.result?.error || 'Image generation did not complete.') : undefined)
+          : outcome.error;
+        const event = { name, arguments: safeArgs, status: toolCompleted ? 'complete' : 'error', result: outcome.ok ? outcome.result : undefined, error: errorText, attempt: previousFailures + 1 };
+        toolEvents.push(event);
+        if (!toolCompleted) {
+          emitAgentEvent('self_correction', { tool: name, attempt: previousFailures + 1, maxAttempts: MAX_RECOVERY_ATTEMPTS_PER_TOOL, status: previousFailures + 1 >= MAX_RECOVERY_ATTEMPTS_PER_TOOL ? 'blocked' : 'diagnosing', error: String(errorText || 'Tool did not complete.').slice(0, 1200), message: previousFailures + 1 >= MAX_RECOVERY_ATTEMPTS_PER_TOOL ? 'Retry limit reached. Reassess the approach.' : 'A tool failed. Inspect the error, correct the cause, then retry only if the operation is recoverable.' });
+        } else {
+          emitAgentEvent('tool_completed', { name, label: name.replaceAll('_', ' '), attempt: previousFailures + 1 });
+        }
+        sse(res, { type: 'tool_result', ...event, round });
+        const toolPayload = { ...outcome, ...( !toolCompleted ? { recoveryGuidance: previousFailures + 1 >= MAX_RECOVERY_ATTEMPTS_PER_TOOL ? 'The retry limit has been reached. Do not call this tool again in this turn. Explain the failure and offer a different approach.' : 'Self-correction required: inspect the actual error, identify the cause, change the arguments or implementation, then retry at most within the remaining attempt budget. Never repeat the same failing call unchanged.' } : {}) };
+        messages.push({ role: 'tool', tool_call_id: call.id, name, content: JSON.stringify(toolPayload) });
       }
     }
     const visible = body.messages.filter(m => m.role !== 'system' && m.role !== 'tool');
-    await persist?.([...visible, { id: String(body.assistantMessageId || crypto.randomUUID()), role: 'assistant', content: finalText, reasoning: finalReasoning, usage: finalUsage, toolEvents, createdAt: new Date().toISOString() }]);
+    if (agentEvents.length || agentState.plan) {
+      const allDone = !agentState.plan || agentState.plan.tasks.every(task => ['completed', 'skipped'].includes(task.status));
+      emitAgentEvent('agent_completed', { status: allDone ? 'completed' : 'finished_with_pending_tasks', message: allDone ? 'The planned work is complete.' : 'The response finished with some planned tasks still pending.' });
+    }
+    await persist?.([...visible, { id: String(body.assistantMessageId || crypto.randomUUID()), role: 'assistant', content: finalText, reasoning: finalReasoning, usage: finalUsage, toolEvents, agentPlan: agentState.plan, agentEvents, createdAt: new Date().toISOString() }]);
     log.info('Chat generation completed', { userId, rounds, durationMs: Date.now() - startedAt, toolEventCount: toolEvents.length, usage: finalUsage });
-    sse(res, { type: 'done', usage: finalUsage, durationMs: Date.now() - startedAt, toolRounds: rounds });
+    sse(res, { type: 'done', usage: finalUsage, durationMs: Date.now() - startedAt, toolRounds: rounds, agentPlan: agentState.plan, agentEvents });
   } catch (error) {
     if (error.name === 'AbortError') {
       log.warn('Chat generation aborted by client', { userId });
