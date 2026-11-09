@@ -1,28 +1,25 @@
-# Nemotron Agent Lab v7.1.0 — Reliability and Privacy Patch
-
-## v7.1.0 changes
-
-- Added backend-side intent detection for concrete file/project deliverables.
-- Substantial website/app/project requests now require a task-plan tool call before implementation.
-- If the model responds with prose instead of producing a requested file, the orchestrator forces bounded Python execution attempts. ZIP requests require a verified `.zip` artifact.
-- Final success is gated on actual artifact metadata (non-empty file, ID, and SHA-256 checksum); otherwise the backend returns an explicit incomplete/failure response.
-- Intermediate model text is buffered until tool selection is known, preventing pre-execution success claims from appearing in the stream.
-- Internal artifact download paths are removed from model-visible tool results and sanitized from final responses.
-- Provider reasoning fields are discarded server-side, no longer persisted, and no longer rendered by the client. Historical chat reads strip legacy reasoning fields, including message versions.
-- Added orchestration regression tests for project/ZIP intent, capability-question handling, artifact evidence validation, and reasoning/path sanitization.
-
-### Verification
-
-- Backend test suite: 35 tests passed.
-- Node syntax checks: server JavaScript modules passed.
-- Frontend production build: not verified in this environment because dependency installation timed out.
-- Live NVIDIA tool-calling and remote Python execution: not tested against production credentials.
-
----
-
 # Nemotron Agent Lab — MERN monorepo
 
 A single-model, Agent Lab interface for NVIDIA Nemotron 3.5 Super VL. The frontend is a static React/Vite build; the Express backend owns model inference, OAuth, web search, plugin execution, personalization and memory. MongoDB persists user accounts, preferences, memories and chats.
+
+## v7.2.0 — Enforced deliverable execution
+
+This release strengthens concrete build/file requests so the agent cannot silently finish with instructions or unsupported success claims.
+
+- Detects website/application/project builds, ZIP requests, file downloads/conversions, and original image generation.
+- Forces the required planning and execution tools for recognized deliverable workflows.
+- Requires substantial project plans to contain at least five meaningful tasks and explicit design, implementation, QA, packaging (when requested), and verification coverage.
+- Keeps the plan lifecycle active through completion; unfinished tasks block successful finalization.
+- Raises the coding response budget and uses a lower temperature for deliverable-generation rounds.
+- Verifies generated artifacts against owner-scoped File Library records, byte sizes, and SHA-256 metadata.
+- Decompresses ZIP entries and checks local headers, entry sizes, CRC-32, safe paths, and non-empty contents.
+- Applies website quality checks for semantic HTML, responsive CSS, keyboard focus styles, interactive JavaScript, error handling, and README presence.
+- Limits recovery attempts and blocks completion when the requested artifact fails verification.
+- Removes internal artifact download routes from model-facing tool results.
+- Stops streaming/persisting internal reasoning and strips legacy reasoning from retrieved conversations, branches, and response versions.
+- Adds regression tests for deliverable detection, plan coverage, ZIP integrity, website quality, and reasoning privacy.
+
+The application still requires a live NVIDIA model and configured sandbox/image services for end-to-end integration testing.
 
 ## Stack and structure
 
@@ -33,6 +30,8 @@ apps/
 ```
 
 ## Local setup
+
+Keep your existing `.env` file private and outside source archives; this release includes `.env.example` only. Copy the example when setting up a fresh environment.
 
 Requirements: Node.js `^20.19.0` or `>=22.12.0`, npm 10+, MongoDB. `.nvmrc` selects Node.js 22.
 

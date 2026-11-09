@@ -5,6 +5,30 @@ export function createTaskPlan(args, agentState = {}, onAgentEvent) {
   if (!objective) throw new Error('A task-plan objective is required.');
   if (!Array.isArray(args.tasks) || !args.tasks.length || args.tasks.length > 12)
     throw new Error('A plan must contain between 1 and 12 tasks.');
+  if (agentState.deliverableContract && args.tasks.length < 5)
+    throw new Error('A concrete project-delivery plan must contain at least 5 meaningful tasks covering planning, implementation, QA, and delivery/verification.');
+  if (agentState.deliverableContract && args.tasks.length > 8)
+    throw new Error('A concrete project-delivery plan must contain no more than 8 focused tasks. Combine overly granular steps.');
+  if (agentState.deliverableContract) {
+    const planText = args.tasks
+      .map((task) => `${String(task?.title || '')} ${String(task?.description || '')}`)
+      .join(' ');
+    const requiredCoverage = [
+      ['requirements/design', /requirement|scope|design|architecture|specification|structure/i],
+      ['implementation', /implement|build|develop|source|code|create|generate/i],
+      ['quality assurance', /test|quality|qa|lint|validate|check/i],
+      ['verification/delivery', /verify|verification|inspect|integrity|deliver|confirm/i],
+    ];
+    if (agentState.deliverableContract.archiveRequired) {
+      requiredCoverage.push(['packaging', /zip|archive|package/i]);
+    }
+    const missing = requiredCoverage
+      .filter(([, pattern]) => !pattern.test(planText))
+      .map(([label]) => label);
+    if (missing.length) {
+      throw new Error(`The project plan must explicitly cover: ${missing.join(', ')}.`);
+    }
+  }
   const ids = new Set();
   const tasks = args.tasks.map((task, index) => {
     const id = String(task?.id || `task-${index + 1}`).trim();
@@ -26,6 +50,8 @@ export function createTaskPlan(args, agentState = {}, onAgentEvent) {
   });
   for (const task of tasks) {
     if (!task.title) throw new Error(`Task ${task.id} needs a title.`);
+    if (agentState.deliverableContract && task.description.length < 20)
+      throw new Error(`Task ${task.id} needs a meaningful description (at least 20 characters).`);
     if (task.dependsOn.some((id) => !ids.has(id) || id === task.id))
       throw new Error(`Task ${task.id} has an invalid dependency.`);
   }

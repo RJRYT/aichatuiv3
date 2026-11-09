@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { Chat } from '../models/Chat.js';
 import logger from '../utils/logger.js';
-import { sanitizeAssistantText, sanitizeChatForRead, stripArtifactUrlsFromToolEvents } from './agentOrchestration.js';
+import { sanitizeRetrievedChat } from './conversationPrivacy.js';
 
 const log = logger.child({ component: 'chatStore' });
 const memory = new Map();
@@ -26,7 +26,7 @@ function cleanMessages(messages = []) {
               return { type: 'text', text: '[Multimodal attachment]' };
             })
           : String(message.content ?? '').slice(0, 120000);
-    const safe = { role: message.role, content: message.role === 'assistant' ? sanitizeAssistantText(content) : content };
+    const safe = { role: message.role, content };
     if (message.id) safe.id = String(message.id).slice(0, 100);
     if (message.name) safe.name = String(message.name).slice(0, 100);
     if (Array.isArray(message.tool_calls)) safe.tool_calls = message.tool_calls;
@@ -53,12 +53,12 @@ function cleanMessages(messages = []) {
       });
     if (message.usage) safe.usage = message.usage;
     if (message.durationMs != null) safe.durationMs = Number(message.durationMs);
-    if (Array.isArray(message.toolEvents)) safe.toolEvents = stripArtifactUrlsFromToolEvents(message.toolEvents);
+    if (message.toolEvents) safe.toolEvents = message.toolEvents;
     if (message.error) safe.error = String(message.error).slice(0, 2000);
     if (Array.isArray(message.versions))
       safe.versions = message.versions.slice(0, 20).map((v) => ({
         content: String(v.content || '').slice(0, 120000),
-        toolEvents: Array.isArray(v.toolEvents) ? stripArtifactUrlsFromToolEvents(v.toolEvents) : [],
+        toolEvents: Array.isArray(v.toolEvents) ? v.toolEvents : [],
         usage: v.usage,
         createdAt: v.createdAt,
       }));
@@ -67,6 +67,8 @@ function cleanMessages(messages = []) {
     return safe;
   });
 }
+
+
 
 export async function listChats(sessionId) {
   if (mongoose.connection.readyState === 1)
@@ -89,9 +91,12 @@ export async function listChats(sessionId) {
 }
 
 export async function getChat(sessionId, chatId) {
-  if (mongoose.connection.readyState === 1) return sanitizeChatForRead(await Chat.findOne({ _id: chatId, sessionId }).lean());
+  if (mongoose.connection.readyState === 1) {
+    const item = await Chat.findOne({ _id: chatId, sessionId }).lean();
+    return sanitizeRetrievedChat(item);
+  }
   const item = memory.get(chatId);
-  return item?.sessionId === sessionId ? sanitizeChatForRead(item) : null;
+  return item?.sessionId === sessionId ? sanitizeRetrievedChat(item) : null;
 }
 
 export async function createChat(sessionId, title = 'New chat') {
@@ -155,7 +160,7 @@ export async function updateChat(sessionId, chatId, patch) {
       return null;
     }
     log.info('Chat updated', { sessionId, chatId });
-    return sanitizeChatForRead(updated);
+    return sanitizeRetrievedChat(updated);
   }
   const current = memory.get(chatId);
   if (
@@ -172,7 +177,7 @@ export async function updateChat(sessionId, chatId, patch) {
   const next = { ...current, ...values };
   memory.set(chatId, next);
   log.info('Chat updated (in-memory)', { sessionId, chatId });
-  return sanitizeChatForRead(next);
+  return sanitizeRetrievedChat(next);
 }
 
 export async function deleteChat(sessionId, chatId) {

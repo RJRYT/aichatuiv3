@@ -2409,7 +2409,6 @@ export default function App() {
     abortRef.current = controller;
     const started = performance.now();
     let output = '',
-      thought = '',
       events = [],
       agentPlan = null,
       agentEvents = [],
@@ -2424,7 +2423,7 @@ export default function App() {
               ? {
                   ...liveAssistant,
                   content: output,
-                  toolEvents: events,
+                            toolEvents: events,
                   agentPlan,
                   agentEvents,
                   usage,
