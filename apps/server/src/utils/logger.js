@@ -28,8 +28,8 @@ const LEVEL_LABELS = {
 
 const LEVEL_COLORS = {
   debug: '\x1b[90m', // bright black / gray
-  info: '\x1b[36m',  // cyan
-  warn: '\x1b[33m',  // yellow
+  info: '\x1b[36m', // cyan
+  warn: '\x1b[33m', // yellow
   error: '\x1b[31m', // red
 };
 const RESET = '\x1b[0m';
@@ -75,22 +75,26 @@ function buildRecord(level, message, meta) {
 
 function formatMeta(meta) {
   if (!meta || Object.keys(meta).length === 0) return '';
-  const pairs = Object.entries(meta)
-    .map(([key, value]) => {
-      const serialized = serialize(value);
-      const text =
-        serialized === undefined ? 'undefined'
-        : serialized === null ? 'null'
-        : typeof serialized === 'string' ? serialized
-        : JSON.stringify(serialized);
-      return `${key}=${text}`;
-    });
+  const pairs = Object.entries(meta).map(([key, value]) => {
+    const serialized = serialize(value);
+    const text =
+      serialized === undefined
+        ? 'undefined'
+        : serialized === null
+          ? 'null'
+          : typeof serialized === 'string'
+            ? serialized
+            : JSON.stringify(serialized);
+    return `${key}=${text}`;
+  });
   return ' ' + pairs.join(' ');
 }
 
 function renderRecord(record) {
   const timestamp = forceJson ? record.timestamp : `[${record.timestamp}]`;
-  const levelLabel = forceJson ? record.level : padLeft(LEVEL_LABELS[record.level] || record.level, 5);
+  const levelLabel = forceJson
+    ? record.level
+    : padLeft(LEVEL_LABELS[record.level] || record.level, 5);
   const message = record.message;
   const meta = record.meta ? formatMeta(record.meta) : '';
 
@@ -98,7 +102,7 @@ function renderRecord(record) {
     return JSON.stringify(record, (key, value) => serialize(value));
   }
 
-  const color = isTty ? (LEVEL_COLORS[record.level] || '') : '';
+  const color = isTty ? LEVEL_COLORS[record.level] || '' : '';
   const reset = isTty ? RESET : '';
   return `${color}${timestamp} ${levelLabel}${reset} ${message}${meta}`;
 }

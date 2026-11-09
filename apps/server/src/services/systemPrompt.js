@@ -2,31 +2,37 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 export const SYSTEM_PROMPT_VERSION = '7.0.0';
-const SYSTEM_PROMPT_PATH = fileURLToPath(new URL('../../prompts/system-prompt.md', import.meta.url));
+const SYSTEM_PROMPT_PATH = fileURLToPath(
+  new URL('../../prompts/system-prompt.md', import.meta.url)
+);
 const SYSTEM_PROMPT_BASE = readFileSync(SYSTEM_PROMPT_PATH, 'utf8').trim();
 
 if (!SYSTEM_PROMPT_BASE) {
   throw new Error(`The Nemotron system prompt is empty: ${SYSTEM_PROMPT_PATH}`);
 }
 
-const scale = value => ({
-  1: 'very low',
-  2: 'low',
-  3: 'balanced',
-  4: 'high',
-  5: 'very high'
-}[Number(value)] || 'balanced');
+const scale = (value) =>
+  ({
+    1: 'very low',
+    2: 'low',
+    3: 'balanced',
+    4: 'high',
+    5: 'very high',
+  })[Number(value)] || 'balanced';
 
 function safePreference(value, fallback, maxLength = 80) {
   if (typeof value !== 'string') return fallback;
-  const cleaned = value.replace(/[\r\n\u0000-\u001f]/g, ' ').trim().slice(0, maxLength);
+  const cleaned = value
+    .replace(/[\r\n\u0000-\u001f]/g, ' ')
+    .trim()
+    .slice(0, maxLength);
   return cleaned || fallback;
 }
 
 export function buildSystemPrompt(user) {
   const preferences = user?.preferences || {};
   const memories = (Array.isArray(user?.memories) ? user.memories : [])
-    .map(memory => typeof memory?.text === 'string' ? memory.text.trim().slice(0, 1200) : '')
+    .map((memory) => (typeof memory?.text === 'string' ? memory.text.trim().slice(0, 1200) : ''))
     .filter(Boolean)
     .slice(0, 30);
 
@@ -39,7 +45,7 @@ export function buildSystemPrompt(user) {
     `- Emoji use: ${safePreference(preferences.emoji, 'moderate')}`,
     `- Visual answers: ${preferences.visualAnswers === false ? 'only when requested' : 'when genuinely useful'}`,
     `- Headers: ${preferences.headers === false ? 'minimize' : 'use when helpful'}`,
-    `- Lists: ${preferences.lists === false ? 'prefer prose' : 'use when useful'}`
+    `- Lists: ${preferences.lists === false ? 'prefer prose' : 'use when useful'}`,
   ].join('\n');
 
   const memoryContext = memories.length

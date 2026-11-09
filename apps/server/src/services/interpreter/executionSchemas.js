@@ -10,7 +10,7 @@ export const EXECUTION_LIMITS = Object.freeze({
   maxArtifactBytes: 10 * 1024 * 1024,
   maxArtifactFileBytes: 10 * 1024 * 1024,
   maxConcurrentPerUser: 2,
-  maxConcurrentGlobal: 8
+  maxConcurrentGlobal: 8,
 });
 
 export function validateExecutionInput(input) {
@@ -23,13 +23,22 @@ export function validateExecutionInput(input) {
     throw Object.assign(new Error('Python source code is required.'), { status: 400 });
   }
   if (Buffer.byteLength(input.code, 'utf8') > EXECUTION_LIMITS.codeBytes) {
-    log.warn('Python source exceeds size limit', { bytes: Buffer.byteLength(input.code, 'utf8'), limit: EXECUTION_LIMITS.codeBytes });
+    log.warn('Python source exceeds size limit', {
+      bytes: Buffer.byteLength(input.code, 'utf8'),
+      limit: EXECUTION_LIMITS.codeBytes,
+    });
     throw Object.assign(new Error('Python source exceeds the 64 KB limit.'), { status: 413 });
   }
   return {
     code: input.code,
-    executionId: typeof input.executionId === 'string' && input.executionId.trim() ? input.executionId.trim().slice(0, 100) : undefined,
-    chatId: typeof input.chatId === 'string' && input.chatId.trim() ? input.chatId.trim().slice(0, 100) : undefined
+    executionId:
+      typeof input.executionId === 'string' && input.executionId.trim()
+        ? input.executionId.trim().slice(0, 100)
+        : undefined,
+    chatId:
+      typeof input.chatId === 'string' && input.chatId.trim()
+        ? input.chatId.trim().slice(0, 100)
+        : undefined,
   };
 }
 
@@ -42,10 +51,23 @@ export function getVercelSandboxConfig(env = process.env) {
   const token = String(env.VERCEL_TOKEN || '').trim();
   const teamId = String(env.VERCEL_TEAM_ID || '').trim();
   const projectId = String(env.VERCEL_PROJECT_ID || '').trim();
-  const oidcAvailable = Boolean(env.VERCEL_OIDC_TOKEN) || (env.VERCEL === '1' && Boolean(env.VERCEL_ENV));
+  const oidcAvailable =
+    Boolean(env.VERCEL_OIDC_TOKEN) || (env.VERCEL === '1' && Boolean(env.VERCEL_ENV));
   const accessTokenAvailable = Boolean(token && teamId && projectId);
-  const timeoutMs = boundedInt(env, 'VERCEL_SANDBOX_TIMEOUT_MS', EXECUTION_LIMITS.maxExecutionMs, 10_000, 45 * 60 * 1000);
-  const packageInstallTimeoutMs = boundedInt(env, 'VERCEL_SANDBOX_PACKAGE_INSTALL_TIMEOUT_MS', 180_000, 10_000, 10 * 60 * 1000);
+  const timeoutMs = boundedInt(
+    env,
+    'VERCEL_SANDBOX_TIMEOUT_MS',
+    EXECUTION_LIMITS.maxExecutionMs,
+    10_000,
+    45 * 60 * 1000
+  );
+  const packageInstallTimeoutMs = boundedInt(
+    env,
+    'VERCEL_SANDBOX_PACKAGE_INSTALL_TIMEOUT_MS',
+    180_000,
+    10_000,
+    10 * 60 * 1000
+  );
   const requestedVcpus = boundedInt(env, 'VERCEL_SANDBOX_VCPUS', 1, 1, 4);
   const vcpus = requestedVcpus >= 4 ? 4 : requestedVcpus >= 2 ? 2 : 1;
   const requestedRegion = String(env.VERCEL_SANDBOX_REGION || '').trim();
@@ -61,7 +83,11 @@ export function getVercelSandboxConfig(env = process.env) {
     vcpus,
     region: /^[a-z]{3}\d$/.test(requestedRegion) ? requestedRegion : undefined,
     image,
-    snapshotExpirationMs: boundedInt(env, 'VERCEL_SANDBOX_SNAPSHOT_TTL_DAYS', 7, 1, 30) * 24 * 60 * 60 * 1000,
-    networkMode: String(env.VERCEL_SANDBOX_NETWORK_MODE || 'public').toLowerCase() === 'deny-all' ? 'deny-all' : 'public'
+    snapshotExpirationMs:
+      boundedInt(env, 'VERCEL_SANDBOX_SNAPSHOT_TTL_DAYS', 7, 1, 30) * 24 * 60 * 60 * 1000,
+    networkMode:
+      String(env.VERCEL_SANDBOX_NETWORK_MODE || 'public').toLowerCase() === 'deny-all'
+        ? 'deny-all'
+        : 'public',
   };
 }

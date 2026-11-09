@@ -1,12 +1,6 @@
-import React, {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   AlertCircle,
   ArrowDown,
@@ -50,15 +44,15 @@ import {
   ChevronRight,
   Image as ImageIcon,
   ListChecks,
-} from "lucide-react";
+} from 'lucide-react';
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
 const DEFAULT_PREFERENCES = {
-  baseStyle: "friendly",
-  tone: "balanced",
+  baseStyle: 'friendly',
+  tone: 'balanced',
   warmth: 3,
   enthusiasm: 3,
-  emoji: "moderate",
+  emoji: 'moderate',
   visualAnswers: true,
   headers: true,
   lists: true,
@@ -66,33 +60,33 @@ const DEFAULT_PREFERENCES = {
 const SUGGESTIONS = [
   {
     icon: Search,
-    label: "Research a topic",
+    label: 'Research a topic',
     prompt:
-      "Research the latest developments in AI coding agents. Use web search and cite reliable sources.",
+      'Research the latest developments in AI coding agents. Use web search and cite reliable sources.',
   },
   {
     icon: Code2,
-    label: "Analyze a dataset",
+    label: 'Analyze a dataset',
     prompt:
-      "I want to analyze a CSV dataset, calculate useful statistics, identify patterns, and create clear visualizations. Ask me to attach the CSV.",
+      'I want to analyze a CSV dataset, calculate useful statistics, identify patterns, and create clear visualizations. Ask me to attach the CSV.',
   },
   {
     icon: Code2,
-    label: "Build something",
+    label: 'Build something',
     prompt:
-      "Help me design and implement a production-ready feature. Start by clarifying requirements and proposing an implementation plan.",
+      'Help me design and implement a production-ready feature. Start by clarifying requirements and proposing an implementation plan.',
   },
   {
     icon: Github,
-    label: "Explore GitHub",
+    label: 'Explore GitHub',
     prompt:
-      "Find popular open-source JavaScript repositories for building agentic applications. Compare their features and licenses.",
+      'Find popular open-source JavaScript repositories for building agentic applications. Compare their features and licenses.',
   },
   {
     icon: Sparkles,
-    label: "Think through an idea",
+    label: 'Think through an idea',
     prompt:
-      "Help me evaluate a product idea. Analyze feasibility, architecture, risks, and an MVP roadmap.",
+      'Help me evaluate a product idea. Analyze feasibility, architecture, risks, and an MVP roadmap.',
   },
 ];
 function api(path) {
@@ -100,11 +94,11 @@ function api(path) {
 }
 async function request(path, options = {}) {
   const response = await fetch(api(path), {
-    credentials: "include",
-    cache: "no-store",
+    credentials: 'include',
+    cache: 'no-store',
     ...options,
     headers: {
-      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
       ...(options.headers || {}),
     },
   });
@@ -115,37 +109,35 @@ async function request(path, options = {}) {
     } catch {
       data.error = await response.text();
     }
-    const error = new Error(
-      data.error || `Request failed (${response.status})`
-    );
+    const error = new Error(data.error || `Request failed (${response.status})`);
     error.status = response.status;
     throw error;
   }
   return response;
 }
 function textOf(content) {
-  return typeof content === "string"
+  return typeof content === 'string'
     ? content
     : Array.isArray(content)
-    ? content
-        .filter((p) => p.type === "text")
-        .map((p) => p.text)
-        .join("\n")
-    : "";
+      ? content
+          .filter((p) => p.type === 'text')
+          .map((p) => p.text)
+          .join('\n')
+      : '';
 }
 function dateLabel(value) {
   return value
     ? new Intl.DateTimeFormat(undefined, {
-        month: "short",
-        day: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
       }).format(new Date(value))
-    : "";
+    : '';
 }
 function titleFallback(text) {
-  const value = text.replace(/\s+/g, " ").trim();
-  return value.length > 58 ? `${value.slice(0, 58)}…` : value || "New chat";
+  const value = text.replace(/\s+/g, ' ').trim();
+  return value.length > 58 ? `${value.slice(0, 58)}…` : value || 'New chat';
 }
 function readFile(file) {
   return new Promise((resolve, reject) => {
@@ -164,31 +156,29 @@ function loadImage(src) {
   });
 }
 async function prepareImage(file) {
-  if (file.size > 12 * 1024 * 1024)
-    throw new Error(`${file.name} exceeds the 12 MB image limit.`);
+  if (file.size > 12 * 1024 * 1024) throw new Error(`${file.name} exceeds the 12 MB image limit.`);
   const src = await readFile(file),
     img = await loadImage(src),
     scale = Math.min(1, 1600 / Math.max(img.width, img.height));
-  const canvas = document.createElement("canvas");
+  const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(img.width * scale));
   canvas.height = Math.max(1, Math.round(img.height * scale));
-  canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+  canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
   return {
     name: file.name,
-    sandboxName: file.name.replace(/\.[^.]+$/, "") + ".jpg",
-    type: file.type || "image/jpeg",
-    sandboxMimeType: "image/jpeg",
-    dataUrl: canvas.toDataURL("image/jpeg", 0.84),
-    preview: canvas.toDataURL("image/jpeg", 0.5),
+    sandboxName: file.name.replace(/\.[^.]+$/, '') + '.jpg',
+    type: file.type || 'image/jpeg',
+    sandboxMimeType: 'image/jpeg',
+    dataUrl: canvas.toDataURL('image/jpeg', 0.84),
+    preview: canvas.toDataURL('image/jpeg', 0.5),
   };
 }
 async function prepareVideo(file) {
-  if (file.size > 45 * 1024 * 1024)
-    throw new Error(`${file.name} exceeds the 45 MB video limit.`);
+  if (file.size > 45 * 1024 * 1024) throw new Error(`${file.name} exceeds the 45 MB video limit.`);
   const url = URL.createObjectURL(file);
   try {
-    const video = document.createElement("video");
-    video.preload = "auto";
+    const video = document.createElement('video');
+    video.preload = 'auto';
     video.muted = true;
     video.src = url;
     await new Promise((resolve, reject) => {
@@ -196,14 +186,13 @@ async function prepareVideo(file) {
       video.onerror = reject;
     });
     const duration = video.duration;
-    if (!duration || !Number.isFinite(duration))
-      throw new Error(`Cannot decode ${file.name}.`);
+    if (!duration || !Number.isFinite(duration)) throw new Error(`Cannot decode ${file.name}.`);
     const count = Math.min(6, Math.max(2, Math.ceil(duration / 15))),
-      canvas = document.createElement("canvas");
+      canvas = document.createElement('canvas');
     const scale = Math.min(1, 1280 / (video.videoWidth || 1280));
     canvas.width = Math.max(1, Math.round((video.videoWidth || 1280) * scale));
     canvas.height = Math.max(1, Math.round((video.videoHeight || 720) * scale));
-    const ctx = canvas.getContext("2d"),
+    const ctx = canvas.getContext('2d'),
       frames = [];
     for (let i = 0; i < count; i++) {
       const time = Math.min(duration - 0.05, (duration * i) / (count - 1));
@@ -213,7 +202,7 @@ async function prepareVideo(file) {
         video.onerror = reject;
       });
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      frames.push({ time, dataUrl: canvas.toDataURL("image/jpeg", 0.78) });
+      frames.push({ time, dataUrl: canvas.toDataURL('image/jpeg', 0.78) });
     }
     return { name: file.name, type: file.type, frames, duration };
   } finally {
@@ -221,73 +210,73 @@ async function prepareVideo(file) {
   }
 }
 async function prepareFiles(files) {
-  if (files.length > 6) throw new Error("Attach up to 6 files per message.");
+  if (files.length > 6) throw new Error('Attach up to 6 files per message.');
   const out = [];
   const supported = new Set([
-    "application/pdf",
-    "text/plain",
-    "text/markdown",
-    "text/csv",
-    "text/tab-separated-values",
-    "application/json",
-    "application/xml",
-    "application/zip",
-    "application/vnd.ms-excel",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "application/msword",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    "text/x-python",
-    "text/javascript",
-    "application/javascript",
-    "text/html",
-    "text/css",
-    "application/sql",
-    "text/x-sql",
-    "application/yaml",
-    "text/yaml",
-    "application/toml",
-    "text/x-shellscript",
-    "application/x-sh",
+    'application/pdf',
+    'text/plain',
+    'text/markdown',
+    'text/csv',
+    'text/tab-separated-values',
+    'application/json',
+    'application/xml',
+    'application/zip',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'text/x-python',
+    'text/javascript',
+    'application/javascript',
+    'text/html',
+    'text/css',
+    'application/sql',
+    'text/x-sql',
+    'application/yaml',
+    'text/yaml',
+    'application/toml',
+    'text/x-shellscript',
+    'application/x-sh',
   ]);
   const extensionMime = {
-    pdf: "application/pdf",
-    txt: "text/plain",
-    md: "text/markdown",
-    csv: "text/csv",
-    tsv: "text/tab-separated-values",
-    json: "application/json",
-    xml: "application/xml",
-    zip: "application/zip",
-    xls: "application/vnd.ms-excel",
-    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    doc: "application/msword",
-    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    py: "text/x-python",
-    js: "text/javascript",
-    jsx: "text/javascript",
-    mjs: "text/javascript",
-    cjs: "text/javascript",
-    ts: "text/javascript",
-    tsx: "text/javascript",
-    html: "text/html",
-    htm: "text/html",
-    css: "text/css",
-    sql: "application/sql",
-    yml: "application/yaml",
-    yaml: "application/yaml",
-    toml: "application/toml",
-    ini: "text/plain",
-    cfg: "text/plain",
-    conf: "text/plain",
-    log: "text/plain",
-    sh: "text/x-shellscript",
-    env: "text/plain",
+    pdf: 'application/pdf',
+    txt: 'text/plain',
+    md: 'text/markdown',
+    csv: 'text/csv',
+    tsv: 'text/tab-separated-values',
+    json: 'application/json',
+    xml: 'application/xml',
+    zip: 'application/zip',
+    xls: 'application/vnd.ms-excel',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    py: 'text/x-python',
+    js: 'text/javascript',
+    jsx: 'text/javascript',
+    mjs: 'text/javascript',
+    cjs: 'text/javascript',
+    ts: 'text/javascript',
+    tsx: 'text/javascript',
+    html: 'text/html',
+    htm: 'text/html',
+    css: 'text/css',
+    sql: 'application/sql',
+    yml: 'application/yaml',
+    yaml: 'application/yaml',
+    toml: 'application/toml',
+    ini: 'text/plain',
+    cfg: 'text/plain',
+    conf: 'text/plain',
+    log: 'text/plain',
+    sh: 'text/x-shellscript',
+    env: 'text/plain',
   };
   for (const file of files) {
-    if (file.type.startsWith("image/")) out.push(await prepareImage(file));
-    else if (file.type.startsWith("video/")) out.push(await prepareVideo(file));
+    if (file.type.startsWith('image/')) out.push(await prepareImage(file));
+    else if (file.type.startsWith('video/')) out.push(await prepareVideo(file));
     else if (
       supported.has(file.type) ||
       /\.(pdf|txt|md|csv|tsv|json|xml|zip|xlsx?|docx?|pptx|py|jsx?|mjs|cjs|tsx?|html?|css|sql|ya?ml|toml|ini|cfg|conf|log|sh|env)$/i.test(
@@ -296,33 +285,27 @@ async function prepareFiles(files) {
     ) {
       if (file.size > 8 * 1024 * 1024)
         throw new Error(`${file.name} exceeds the 8 MB document limit.`);
-      const ext = file.name.split(".").pop().toLowerCase();
-      const mimeType = supported.has(file.type)
-        ? file.type
-        : extensionMime[ext] || file.type;
-      if (!supported.has(mimeType))
-        throw new Error(`Unsupported file type: ${file.name}`);
+      const ext = file.name.split('.').pop().toLowerCase();
+      const mimeType = supported.has(file.type) ? file.type : extensionMime[ext] || file.type;
+      if (!supported.has(mimeType)) throw new Error(`Unsupported file type: ${file.name}`);
       const rawDataUrl = await readFile(file);
-      const dataUrl = rawDataUrl.replace(
-        /^data:[^;]+;base64,/,
-        `data:${mimeType};base64,`
-      );
+      const dataUrl = rawDataUrl.replace(/^data:[^;]+;base64,/, `data:${mimeType};base64,`);
       out.push({
         name: file.name,
         type: mimeType,
         sandboxMimeType: mimeType,
         dataUrl,
-        kind: "document",
+        kind: 'document',
       });
     } else throw new Error(`Unsupported file type: ${file.name}`);
   }
   return out;
 }
 
-function CodeBlock({ children, className = "" }) {
+function CodeBlock({ children, className = '' }) {
   const [copied, setCopied] = useState(false);
-  const code = String(children ?? "").replace(/\n$/, "");
-  const language = className.match(/language-([\w-]+)/)?.[1] || "code";
+  const code = String(children ?? '').replace(/\n$/, '');
+  const language = className.match(/language-([\w-]+)/)?.[1] || 'code';
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(code);
@@ -338,7 +321,7 @@ function CodeBlock({ children, className = "" }) {
         <span>{language}</span>
         <button type="button" onClick={copy}>
           <Copy size={12} />
-          {copied ? "Copied" : "Copy code"}
+          {copied ? 'Copied' : 'Copy code'}
         </button>
       </div>
       <pre className="code-block">
@@ -355,12 +338,12 @@ function Markdown({ content }) {
         components={{
           a: ({ node, ...p }) => <a {...p} target="_blank" rel="noreferrer" />,
           pre: ({ node, children }) => (
-            <CodeBlock className={children?.props?.className || ""}>
+            <CodeBlock className={children?.props?.className || ''}>
               {children?.props?.children ?? children}
             </CodeBlock>
           ),
           code: ({ node, className, children, ...p }) => (
-            <code className={className || "inline-code"} {...p}>
+            <code className={className || 'inline-code'} {...p}>
               {children}
             </code>
           ),
@@ -371,44 +354,41 @@ function Markdown({ content }) {
           ),
         }}
       >
-        {content || ""}
+        {content || ''}
       </ReactMarkdown>
     </div>
   );
 }
 function PluginIcon({ name, size = 15 }) {
   const Icon =
-    name === "execute_python"
+    name === 'execute_python'
       ? Code2
-      : name === "generate_image"
-      ? ImageIcon
-      : name.includes("task_plan") || name.includes("task_status")
-      ? ListChecks
-      : name.includes("memory")
-      ? Brain
-      : Wrench;
+      : name === 'generate_image'
+        ? ImageIcon
+        : name.includes('task_plan') || name.includes('task_status')
+          ? ListChecks
+          : name.includes('memory')
+            ? Brain
+            : Wrench;
   return <Icon size={size} />;
 }
 function artifactPreviewKind(file) {
-  const mime = String(file?.mimeType || "").toLowerCase();
-  if (mime.startsWith("image/") && mime !== "image/svg+xml") return "image";
-  if (mime === "application/pdf") return "pdf";
+  const mime = String(file?.mimeType || '').toLowerCase();
+  if (mime.startsWith('image/') && mime !== 'image/svg+xml') return 'image';
+  if (mime === 'application/pdf') return 'pdf';
   if (
-    mime.startsWith("text/") ||
-    ["application/json", "application/xml", "application/javascript"].includes(
-      mime
-    )
+    mime.startsWith('text/') ||
+    ['application/json', 'application/xml', 'application/javascript'].includes(mime)
   )
-    return "text";
-  return "none";
+    return 'text';
+  return 'none';
 }
 async function fetchArtifactBlob(file) {
   const artifactPath =
-    file.downloadUrl ||
-    `/api/interpreter/artifacts/${encodeURIComponent(file.id)}`;
+    file.downloadUrl || `/api/interpreter/artifacts/${encodeURIComponent(file.id)}`;
   const response = await fetch(api(artifactPath), {
-    credentials: "include",
-    cache: "no-store",
+    credentials: 'include',
+    cache: 'no-store',
   });
   if (!response.ok) {
     let message = `Could not retrieve ${file.name} (${response.status}).`;
@@ -436,9 +416,9 @@ async function fetchArtifactBlob(file) {
 async function downloadArtifact(file) {
   const blob = await fetchArtifactBlob(file);
   const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
+  const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = file.name || "generated-file";
+  anchor.download = file.name || 'generated-file';
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
@@ -447,34 +427,33 @@ async function downloadArtifact(file) {
 function ArtifactPreview({ file, expanded = false }) {
   const [state, setState] = useState({
     loading: true,
-    error: "",
-    text: "",
-    url: "",
+    error: '',
+    text: '',
+    url: '',
   });
   const kind = artifactPreviewKind(file);
   useEffect(() => {
     let cancelled = false;
-    let objectUrl = "";
-    setState({ loading: true, error: "", text: "", url: "" });
-    if (kind === "none") {
-      setState({ loading: false, error: "", text: "", url: "" });
+    let objectUrl = '';
+    setState({ loading: true, error: '', text: '', url: '' });
+    if (kind === 'none') {
+      setState({ loading: false, error: '', text: '', url: '' });
       return () => {};
     }
     fetchArtifactBlob(file)
       .then(async (blob) => {
-        if (kind === "text") {
+        if (kind === 'text') {
           const text = await blob.text();
           if (!cancelled)
             setState({
               loading: false,
-              error: "",
+              error: '',
               text: text.slice(0, 12000),
-              url: "",
+              url: '',
             });
         } else {
           objectUrl = URL.createObjectURL(blob);
-          if (!cancelled)
-            setState({ loading: false, error: "", text: "", url: objectUrl });
+          if (!cancelled) setState({ loading: false, error: '', text: '', url: objectUrl });
           else URL.revokeObjectURL(objectUrl);
         }
       })
@@ -482,9 +461,9 @@ function ArtifactPreview({ file, expanded = false }) {
         if (!cancelled)
           setState({
             loading: false,
-            error: error.message || "Preview could not be loaded.",
-            text: "",
-            url: "",
+            error: error.message || 'Preview could not be loaded.',
+            text: '',
+            url: '',
           });
       });
     return () => {
@@ -492,11 +471,10 @@ function ArtifactPreview({ file, expanded = false }) {
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [file.id, file.downloadUrl, file.size, kind]);
-  if (kind === "none")
+  if (kind === 'none')
     return (
       <div className="artifact-preview-unavailable">
-        Preview isn't available for this format. Download the original file to
-        open it.
+        Preview isn't available for this format. Download the original file to open it.
       </div>
     );
   if (state.loading)
@@ -512,42 +490,40 @@ function ArtifactPreview({ file, expanded = false }) {
         {state.error}
       </div>
     );
-  if (kind === "image")
+  if (kind === 'image')
     return (
-      <div className={`artifact-preview-image ${expanded ? "expanded" : ""}`}>
+      <div className={`artifact-preview-image ${expanded ? 'expanded' : ''}`}>
         <img src={state.url} alt={file.name} />
       </div>
     );
-  if (kind === "pdf")
+  if (kind === 'pdf')
     return (
       <iframe
-        className={`artifact-preview-pdf ${expanded ? "expanded" : ""}`}
+        className={`artifact-preview-pdf ${expanded ? 'expanded' : ''}`}
         src={state.url}
         title={`Preview of ${file.name}`}
       />
     );
   return (
-    <pre className={`artifact-preview-text ${expanded ? "expanded" : ""}`}>
+    <pre className={`artifact-preview-text ${expanded ? 'expanded' : ''}`}>
       {state.text}
-      {state.text.length >= 12000
-        ? "\n… preview truncated; download the complete file."
-        : ""}
+      {state.text.length >= 12000 ? '\n… preview truncated; download the complete file.' : ''}
     </pre>
   );
 }
 function ArtifactCard({ file, expanded = false, onPreview }) {
   const Icon = artifactIcon(file);
-  const [downloadError, setDownloadError] = useState("");
+  const [downloadError, setDownloadError] = useState('');
   const onDownload = async () => {
-    setDownloadError("");
+    setDownloadError('');
     try {
       await downloadArtifact(file);
     } catch (error) {
-      setDownloadError(error.message || "Download failed.");
+      setDownloadError(error.message || 'Download failed.');
     }
   };
   return (
-    <div className={`artifact-card ${expanded ? "expanded" : ""}`}>
+    <div className={`artifact-card ${expanded ? 'expanded' : ''}`}>
       <div className="artifact-card-head">
         <div className="library-file-icon">
           <Icon size={16} />
@@ -555,25 +531,17 @@ function ArtifactCard({ file, expanded = false, onPreview }) {
         <div className="artifact-card-meta">
           <b title={file.name}>{file.name}</b>
           <small>
-            {formatBytes(file.size)} · {file.mimeType || "file"}
-            {file.createdAt ? ` · ${dateLabel(file.createdAt)}` : ""}
+            {formatBytes(file.size)} · {file.mimeType || 'file'}
+            {file.createdAt ? ` · ${dateLabel(file.createdAt)}` : ''}
           </small>
         </div>
         <div className="artifact-card-actions">
           {onPreview && (
-            <button
-              className="library-action"
-              onClick={() => onPreview(file)}
-              title="Open preview"
-            >
+            <button className="library-action" onClick={() => onPreview(file)} title="Open preview">
               <Eye size={14} />
             </button>
           )}
-          <button
-            className="library-action"
-            onClick={onDownload}
-            title="Download verified file"
-          >
+          <button className="library-action" onClick={onDownload} title="Download verified file">
             <Download size={14} />
           </button>
         </div>
@@ -597,21 +565,18 @@ function ToolActivity({ events = [] }) {
       </summary>
       <div className="tool-list">
         {events.map((event, i) => (
-          <div
-            className={`tool-row ${event.status}`}
-            key={`${event.name}-${i}`}
-          >
+          <div className={`tool-row ${event.status}`} key={`${event.name}-${i}`}>
             <div className="tool-row-title">
               <PluginIcon name={event.name} />
-              <b>{event.name.replaceAll("_", " ")}</b>
+              <b>{event.name.replaceAll('_', ' ')}</b>
               <span>
-                {event.status === "complete"
-                  ? "Completed"
-                  : event.status === "error"
-                  ? "Failed"
-                  : event.status === "cancelled"
-                  ? "Cancelled"
-                  : "Running"}
+                {event.status === 'complete'
+                  ? 'Completed'
+                  : event.status === 'error'
+                    ? 'Failed'
+                    : event.status === 'cancelled'
+                      ? 'Cancelled'
+                      : 'Running'}
               </span>
             </div>
             {event.arguments && (
@@ -623,9 +588,7 @@ function ToolActivity({ events = [] }) {
             {event.result !== undefined && (
               <details className="tool-detail">
                 <summary>Result</summary>
-                <pre>
-                  {JSON.stringify(event.result, null, 2).slice(0, 5000)}
-                </pre>
+                <pre>{JSON.stringify(event.result, null, 2).slice(0, 5000)}</pre>
               </details>
             )}
             {event.error && <p className="tool-error">{event.error}</p>}
@@ -638,23 +601,21 @@ function ToolActivity({ events = [] }) {
 function AgentTimeline({ plan, events = [] }) {
   if (!plan && !events.length) return null;
   const tasks = plan?.tasks || [];
-  const completed = tasks.filter((task) =>
-    ["completed", "skipped"].includes(task.status)
-  ).length;
+  const completed = tasks.filter((task) => ['completed', 'skipped'].includes(task.status)).length;
   const statusLabel = (status) =>
     ({
-      pending: "Queued",
-      running: "In progress",
-      completed: "Completed",
-      failed: "Needs attention",
-      skipped: "Skipped",
-    }[status] || "Queued");
+      pending: 'Queued',
+      running: 'In progress',
+      completed: 'Completed',
+      failed: 'Needs attention',
+      skipped: 'Skipped',
+    })[status] || 'Queued';
   const iconFor = (status) =>
-    status === "completed" ? (
+    status === 'completed' ? (
       <Check size={13} />
-    ) : status === "failed" ? (
+    ) : status === 'failed' ? (
       <AlertCircle size={13} />
-    ) : status === "running" ? (
+    ) : status === 'running' ? (
       <LoaderCircle size={13} className="spin" />
     ) : (
       <span className="agent-task-dot" />
@@ -663,20 +624,13 @@ function AgentTimeline({ plan, events = [] }) {
     <details
       className="agent-timeline"
       open={
-        Boolean(plan && tasks.some((task) => task.status === "running")) ||
-        events.some(
-          (event) =>
-            event.type === "self_correction" || event.type === "tool_started"
-        )
+        Boolean(plan && tasks.some((task) => task.status === 'running')) ||
+        events.some((event) => event.type === 'self_correction' || event.type === 'tool_started')
       }
     >
       <summary>
-        <Sparkles size={13} /> Agent workflow{" "}
-        <span>
-          {plan
-            ? `${completed}/${tasks.length} tasks`
-            : `${events.length} events`}
-        </span>
+        <Sparkles size={13} /> Agent workflow{' '}
+        <span>{plan ? `${completed}/${tasks.length} tasks` : `${events.length} events`}</span>
       </summary>
       <div className="agent-timeline-body">
         {plan && (
@@ -684,13 +638,8 @@ function AgentTimeline({ plan, events = [] }) {
             <div className="agent-plan-objective">{plan.objective}</div>
             <ol>
               {tasks.map((task) => (
-                <li
-                  className={`agent-task ${task.status || "pending"}`}
-                  key={task.id}
-                >
-                  <span className="agent-task-icon">
-                    {iconFor(task.status)}
-                  </span>
+                <li className={`agent-task ${task.status || 'pending'}`} key={task.id}>
+                  <span className="agent-task-icon">{iconFor(task.status)}</span>
                   <span className="agent-task-copy">
                     <b>{task.title}</b>
                     {task.description && <small>{task.description}</small>}
@@ -712,23 +661,21 @@ function AgentTimeline({ plan, events = [] }) {
                 <i />
                 <span>
                   {event.message ||
-                    (event.type === "tool_started"
+                    (event.type === 'tool_started'
                       ? `Using ${event.label || event.name}`
-                      : event.type === "tool_completed"
-                      ? `${event.label || event.name} completed`
-                      : event.type === "task_updated"
-                      ? `Task ${
-                          event.task?.title || event.task?.id
-                        } — ${statusLabel(event.task?.status).toLowerCase()}`
-                      : event.type === "plan_created"
-                      ? `Created a plan with ${
-                          event.plan?.tasks?.length || 0
-                        } tasks`
-                      : event.type === "image_progress"
-                      ? `Saved image ${event.completed}/${event.total}`
-                      : event.type.replaceAll("_", " "))}
+                      : event.type === 'tool_completed'
+                        ? `${event.label || event.name} completed`
+                        : event.type === 'task_updated'
+                          ? `Task ${
+                              event.task?.title || event.task?.id
+                            } — ${statusLabel(event.task?.status).toLowerCase()}`
+                          : event.type === 'plan_created'
+                            ? `Created a plan with ${event.plan?.tasks?.length || 0} tasks`
+                            : event.type === 'image_progress'
+                              ? `Saved image ${event.completed}/${event.total}`
+                              : event.type.replaceAll('_', ' '))}
                 </span>
-                {event.status === "blocked" && <b>Stopped</b>}
+                {event.status === 'blocked' && <b>Stopped</b>}
               </div>
             ))}
           </div>
@@ -738,18 +685,10 @@ function AgentTimeline({ plan, events = [] }) {
   );
 }
 
-function Message({
-  message,
-  onCopy,
-  onEdit,
-  onBranch,
-  onShare,
-  onRegenerate,
-  onVersion,
-}) {
+function Message({ message, onCopy, onEdit, onBranch, onShare, onRegenerate, onVersion }) {
   const [editing, setEditing] = useState(false),
     [editDraft, setEditDraft] = useState(textOf(message.content));
-  const user = message.role === "user",
+  const user = message.role === 'user',
     content = textOf(message.content);
   const versions = message.versions || [];
   const activeVersion = Number.isInteger(message.activeVersion)
@@ -757,38 +696,35 @@ function Message({
     : Math.max(0, versions.length - 1);
   return (
     <article
-      className={`message ${user ? "user-message" : "assistant-message"}`}
+      className={`message ${user ? 'user-message' : 'assistant-message'}`}
       data-message-id={message.id}
     >
-      <div className={`message-avatar ${user ? "user-avatar" : ""}`}>
+      <div className={`message-avatar ${user ? 'user-avatar' : ''}`}>
         {user ? <UserRound size={15} /> : <Bot size={17} />}
       </div>
       <div className="message-main">
         <div className="message-heading">
-          <span>{user ? "You" : "Assistant"}</span>
+          <span>{user ? 'You' : 'Assistant'}</span>
           {message.createdAt && <time>{dateLabel(message.createdAt)}</time>}
         </div>
         {message.attachments?.length > 0 && (
           <div className="attachment-list">
             {message.attachments.map((f, i) => (
               <span className="attachment-pill" key={`${f.name}-${i}`}>
-                {f.type?.startsWith("video") ? (
+                {f.type?.startsWith('video') ? (
                   <Video size={13} />
-                ) : f.type?.startsWith("image") ? (
+                ) : f.type?.startsWith('image') ? (
                   <FileImage size={13} />
                 ) : (
                   <FileText size={13} />
-                )}{" "}
+                )}{' '}
                 {f.name}
               </span>
             ))}
           </div>
         )}
         {message.agentPlan || message.agentEvents?.length > 0 ? (
-          <AgentTimeline
-            plan={message.agentPlan}
-            events={message.agentEvents || []}
-          />
+          <AgentTimeline plan={message.agentPlan} events={message.agentEvents || []} />
         ) : null}
         {message.reasoning && (
           <details className="reasoning-block">
@@ -798,9 +734,7 @@ function Message({
             <div>{message.reasoning}</div>
           </details>
         )}
-        {message.toolEvents?.length > 0 && (
-          <ToolActivity events={message.toolEvents} />
-        )}
+        {message.toolEvents?.length > 0 && <ToolActivity events={message.toolEvents} />}
         {!user &&
           (() => {
             const generated = [
@@ -813,8 +747,7 @@ function Message({
             return generated.length ? (
               <section className="message-artifacts">
                 <div className="message-artifacts-title">
-                  <Files size={14} /> Generated files{" "}
-                  <span>{generated.length}</span>
+                  <Files size={14} /> Generated files <span>{generated.length}</span>
                 </div>
                 <div className="message-artifacts-grid">
                   {generated.map((file) => (
@@ -831,7 +764,7 @@ function Message({
                 <textarea
                   value={editDraft}
                   onChange={(e) => setEditDraft(e.target.value)}
-                  rows={Math.min(8, Math.max(2, editDraft.split("\n").length))}
+                  rows={Math.min(8, Math.max(2, editDraft.split('\n').length))}
                 />
                 <div>
                   <button
@@ -870,19 +803,12 @@ function Message({
             <summary>Response details</summary>
             <div>
               {message.usage.prompt_tokens != null && (
-                <span>
-                  Input {Number(message.usage.prompt_tokens).toLocaleString()}
-                </span>
+                <span>Input {Number(message.usage.prompt_tokens).toLocaleString()}</span>
               )}
               {message.usage.completion_tokens != null && (
-                <span>
-                  Output{" "}
-                  {Number(message.usage.completion_tokens).toLocaleString()}
-                </span>
+                <span>Output {Number(message.usage.completion_tokens).toLocaleString()}</span>
               )}
-              {message.durationMs != null && (
-                <span>{(message.durationMs / 1000).toFixed(1)}s</span>
-              )}
+              {message.durationMs != null && <span>{(message.durationMs / 1000).toFixed(1)}s</span>}
             </div>
           </details>
         )}
@@ -891,10 +817,7 @@ function Message({
             <button onClick={() => onShare(message)} title="Share response">
               <Share2 size={13} />
             </button>
-            <button
-              onClick={() => onRegenerate(message)}
-              title="Regenerate response"
-            >
+            <button onClick={() => onRegenerate(message)} title="Regenerate response">
               <Sparkles size={13} />
             </button>
             {content && (
@@ -902,10 +825,7 @@ function Message({
                 <Copy size={13} />
               </button>
             )}
-            <button
-              onClick={() => onBranch(message)}
-              title="Continue in new branch"
-            >
+            <button onClick={() => onBranch(message)} title="Continue in new branch">
               <GitBranch size={13} />
             </button>
             {versions.length > 1 && (
@@ -939,10 +859,7 @@ function Message({
               <PencilLine size={13} />
             </button>
             {content && (
-              <button
-                title="Copy response"
-                onClick={() => onCopy(content)}
-              >
+              <button title="Copy response" onClick={() => onCopy(content)}>
                 <Copy size={13} />
               </button>
             )}
@@ -955,11 +872,11 @@ function Message({
 
 function LoginScreen({ providers, error }) {
   const labels = {
-    google: "Continue with Google",
-    github: "Continue with GitHub",
-    discord: "Continue with Discord",
+    google: 'Continue with Google',
+    github: 'Continue with GitHub',
+    discord: 'Continue with Discord',
   };
-  const icons = { google: "G", github: "⌘", discord: "◉" };
+  const icons = { google: 'G', github: '⌘', discord: '◉' };
   return (
     <div className="login-page">
       <div className="login-card">
@@ -971,19 +888,14 @@ function LoginScreen({ providers, error }) {
           <em>your agent.</em>
         </h1>
         <p className="login-sub">
-          Sign in to access your conversations, saved memories and personal
-          preferences.
+          Sign in to access your conversations, saved memories and personal preferences.
         </p>
         {error && <div className="notice error-notice">{error}</div>}
         <div className="oauth-list">
           {Object.keys(labels).map((provider) => (
             <a
-              className={`oauth-button ${
-                providers?.[provider] ? "" : "disabled"
-              }`}
-              href={
-                providers?.[provider] ? api(`/api/auth/${provider}`) : undefined
-              }
+              className={`oauth-button ${providers?.[provider] ? '' : 'disabled'}`}
+              href={providers?.[provider] ? api(`/api/auth/${provider}`) : undefined}
               key={provider}
               onClick={(e) => !providers?.[provider] && e.preventDefault()}
             >
@@ -994,8 +906,7 @@ function LoginScreen({ providers, error }) {
           ))}
         </div>
         <p className="login-foot">
-          <ShieldCheck size={13} /> Your account data is private and tied to
-          your sign-in.
+          <ShieldCheck size={13} /> Your account data is private and tied to your sign-in.
         </p>
       </div>
     </div>
@@ -1008,15 +919,11 @@ function formatBytes(bytes = 0) {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 function artifactIcon(file) {
-  const mime = file.mimeType || "";
-  if (mime.startsWith("image/")) return FileImage;
-  if (
-    mime.includes("spreadsheet") ||
-    mime.includes("excel") ||
-    mime === "text/csv"
-  )
+  const mime = file.mimeType || '';
+  if (mime.startsWith('image/')) return FileImage;
+  if (mime.includes('spreadsheet') || mime.includes('excel') || mime === 'text/csv')
     return FileSpreadsheet;
-  if (mime.includes("zip") || mime.includes("compressed")) return FileArchive;
+  if (mime.includes('zip') || mime.includes('compressed')) return FileArchive;
   return FileText;
 }
 function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
@@ -1025,22 +932,22 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
     [totalBytes, setTotalBytes] = useState(0);
   const [quotaBytes, setQuotaBytes] = useState(50 * 1024 * 1024),
     [loading, setLoading] = useState(false),
-    [error, setError] = useState(""),
-    [search, setSearch] = useState(""),
+    [error, setError] = useState(''),
+    [search, setSearch] = useState(''),
     [previewFile, setPreviewFile] = useState(null);
   const load = useCallback(async () => {
     if (!open) return;
     setLoading(true);
-    setError("");
+    setError('');
     try {
-      const response = await request("/api/interpreter/artifacts?limit=100");
+      const response = await request('/api/interpreter/artifacts?limit=100');
       const data = await response.json();
       setFiles(data.files || []);
       setTotal(data.total || 0);
       setTotalBytes(data.totalBytes || 0);
       setQuotaBytes(data.quotaBytes || 50 * 1024 * 1024);
     } catch (err) {
-      setError(err.message || "Could not load your File Library.");
+      setError(err.message || 'Could not load your File Library.');
     } finally {
       setLoading(false);
     }
@@ -1060,30 +967,26 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
   const remove = async (file) => {
     if (!window.confirm(`Delete ${file.name} from your File Library?`)) return;
     try {
-      await request(
-        `/api/interpreter/artifacts/${encodeURIComponent(file.id)}`,
-        { method: "DELETE" }
-      );
+      await request(`/api/interpreter/artifacts/${encodeURIComponent(file.id)}`, {
+        method: 'DELETE',
+      });
       if (previewFile?.id === file.id) setPreviewFile(null);
       await load();
     } catch (err) {
-      setError(err.message || "Could not delete file.");
+      setError(err.message || 'Could not delete file.');
     }
   };
   const handleDownload = async (file) => {
-    setError("");
+    setError('');
     try {
       await downloadArtifact(file);
     } catch (err) {
-      setError(err.message || "Download failed.");
+      setError(err.message || 'Download failed.');
     }
   };
   return (
     <div className="modal-layer" onMouseDown={onClose}>
-      <section
-        className="file-library-modal"
-        onMouseDown={(e) => e.stopPropagation()}
-      >
+      <section className="file-library-modal" onMouseDown={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <div>
             <div className="eyebrow">YOUR WORKSPACE</div>
@@ -1092,11 +995,7 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
             </h2>
             <p>Files generated by Python across your conversations.</p>
           </div>
-          <button
-            className="icon-button"
-            onClick={onClose}
-            aria-label="Close File Library"
-          >
+          <button className="icon-button" onClick={onClose} aria-label="Close File Library">
             <X size={17} />
           </button>
         </div>
@@ -1109,12 +1008,8 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
             <b>{formatBytes(totalBytes)}</b>
             <span>of {formatBytes(quotaBytes)} used</span>
           </div>
-          <button
-            className="secondary-button compact"
-            onClick={load}
-            disabled={loading}
-          >
-            <RefreshCw size={12} className={loading ? "spin" : ""} /> Refresh
+          <button className="secondary-button compact" onClick={load} disabled={loading}>
+            <RefreshCw size={12} className={loading ? 'spin' : ''} /> Refresh
           </button>
         </div>
         <div className="library-search">
@@ -1146,7 +1041,7 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
                       {formatBytes(file.size)} · {dateLabel(file.createdAt)}
                       {file.relativePath && file.relativePath !== file.name
                         ? ` · ${file.relativePath}`
-                        : ""}
+                        : ''}
                     </small>
                   </div>
                   <div className="library-file-actions">
@@ -1178,21 +1073,17 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
           ) : (
             <div className="library-empty">
               <HardDrive size={24} />
-              <b>
-                {search ? "No matching files" : "Your File Library is empty"}
-              </b>
+              <b>{search ? 'No matching files' : 'Your File Library is empty'}</b>
               <span>
                 {search
-                  ? "Try another search term."
-                  : "Ask Nemotron to create a spreadsheet, PDF, chart, image or other file. Generated files will appear here."}
+                  ? 'Try another search term.'
+                  : 'Ask Nemotron to create a spreadsheet, PDF, chart, image or other file. Generated files will appear here.'}
               </span>
             </div>
           )}
         </div>
         <div className="library-footer">
-          <span>
-            Files are private to your account and remain until you delete them.
-          </span>
+          <span>Files are private to your account and remain until you delete them.</span>
           <button className="secondary-button compact" onClick={onClose}>
             Close
           </button>
@@ -1233,10 +1124,7 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
                 >
                   <Download size={13} /> Download original
                 </button>
-                <button
-                  className="secondary-button compact"
-                  onClick={() => setPreviewFile(null)}
-                >
+                <button className="secondary-button compact" onClick={() => setPreviewFile(null)}>
                   Close
                 </button>
               </div>
@@ -1262,10 +1150,7 @@ function HistoryDrawer({
   if (!open) return null;
   return (
     <div className="drawer-layer" onMouseDown={onClose}>
-      <aside
-        className="history-drawer"
-        onMouseDown={(e) => e.stopPropagation()}
-      >
+      <aside className="history-drawer" onMouseDown={(e) => e.stopPropagation()}>
         <div className="drawer-head">
           <div>
             <b>Conversations</b>
@@ -1283,41 +1168,23 @@ function HistoryDrawer({
         </button>
         <div className="history-list">
           {chats.map((chat) => (
-            <div
-              className={`history-item ${
-                chat._id === activeId ? "active" : ""
-              }`}
-              key={chat._id}
-            >
-              <button
-                className="history-select"
-                onClick={() => onSelect(chat._id)}
-              >
+            <div className={`history-item ${chat._id === activeId ? 'active' : ''}`} key={chat._id}>
+              <button className="history-select" onClick={() => onSelect(chat._id)}>
                 <MessageSquare size={15} />
                 <span>
-                  <b>{chat.title || "New chat"}</b>
+                  <b>{chat.title || 'New chat'}</b>
                   <small>{dateLabel(chat.updatedAt)}</small>
                 </span>
               </button>
-              <button
-                className="delete-chat"
-                onClick={() => onRename(chat)}
-                title="Rename"
-              >
+              <button className="delete-chat" onClick={() => onRename(chat)} title="Rename">
                 <Pencil size={13} />
               </button>
-              <button
-                className="delete-chat"
-                onClick={() => onDelete(chat._id)}
-                title="Delete"
-              >
+              <button className="delete-chat" onClick={() => onDelete(chat._id)} title="Delete">
                 <Trash2 size={14} />
               </button>
             </div>
           ))}
-          {!chats.length && (
-            <p className="empty-history">No conversations yet.</p>
-          )}
+          {!chats.length && <p className="empty-history">No conversations yet.</p>}
         </div>
       </aside>
     </div>
@@ -1341,44 +1208,41 @@ function PreferencesDialog({
   revokeShare,
   providers,
 }) {
-  const [tab, setTab] = useState("profile"),
-    [draft, setDraft] = useState(""),
+  const [tab, setTab] = useState('profile'),
+    [draft, setDraft] = useState(''),
     [editing, setEditing] = useState(null),
-    [displayName, setDisplayName] = useState(user?.name || ""),
-    [username, setUsername] = useState(user?.username || ""),
-    [usernameState, setUsernameState] = useState("idle"),
-    [profileError, setProfileError] = useState("");
+    [displayName, setDisplayName] = useState(user?.name || ''),
+    [username, setUsername] = useState(user?.username || ''),
+    [usernameState, setUsernameState] = useState('idle'),
+    [profileError, setProfileError] = useState('');
   const usernameValid = /^[a-z0-9_]{3,24}$/.test(username);
   useEffect(() => {
     if (open) {
-      setTab("profile");
+      setTab('profile');
       loadShares();
-      setDraft("");
+      setDraft('');
       setEditing(null);
-      setDisplayName(user?.name || "");
-      setUsername(user?.username || "");
-      setProfileError("");
+      setDisplayName(user?.name || '');
+      setUsername(user?.username || '');
+      setProfileError('');
     }
   }, [open, user?.name, user?.username]);
   useEffect(() => {
     if (!open || !username || username === user?.username) {
-      setUsernameState("idle");
+      setUsernameState('idle');
       return;
     }
     let cancelled = false;
-    setUsernameState("checking");
+    setUsernameState('checking');
     const timer = setTimeout(async () => {
       try {
         const response = await request(
-          `/api/account/profile/username-availability?username=${encodeURIComponent(
-            username
-          )}`
+          `/api/account/profile/username-availability?username=${encodeURIComponent(username)}`
         );
         const data = await response.json();
-        if (!cancelled)
-          setUsernameState(data.available ? "available" : "taken");
+        if (!cancelled) setUsernameState(data.available ? 'available' : 'taken');
       } catch {
-        if (!cancelled) setUsernameState("idle");
+        if (!cancelled) setUsernameState('idle');
       }
     }, 350);
     return () => {
@@ -1387,21 +1251,17 @@ function PreferencesDialog({
     };
   }, [username, open, user?.username]);
   if (!open) return null;
-  const update = (key, value) =>
-    setPreferences((p) => ({ ...p, [key]: value }));
+  const update = (key, value) => setPreferences((p) => ({ ...p, [key]: value }));
   const saveMemory = async () => {
     if (!draft.trim()) return;
     if (editing) await editMemory(editing, draft.trim());
     else await addMemory(draft.trim());
-    setDraft("");
+    setDraft('');
     setEditing(null);
   };
   return (
     <div className="modal-layer" onMouseDown={onClose}>
-      <section
-        className="preferences-modal"
-        onMouseDown={(e) => e.stopPropagation()}
-      >
+      <section className="preferences-modal" onMouseDown={(e) => e.stopPropagation()}>
         <header className="modal-head">
           <div>
             <div className="eyebrow">YOUR ACCOUNT</div>
@@ -1417,7 +1277,7 @@ function PreferencesDialog({
             <img
               src={user.avatar}
               onError={(e) => {
-                e.currentTarget.style.display = "none";
+                e.currentTarget.style.display = 'none';
               }}
               alt=""
             />
@@ -1427,7 +1287,7 @@ function PreferencesDialog({
             </span>
           )}
           <div>
-            <b>{user?.name || "Account"}</b>
+            <b>{user?.name || 'Account'}</b>
             <small>{user?.email || user?.provider}</small>
           </div>
           <button className="secondary-button compact" onClick={logout}>
@@ -1435,35 +1295,32 @@ function PreferencesDialog({
           </button>
         </div>
         <div className="tab-row">
-          <button
-            className={tab === "profile" ? "selected" : ""}
-            onClick={() => setTab("profile")}
-          >
+          <button className={tab === 'profile' ? 'selected' : ''} onClick={() => setTab('profile')}>
             <UserRound size={14} /> Profile
           </button>
           <button
-            className={tab === "personalization" ? "selected" : ""}
-            onClick={() => setTab("personalization")}
+            className={tab === 'personalization' ? 'selected' : ''}
+            onClick={() => setTab('personalization')}
           >
             <SlidersHorizontal size={14} /> Personalization
           </button>
           <button
-            className={tab === "memories" ? "selected" : ""}
-            onClick={() => setTab("memories")}
+            className={tab === 'memories' ? 'selected' : ''}
+            onClick={() => setTab('memories')}
           >
             <Brain size={14} /> Manage memory <span>{memories.length}</span>
           </button>
           <button
-            className={tab === "shares" ? "selected" : ""}
+            className={tab === 'shares' ? 'selected' : ''}
             onClick={() => {
-              setTab("shares");
+              setTab('shares');
               loadShares();
             }}
           >
             <Share2 size={14} /> Shared links <span>{shares.length}</span>
           </button>
         </div>
-        {tab === "shares" ? (
+        {tab === 'shares' ? (
           <div className="shared-links">
             {shares.map((share) => (
               <div key={share.shareId}>
@@ -1471,32 +1328,22 @@ function PreferencesDialog({
                   <b>{share.title}</b>
                   <small>{dateLabel(share.createdAt)}</small>
                 </span>
-                <a
-                  href={`/share/${share.shareId}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
+                <a href={`/share/${share.shareId}`} target="_blank" rel="noreferrer">
                   Open
                 </a>
                 <button
                   onClick={() =>
-                    navigator.clipboard.writeText(
-                      `${location.origin}/share/${share.shareId}`
-                    )
+                    navigator.clipboard.writeText(`${location.origin}/share/${share.shareId}`)
                   }
                 >
                   Copy link
                 </button>
-                <button onClick={() => revokeShare(share.shareId)}>
-                  Revoke
-                </button>
+                <button onClick={() => revokeShare(share.shareId)}>Revoke</button>
               </div>
             ))}
-            {!shares.length && (
-              <p className="empty-history">No active shared links.</p>
-            )}
+            {!shares.length && <p className="empty-history">No active shared links.</p>}
           </div>
-        ) : tab === "profile" ? (
+        ) : tab === 'profile' ? (
           <div className="profile-settings">
             <label>
               Display name
@@ -1513,29 +1360,21 @@ function PreferencesDialog({
                 maxLength={24}
                 onChange={(e) => {
                   setUsername(e.target.value.toLowerCase());
-                  setUsernameState("checking");
+                  setUsernameState('checking');
                 }}
               />
             </label>
-            <small
-              className={
-                usernameState === "taken" ? "field-error" : "field-hint"
-              }
-            >
-              {usernameState === "available"
-                ? "Username available"
-                : usernameState === "taken"
-                ? "Username unavailable"
-                : "3–24 letters, numbers or underscores"}
+            <small className={usernameState === 'taken' ? 'field-error' : 'field-hint'}>
+              {usernameState === 'available'
+                ? 'Username available'
+                : usernameState === 'taken'
+                  ? 'Username unavailable'
+                  : '3–24 letters, numbers or underscores'}
             </small>
             {profileError && <p className="field-error">{profileError}</p>}
             <button
               className="primary-button"
-              disabled={
-                !usernameValid ||
-                usernameState === "checking" ||
-                usernameState === "taken"
-              }
+              disabled={!usernameValid || usernameState === 'checking' || usernameState === 'taken'}
               onClick={async () => {
                 try {
                   const updated = await saveProfile({
@@ -1544,7 +1383,7 @@ function PreferencesDialog({
                   });
                   setDisplayName(updated.name);
                   setUsername(updated.username);
-                  setProfileError("");
+                  setProfileError('');
                 } catch (e) {
                   setProfileError(e.message);
                 }
@@ -1554,10 +1393,8 @@ function PreferencesDialog({
             </button>
             <div className="linked-providers">
               <b>Linked sign-in providers</b>
-              {["google", "github", "discord"].map((provider) =>
-                user?.linkedAccounts?.some(
-                  (item) => item.provider === provider
-                ) ? (
+              {['google', 'github', 'discord'].map((provider) =>
+                user?.linkedAccounts?.some((item) => item.provider === provider) ? (
                   <span key={provider} className="provider-linked">
                     ✓ {provider} linked
                   </span>
@@ -1573,13 +1410,13 @@ function PreferencesDialog({
               )}
             </div>
           </div>
-        ) : tab === "personalization" ? (
+        ) : tab === 'personalization' ? (
           <div className="preference-grid">
             <label>
               Base style
               <select
                 value={preferences.baseStyle}
-                onChange={(e) => update("baseStyle", e.target.value)}
+                onChange={(e) => update('baseStyle', e.target.value)}
               >
                 <option value="friendly">Friendly</option>
                 <option value="professional">Professional</option>
@@ -1591,10 +1428,7 @@ function PreferencesDialog({
             </label>
             <label>
               Base tone
-              <select
-                value={preferences.tone}
-                onChange={(e) => update("tone", e.target.value)}
-              >
+              <select value={preferences.tone} onChange={(e) => update('tone', e.target.value)}>
                 <option value="balanced">Balanced</option>
                 <option value="casual">Casual</option>
                 <option value="formal">Formal</option>
@@ -1610,7 +1444,7 @@ function PreferencesDialog({
                 min="1"
                 max="5"
                 value={preferences.warmth}
-                onChange={(e) => update("warmth", Number(e.target.value))}
+                onChange={(e) => update('warmth', Number(e.target.value))}
               />
             </label>
             <label>
@@ -1620,15 +1454,12 @@ function PreferencesDialog({
                 min="1"
                 max="5"
                 value={preferences.enthusiasm}
-                onChange={(e) => update("enthusiasm", Number(e.target.value))}
+                onChange={(e) => update('enthusiasm', Number(e.target.value))}
               />
             </label>
             <label>
               Emoji usage
-              <select
-                value={preferences.emoji}
-                onChange={(e) => update("emoji", e.target.value)}
-              >
+              <select value={preferences.emoji} onChange={(e) => update('emoji', e.target.value)}>
                 <option value="none">None</option>
                 <option value="minimal">Minimal</option>
                 <option value="moderate">Moderate</option>
@@ -1639,17 +1470,17 @@ function PreferencesDialog({
               <Toggle
                 label="Visual answers when useful"
                 value={preferences.visualAnswers}
-                onChange={(v) => update("visualAnswers", v)}
+                onChange={(v) => update('visualAnswers', v)}
               />
               <Toggle
                 label="Use headers"
                 value={preferences.headers}
-                onChange={(v) => update("headers", v)}
+                onChange={(v) => update('headers', v)}
               />
               <Toggle
                 label="Use lists"
                 value={preferences.lists}
-                onChange={(v) => update("lists", v)}
+                onChange={(v) => update('lists', v)}
               />
             </div>
           </div>
@@ -1658,8 +1489,8 @@ function PreferencesDialog({
             <div className="memory-intro">
               <b>Saved memories</b>
               <p>
-                Information saved here can be used to personalize future
-                conversations. Avoid storing secrets.
+                Information saved here can be used to personalize future conversations. Avoid
+                storing secrets.
               </p>
             </div>
             <div className="memory-add">
@@ -1673,7 +1504,7 @@ function PreferencesDialog({
                 <button
                   className="secondary-button compact"
                   onClick={() => {
-                    setDraft("");
+                    setDraft('');
                     setEditing(null);
                   }}
                 >
@@ -1684,7 +1515,7 @@ function PreferencesDialog({
                   onClick={saveMemory}
                   disabled={!draft.trim()}
                 >
-                  {editing ? "Save change" : "Add memory"}
+                  {editing ? 'Save change' : 'Add memory'}
                 </button>
               </div>
             </div>
@@ -1713,9 +1544,7 @@ function PreferencesDialog({
                   </div>
                 </div>
               ))}
-              {!memories.length && (
-                <div className="empty-history">No saved memories yet.</div>
-              )}
+              {!memories.length && <div className="empty-history">No saved memories yet.</div>}
             </div>
           </div>
         )}
@@ -1737,7 +1566,7 @@ function Toggle({ label, value, onChange }) {
         type="button"
         role="switch"
         aria-checked={value}
-        className={`switch ${value ? "on" : ""}`}
+        className={`switch ${value ? 'on' : ''}`}
         onClick={() => onChange(!value)}
       >
         <i />
@@ -1748,7 +1577,7 @@ function Toggle({ label, value, onChange }) {
 
 function PublicSharePage({ shareId }) {
   const [share, setShare] = useState(null),
-    [error, setError] = useState(""),
+    [error, setError] = useState(''),
     [loading, setLoading] = useState(true);
   useEffect(() => {
     let alive = true;
@@ -1770,7 +1599,7 @@ function PublicSharePage({ shareId }) {
   useEffect(() => {
     document.title = share?.title
       ? `${share.title} · Nemotron Agent Lab`
-      : "Shared response · Nemotron Agent Lab";
+      : 'Shared response · Nemotron Agent Lab';
   }, [share]);
   return (
     <div className="public-share-page">
@@ -1796,9 +1625,9 @@ function PublicSharePage({ shareId }) {
             {share.messages.map((message, i) => (
               <article className="share-message" key={i}>
                 <div className="share-role">
-                  {message.role === "user" ? "Prompt" : "Assistant response"}
+                  {message.role === 'user' ? 'Prompt' : 'Assistant response'}
                 </div>
-                {message.role === "assistant" ? (
+                {message.role === 'assistant' ? (
                   <Markdown content={message.content} />
                 ) : (
                   <div className="user-text">{message.content}</div>
@@ -1806,8 +1635,8 @@ function PublicSharePage({ shareId }) {
               </article>
             ))}
             <p className="share-disclaimer">
-              This is a read-only snapshot. Private chat history and internal
-              tool credentials are not included.
+              This is a read-only snapshot. Private chat history and internal tool credentials are
+              not included.
             </p>
           </>
         )}
@@ -1821,7 +1650,7 @@ export default function App() {
     loading: true,
     user: null,
     providers: {},
-    error: "",
+    error: '',
   });
   const [preferences, setPreferences] = useState(DEFAULT_PREFERENCES),
     [memories, setMemories] = useState([]),
@@ -1829,19 +1658,19 @@ export default function App() {
   const [chats, setChats] = useState([]),
     [activeId, setActiveId] = useState(null),
     [messages, setMessages] = useState([]),
-    [activeBranchId, setActiveBranchId] = useState("main"),
+    [activeBranchId, setActiveBranchId] = useState('main'),
     [branches, setBranches] = useState([]),
     [chatLoading, setChatLoading] = useState(false),
-    [chatLoadError, setChatLoadError] = useState("");
+    [chatLoadError, setChatLoadError] = useState('');
   const [busy, setBusy] = useState(false),
-    [status, setStatus] = useState("Ready"),
+    [status, setStatus] = useState('Ready'),
     [drawer, setDrawer] = useState(false),
     [prefsOpen, setPrefsOpen] = useState(false),
     [libraryOpen, setLibraryOpen] = useState(false),
     [libraryRefresh, setLibraryRefresh] = useState(0);
-  const [input, setInput] = useState(""),
+  const [input, setInput] = useState(''),
     [files, setFiles] = useState([]),
-    [fileError, setFileError] = useState(""),
+    [fileError, setFileError] = useState(''),
     [thinking, setThinking] = useState(true),
     [scrollDown, setScrollDown] = useState(false);
   const scrollRef = useRef(null),
@@ -1853,13 +1682,10 @@ export default function App() {
     activeIdRef = useRef(null),
     manualTitleIdsRef = useRef(new Set()),
     chatLoadSeqRef = useRef(0);
-  const activeChat = useMemo(
-    () => chats.find((c) => c._id === activeId),
-    [chats, activeId]
-  );
+  const activeChat = useMemo(() => chats.find((c) => c._id === activeId), [chats, activeId]);
   const starterSuggestions = useMemo(() => {
     const recent = chats
-      .filter((c) => c.title && c.title !== "New chat")
+      .filter((c) => c.title && c.title !== 'New chat')
       .slice(0, 2)
       .map((chat) => ({
         icon: MessageSquare,
@@ -1872,8 +1698,8 @@ export default function App() {
   const loadAccount = useCallback(async () => {
     try {
       const [meRes, healthRes] = await Promise.all([
-        request("/api/auth/me"),
-        request("/api/health"),
+        request('/api/auth/me'),
+        request('/api/health'),
       ]);
       const [me, health] = await Promise.all([meRes.json(), healthRes.json()]);
       if (!me.user) {
@@ -1881,7 +1707,7 @@ export default function App() {
           loading: false,
           user: null,
           providers: health.oauth || {},
-          error: new URLSearchParams(location.search).get("auth_error") || "",
+          error: new URLSearchParams(location.search).get('auth_error') || '',
         });
         return;
       }
@@ -1889,49 +1715,42 @@ export default function App() {
         loading: false,
         user: me.user,
         providers: health.oauth || {},
-        error: "",
+        error: '',
       });
       setChatLoading(true);
-      setChatLoadError("");
+      setChatLoadError('');
       const query = new URLSearchParams(location.search);
-      if (query.get("account_linked"))
-        setStatus(`${query.get("account_linked")} account linked`);
-      if (query.get("account_link_error"))
-        setFileError(query.get("account_link_error"));
+      if (query.get('account_linked')) setStatus(`${query.get('account_linked')} account linked`);
+      if (query.get('account_link_error')) setFileError(query.get('account_link_error'));
 
       // Load independent account resources concurrently. The chat list endpoint
       // returns metadata only; fetch the selected conversation once afterwards.
       const [prefResult, memoryResult, chatResult] = await Promise.allSettled([
-        request("/api/account/preferences").then((r) => r.json()),
-        request("/api/account/memories").then((r) => r.json()),
-        request("/api/chats").then((r) => r.json()),
+        request('/api/account/preferences').then((r) => r.json()),
+        request('/api/account/memories').then((r) => r.json()),
+        request('/api/chats').then((r) => r.json()),
       ]);
-      if (prefResult.status === "fulfilled")
+      if (prefResult.status === 'fulfilled')
         setPreferences({
           ...DEFAULT_PREFERENCES,
           ...prefResult.value.preferences,
         });
-      if (memoryResult.status === "fulfilled")
-        setMemories(memoryResult.value.memories || []);
-      if (chatResult.status !== "fulfilled") throw chatResult.reason;
-      const chatList = Array.isArray(chatResult.value.chats)
-        ? chatResult.value.chats
-        : [];
+      if (memoryResult.status === 'fulfilled') setMemories(memoryResult.value.memories || []);
+      if (chatResult.status !== 'fulfilled') throw chatResult.reason;
+      const chatList = Array.isArray(chatResult.value.chats) ? chatResult.value.chats : [];
       setChats(chatList);
       if (chatList.length) {
-        const preferred = localStorage.getItem("nemotron.activeChatId");
+        const preferred = localStorage.getItem('nemotron.activeChatId');
         const chosen = chatList.find((c) => c._id === preferred) || chatList[0];
         const sequence = ++chatLoadSeqRef.current;
         setChatLoading(true);
-        setChatLoadError("");
+        setChatLoadError('');
         setActiveId(chosen._id);
         activeIdRef.current = chosen._id;
         try {
-          const detail = await (
-            await request(`/api/chats/${chosen._id}`)
-          ).json();
+          const detail = await (await request(`/api/chats/${chosen._id}`)).json();
           if (sequence === chatLoadSeqRef.current) {
-            setActiveBranchId(detail.chat.activeBranchId || "main");
+            setActiveBranchId(detail.chat.activeBranchId || 'main');
             setBranches(detail.chat.branches || []);
             setMessages(detail.chat.messages || []);
           }
@@ -1947,14 +1766,14 @@ export default function App() {
         await newChat();
       }
     } catch (error) {
-      if (error.message === "Authentication required.") {
+      if (error.message === 'Authentication required.') {
         try {
-          const h = await (await request("/api/health")).json();
+          const h = await (await request('/api/health')).json();
           setAuth({
             loading: false,
             user: null,
             providers: h.oauth || {},
-            error: "",
+            error: '',
           });
         } catch {
           setAuth({
@@ -1975,12 +1794,10 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      const pending = localStorage.getItem("nemotron.pendingGeneration");
+      const pending = localStorage.getItem('nemotron.pendingGeneration');
       if (pending) {
-        localStorage.removeItem("nemotron.pendingGeneration");
-        setStatus(
-          "A previous generation was interrupted. Retry it when ready."
-        );
+        localStorage.removeItem('nemotron.pendingGeneration');
+        setStatus('A previous generation was interrupted. Retry it when ready.');
       }
     } catch {}
     loadAccount();
@@ -1989,27 +1806,26 @@ export default function App() {
     if (scrollRef.current && followScrollRef.current)
       scrollRef.current.scrollTo({
         top: scrollRef.current.scrollHeight,
-        behavior: "auto",
+        behavior: 'auto',
       });
   }, [messages]);
   useEffect(() => {
-    if (activeId) localStorage.setItem("nemotron.activeChatId", activeId);
+    if (activeId) localStorage.setItem('nemotron.activeChatId', activeId);
   }, [activeId]);
   useEffect(() => {
     let cancelled = false;
-    if (typeof indexedDB === "undefined") return;
-    const dbOpen = indexedDB.open("nemotron-agent-lab", 1);
+    if (typeof indexedDB === 'undefined') return;
+    const dbOpen = indexedDB.open('nemotron-agent-lab', 1);
     dbOpen.onupgradeneeded = () => {
-      if (!dbOpen.result.objectStoreNames.contains("drafts"))
-        dbOpen.result.createObjectStore("drafts");
+      if (!dbOpen.result.objectStoreNames.contains('drafts'))
+        dbOpen.result.createObjectStore('drafts');
     };
     dbOpen.onsuccess = () => {
       const db = dbOpen.result;
-      const tx = db.transaction("drafts", "readonly");
-      const get = tx.objectStore("drafts").get("composer");
+      const tx = db.transaction('drafts', 'readonly');
+      const get = tx.objectStore('drafts').get('composer');
       get.onsuccess = () => {
-        if (!cancelled && !input && typeof get.result === "string")
-          setInput(get.result);
+        if (!cancelled && !input && typeof get.result === 'string') setInput(get.result);
       };
     };
     return () => {
@@ -2018,24 +1834,24 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      const dbOpen = indexedDB.open("nemotron-agent-lab", 1);
+      const dbOpen = indexedDB.open('nemotron-agent-lab', 1);
       dbOpen.onupgradeneeded = () => {
-        if (!dbOpen.result.objectStoreNames.contains("drafts"))
-          dbOpen.result.createObjectStore("drafts");
+        if (!dbOpen.result.objectStoreNames.contains('drafts'))
+          dbOpen.result.createObjectStore('drafts');
       };
       dbOpen.onsuccess = () => {
-        const tx = dbOpen.result.transaction("drafts", "readwrite");
-        tx.objectStore("drafts").put(input, "composer");
+        const tx = dbOpen.result.transaction('drafts', 'readwrite');
+        tx.objectStore('drafts').put(input, 'composer');
       };
     } catch {}
   }, [input]);
   useEffect(() => {
-    if (typeof BroadcastChannel === "undefined") return;
-    const channel = new BroadcastChannel("nemotron-memory-sync");
+    if (typeof BroadcastChannel === 'undefined') return;
+    const channel = new BroadcastChannel('nemotron-memory-sync');
     channel.onmessage = async (event) => {
-      if (event.data?.type === "refresh") {
+      if (event.data?.type === 'refresh') {
         try {
-          const data = await (await request("/api/account/memories")).json();
+          const data = await (await request('/api/account/memories')).json();
           setMemories(data.memories || []);
         } catch {}
       }
@@ -2044,37 +1860,37 @@ export default function App() {
   }, []);
   useEffect(() => {
     const refresh = async () => {
-      if (document.visibilityState !== "visible") return;
+      if (document.visibilityState !== 'visible') return;
       try {
-        const data = await (await request("/api/account/memories")).json();
+        const data = await (await request('/api/account/memories')).json();
         setMemories(data.memories || []);
       } catch {}
     };
-    window.addEventListener("focus", refresh);
-    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
     return () => {
-      window.removeEventListener("focus", refresh);
-      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
     };
   }, []);
 
   const newChat = async () => {
     ++chatLoadSeqRef.current;
     setChatLoading(false);
-    setChatLoadError("");
+    setChatLoadError('');
     followScrollRef.current = true;
-    const res = await request("/api/chats", {
-      method: "POST",
-      body: JSON.stringify({ title: "New chat" }),
+    const res = await request('/api/chats', {
+      method: 'POST',
+      body: JSON.stringify({ title: 'New chat' }),
     });
     const { chat } = await res.json();
     setChats((current) => [chat, ...current]);
     setActiveId(chat._id);
     activeIdRef.current = chat._id;
-    setActiveBranchId("main");
+    setActiveBranchId('main');
     setBranches(chat.branches || []);
     setMessages([]);
-    setInput("");
+    setInput('');
     setFiles([]);
     setDrawer(false);
     return chat;
@@ -2085,7 +1901,7 @@ export default function App() {
     setActiveId(id);
     activeIdRef.current = id;
     setChatLoading(true);
-    setChatLoadError("");
+    setChatLoadError('');
     setDrawer(false);
     try {
       let detail;
@@ -2095,22 +1911,17 @@ export default function App() {
           detail = await res.json();
           break;
         } catch (error) {
-          if (
-            attempt === 1 ||
-            (error.status && error.status < 500 && error.status !== 429)
-          )
+          if (attempt === 1 || (error.status && error.status < 500 && error.status !== 429))
             throw error;
           await new Promise((resolve) => setTimeout(resolve, 350));
         }
       }
       if (sequence !== chatLoadSeqRef.current) return;
       const { chat } = detail;
-      setActiveBranchId(chat.activeBranchId || "main");
+      setActiveBranchId(chat.activeBranchId || 'main');
       setBranches(chat.branches || []);
       setMessages(chat.messages || []);
-      const savedTop = Number(
-        localStorage.getItem(`nemotron.scroll.${id}`) || 0
-      );
+      const savedTop = Number(localStorage.getItem(`nemotron.scroll.${id}`) || 0);
       requestAnimationFrame(() => {
         if (sequence === chatLoadSeqRef.current && scrollRef.current) {
           scrollRef.current.scrollTop = savedTop;
@@ -2128,7 +1939,7 @@ export default function App() {
   };
   const saveMessages = async (id, next, title) => {
     const res = await request(`/api/chats/${id}`, {
-      method: "PATCH",
+      method: 'PATCH',
       body: JSON.stringify({
         messages: next,
         branchId: activeBranchId,
@@ -2140,24 +1951,19 @@ export default function App() {
     setChats((current) => [chat, ...current.filter((c) => c._id !== chat._id)]);
   };
   const renameChat = async (chat) => {
-    const title = window.prompt(
-      "Rename conversation",
-      chat.title || "New chat"
-    );
+    const title = window.prompt('Rename conversation', chat.title || 'New chat');
     if (!title?.trim()) return;
     titleRequestRef.current++;
     manualTitleIdsRef.current.add(chat._id);
     const res = await request(`/api/chats/${chat._id}`, {
-      method: "PATCH",
+      method: 'PATCH',
       body: JSON.stringify({ title: title.trim(), manualTitle: true }),
     });
     const data = await res.json();
-    setChats((current) =>
-      current.map((item) => (item._id === chat._id ? data.chat : item))
-    );
+    setChats((current) => current.map((item) => (item._id === chat._id ? data.chat : item)));
   };
   const removeChat = async (id) => {
-    await request(`/api/chats/${id}`, { method: "DELETE" });
+    await request(`/api/chats/${id}`, { method: 'DELETE' });
     const next = chats.filter((c) => c._id !== id);
     setChats(next);
     if (activeId === id) {
@@ -2171,15 +1977,15 @@ export default function App() {
     }
   };
   const logout = async () => {
-    await request("/api/auth/logout", { method: "POST" });
-    location.href = "/";
+    await request('/api/auth/logout', { method: 'POST' });
+    location.href = '/';
   };
   const savePreferences = async (update) => {
-    const next = typeof update === "function" ? update(preferences) : update;
+    const next = typeof update === 'function' ? update(preferences) : update;
     setPreferences(next);
     try {
-      await request("/api/account/preferences", {
-        method: "PATCH",
+      await request('/api/account/preferences', {
+        method: 'PATCH',
         body: JSON.stringify(next),
       });
     } catch (error) {
@@ -2187,56 +1993,56 @@ export default function App() {
     }
   };
   const addMemory = async (text) => {
-    const res = await request("/api/account/memories", {
-      method: "POST",
+    const res = await request('/api/account/memories', {
+      method: 'POST',
       body: JSON.stringify({ text }),
     });
     const data = await res.json();
     setMemories(data.memories || []);
-    if (typeof BroadcastChannel !== "undefined") {
-      const channel = new BroadcastChannel("nemotron-memory-sync");
-      channel.postMessage({ type: "refresh" });
+    if (typeof BroadcastChannel !== 'undefined') {
+      const channel = new BroadcastChannel('nemotron-memory-sync');
+      channel.postMessage({ type: 'refresh' });
       channel.close();
     }
   };
   const editMemory = async (id, text) => {
     const res = await request(`/api/account/memories/${id}`, {
-      method: "PATCH",
+      method: 'PATCH',
       body: JSON.stringify({ text }),
     });
     const data = await res.json();
     setMemories(data.memories || []);
-    if (typeof BroadcastChannel !== "undefined") {
-      const channel = new BroadcastChannel("nemotron-memory-sync");
-      channel.postMessage({ type: "refresh" });
+    if (typeof BroadcastChannel !== 'undefined') {
+      const channel = new BroadcastChannel('nemotron-memory-sync');
+      channel.postMessage({ type: 'refresh' });
       channel.close();
     }
   };
   const deleteMemory = async (id) => {
     const res = await request(`/api/account/memories/${id}`, {
-      method: "DELETE",
+      method: 'DELETE',
     });
     const data = await res.json();
     setMemories(data.memories || []);
-    if (typeof BroadcastChannel !== "undefined") {
-      const channel = new BroadcastChannel("nemotron-memory-sync");
-      channel.postMessage({ type: "refresh" });
+    if (typeof BroadcastChannel !== 'undefined') {
+      const channel = new BroadcastChannel('nemotron-memory-sync');
+      channel.postMessage({ type: 'refresh' });
       channel.close();
     }
   };
   const loadShares = async () => {
     try {
-      const data = await (await request("/api/shares")).json();
+      const data = await (await request('/api/shares')).json();
       setShares(data.shares || []);
     } catch {}
   };
   const revokeShare = async (shareId) => {
-    await request(`/api/shares/${shareId}`, { method: "DELETE" });
+    await request(`/api/shares/${shareId}`, { method: 'DELETE' });
     setShares((current) => current.filter((item) => item.shareId !== shareId));
   };
   const saveProfile = async (profile) => {
-    const res = await request("/api/account/profile", {
-      method: "PATCH",
+    const res = await request('/api/account/profile', {
+      method: 'PATCH',
       body: JSON.stringify(profile),
     });
     const data = await res.json();
@@ -2247,7 +2053,7 @@ export default function App() {
   const createBranchFrom = async (message) => {
     if (!activeId || !message?.id) return;
     const res = await request(`/api/chats/${activeId}/branches`, {
-      method: "POST",
+      method: 'POST',
       body: JSON.stringify({
         fromBranchId: activeBranchId,
         forkedFromMessageId: message.id,
@@ -2257,35 +2063,26 @@ export default function App() {
     const data = await res.json();
     setActiveBranchId(data.branch.branchId);
     setBranches(data.chat.branches || []);
-    setChats((current) => [
-      data.chat,
-      ...current.filter((c) => c._id !== data.chat._id),
-    ]);
+    setChats((current) => [data.chat, ...current.filter((c) => c._id !== data.chat._id)]);
     setMessages(data.messages || []);
-    setStatus("New branch created");
+    setStatus('New branch created');
   };
   const changeVersion = async (message, index) => {
-    const res = await request(
-      `/api/chats/${activeId}/messages/${message.id}/version`,
-      {
-        method: "PATCH",
-        body: JSON.stringify({
-          branchId: activeBranchId,
-          index,
-          expectedRevision: activeChat?.revision || 0,
-        }),
-      }
-    );
+    const res = await request(`/api/chats/${activeId}/messages/${message.id}/version`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        branchId: activeBranchId,
+        index,
+        expectedRevision: activeChat?.revision || 0,
+      }),
+    });
     const data = await res.json();
     setMessages(data.messages || []);
-    setChats((current) => [
-      data.chat,
-      ...current.filter((c) => c._id !== data.chat._id),
-    ]);
+    setChats((current) => [data.chat, ...current.filter((c) => c._id !== data.chat._id)]);
   };
   const shareResponse = async (message) => {
-    const res = await request("/api/shares", {
-      method: "POST",
+    const res = await request('/api/shares', {
+      method: 'POST',
       body: JSON.stringify({
         chatId: activeId,
         branchId: activeBranchId,
@@ -2296,14 +2093,14 @@ export default function App() {
     setShares((current) => [
       {
         shareId: data.shareId,
-        title: activeChat?.title || "Shared response",
+        title: activeChat?.title || 'Shared response',
         chatId: activeId,
         createdAt: new Date().toISOString(),
       },
       ...current,
     ]);
     await navigator.clipboard.writeText(data.url);
-    setStatus("Share link copied");
+    setStatus('Share link copied');
   };
   const editUserMessage = async (message, value) => {
     if (value == null || !value.trim()) return;
@@ -2318,7 +2115,7 @@ export default function App() {
       editedFrom: message.id,
     };
     const res = await request(`/api/chats/${activeId}/branches`, {
-      method: "POST",
+      method: 'POST',
       body: JSON.stringify({
         fromBranchId: activeBranchId,
         forkedFromMessageId: parentMessage?.id || null,
@@ -2329,13 +2126,10 @@ export default function App() {
     const data = await res.json();
     setActiveBranchId(data.branch.branchId);
     setBranches(data.chat.branches || []);
-    setChats((current) => [
-      data.chat,
-      ...current.filter((c) => c._id !== data.chat._id),
-    ]);
+    setChats((current) => [data.chat, ...current.filter((c) => c._id !== data.chat._id)]);
     setMessages(data.messages || []);
-    setInput("");
-    await sendMessage("", [], {
+    setInput('');
+    await sendMessage('', [], {
       reuseLastUser: true,
       messages: data.messages || [],
       branchId: data.branch.branchId,
@@ -2346,20 +2140,20 @@ export default function App() {
     const index = messages.findIndex((m) => m.id === message.id);
     if (index < 1 || busy) return;
     setBusy(true);
-    setStatus("Regenerating response…");
+    setStatus('Regenerating response…');
     try {
       localStorage.setItem(
-        "nemotron.pendingGeneration",
+        'nemotron.pendingGeneration',
         JSON.stringify({ chatId: activeId, startedAt: Date.now() })
       );
     } catch {}
     const controller = new AbortController();
     abortRef.current = controller;
     try {
-      const res = await fetch(api("/api/chat/stream"), {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
+      const res = await fetch(api('/api/chat/stream'), {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
         body: JSON.stringify({
           chatId: activeId,
@@ -2367,13 +2161,11 @@ export default function App() {
           expectedRevision: activeChat?.revision || 0,
           preserveExistingMessageId: message.id,
           thinkingEnabled: thinking,
-          messages: messages
-            .slice(0, index)
-            .map((m) => ({
-              role: m.role,
-              content: m.apiContent || m.content,
-              ...(m.attachments?.length ? { attachments: m.attachments } : {}),
-            })),
+          messages: messages.slice(0, index).map((m) => ({
+            role: m.role,
+            content: m.apiContent || m.content,
+            ...(m.attachments?.length ? { attachments: m.attachments } : {}),
+          })),
         }),
       });
       if (!res.ok) {
@@ -2382,22 +2174,20 @@ export default function App() {
       }
       const reader = res.body.getReader(),
         decoder = new TextDecoder();
-      let buffer = "";
+      let buffer = '';
       while (true) {
         const part = await reader.read();
         buffer += decoder.decode(part.value || new Uint8Array(), {
           stream: !part.done,
         });
         const blocks = buffer.split(/\r?\n\r?\n/);
-        buffer = blocks.pop() || "";
+        buffer = blocks.pop() || '';
         for (const block of blocks) {
-          const line = block.split(/\r?\n/).find((x) => x.startsWith("data:"));
+          const line = block.split(/\r?\n/).find((x) => x.startsWith('data:'));
           if (!line) continue;
           const event = JSON.parse(line.slice(5).trim());
-          if (event.type === "status")
-            setStatus(event.status || "Regenerating…");
-          if (event.type === "error")
-            throw new Error(event.error || "Regeneration failed.");
+          if (event.type === 'status') setStatus(event.status || 'Regenerating…');
+          if (event.type === 'error') throw new Error(event.error || 'Regeneration failed.');
         }
         if (part.done) break;
       }
@@ -2405,20 +2195,15 @@ export default function App() {
         await request(`/api/chats/${activeId}?branchId=${activeBranchId}`)
       ).json();
       setMessages(refreshed.chat.messages || []);
-      setChats((current) => [
-        refreshed.chat,
-        ...current.filter((c) => c._id !== activeId),
-      ]);
-      setStatus("Response regenerated");
+      setChats((current) => [refreshed.chat, ...current.filter((c) => c._id !== activeId)]);
+      setStatus('Response regenerated');
     } catch (error) {
-      setStatus(
-        error.name === "AbortError" ? "Stopped" : "Regeneration failed"
-      );
+      setStatus(error.name === 'AbortError' ? 'Stopped' : 'Regeneration failed');
       setFileError(error.message);
     } finally {
       abortRef.current = null;
       try {
-        localStorage.removeItem("nemotron.pendingGeneration");
+        localStorage.removeItem('nemotron.pendingGeneration');
       } catch {}
       setBusy(false);
     }
@@ -2428,49 +2213,42 @@ export default function App() {
     if (!id || !source.length) return;
     const requestId = ++titleRequestRef.current;
     const chatSnapshot = chats.find((c) => c._id === id);
-    if (manualTitleIdsRef.current.has(id) || chatSnapshot?.titleManuallyEdited)
-      return;
-    const first = source.find((m) => m.role === "user");
+    if (manualTitleIdsRef.current.has(id) || chatSnapshot?.titleManuallyEdited) return;
+    const first = source.find((m) => m.role === 'user');
     if (!first) return;
-    const meaningful = source.filter((m) =>
-      ["user", "assistant"].includes(m.role)
-    );
+    const meaningful = source.filter((m) => ['user', 'assistant'].includes(m.role));
     const contextMessages =
-      meaningful.length > 10
-        ? [...meaningful.slice(0, 2), ...meaningful.slice(-8)]
-        : meaningful;
+      meaningful.length > 10 ? [...meaningful.slice(0, 2), ...meaningful.slice(-8)] : meaningful;
     const context = contextMessages
       .map(
         (m) =>
           `${m.role.toUpperCase()}: ${textOf(m.content).slice(0, 1800)}${
-            m.toolEvents?.length
-              ? `\nTOOLS: ${m.toolEvents.map((t) => t.name).join(", ")}`
-              : ""
+            m.toolEvents?.length ? `\nTOOLS: ${m.toolEvents.map((t) => t.name).join(', ')}` : ''
           }`
       )
-      .join("\n\n")
+      .join('\n\n')
       .slice(0, 9000);
-    setStatus("Naming conversation…");
-    const res = await request("/api/chat/title", {
-      method: "POST",
+    setStatus('Naming conversation…');
+    const res = await request('/api/chat/title', {
+      method: 'POST',
       body: JSON.stringify({ text: context }),
     });
     const { title } = await res.json();
     if (requestId !== titleRequestRef.current) return;
     const patch = await request(`/api/chats/${id}`, {
-      method: "PATCH",
+      method: 'PATCH',
       body: JSON.stringify({ title }),
     });
     const { chat } = await patch.json();
     setChats((current) => [chat, ...current.filter((c) => c._id !== id)]);
-    setStatus("Ready");
+    setStatus('Ready');
   };
   const copyText = async (text) => {
     try {
       await navigator.clipboard.writeText(text);
-      setStatus("Copied");
+      setStatus('Copied');
     } catch {
-      setStatus("Clipboard unavailable");
+      setStatus('Clipboard unavailable');
     }
   };
   const exportChat = () => {
@@ -2478,7 +2256,7 @@ export default function App() {
       [
         JSON.stringify(
           {
-            title: activeChat?.title || "New chat",
+            title: activeChat?.title || 'New chat',
             messages: messages.map((m) => ({
               role: m.role,
               content: textOf(m.content),
@@ -2490,21 +2268,21 @@ export default function App() {
           2
         ),
       ],
-      { type: "application/json" }
+      { type: 'application/json' }
     );
     const url = URL.createObjectURL(blob),
-      a = document.createElement("a");
+      a = document.createElement('a');
     a.href = url;
-    a.download = "agent-lab-chat.json";
+    a.download = 'agent-lab-chat.json';
     a.click();
     URL.revokeObjectURL(url);
   };
   const sendMessage = async (raw = input, attach = files, options = {}) => {
-    const text = String(raw || "").trim();
+    const text = String(raw || '').trim();
     if ((!text && !attach.length && !options.reuseLastUser) || busy) return;
-    setFileError("");
+    setFileError('');
     setBusy(true);
-    setStatus("Preparing request…");
+    setStatus('Preparing request…');
     let chat = activeChat;
     if (!chat) {
       try {
@@ -2526,45 +2304,35 @@ export default function App() {
     const payloadSize = prepared.reduce(
       (n, item) =>
         n +
-        (item.type.startsWith("image/") ? item.dataUrl?.length || 0 : 0) +
+        (item.type.startsWith('image/') ? item.dataUrl?.length || 0 : 0) +
         (item.frames || []).reduce((s, f) => s + f.dataUrl.length, 0),
       0
     );
     if (payloadSize > 22 * 1024 * 1024) {
       setBusy(false);
-      setFileError("Compressed attachments exceed the 22 MB request limit.");
+      setFileError('Compressed attachments exceed the 22 MB request limit.');
       return;
     }
-    const sandboxFiles = prepared.filter(
-      (item) => item.dataUrl && !item.frames
-    );
+    const sandboxFiles = prepared.filter((item) => item.dataUrl && !item.frames);
     const sandboxUploadBytes = sandboxFiles.reduce(
       (sum, item) => sum + Math.floor(item.dataUrl.length * 0.75),
       0
     );
-    if (
-      sandboxFiles.some(
-        (item) => Math.floor(item.dataUrl.length * 0.75) > 8 * 1024 * 1024
-      )
-    ) {
+    if (sandboxFiles.some((item) => Math.floor(item.dataUrl.length * 0.75) > 8 * 1024 * 1024)) {
       setBusy(false);
-      setFileError(
-        "Each file sent to the Python workspace must be 8 MB or smaller."
-      );
+      setFileError('Each file sent to the Python workspace must be 8 MB or smaller.');
       return;
     }
     if (sandboxUploadBytes > 20 * 1024 * 1024) {
       setBusy(false);
-      setFileError(
-        "Files sent to the Python workspace cannot exceed 20 MB per message."
-      );
+      setFileError('Files sent to the Python workspace cannot exceed 20 MB per message.');
       return;
     }
     let uploaded = [];
     try {
       if (sandboxFiles.length && !options.reuseLastUser) {
         const uploadResult = await request(`/api/chats/${chat._id}/uploads`, {
-          method: "POST",
+          method: 'POST',
           body: JSON.stringify({
             files: sandboxFiles.map((item) => ({
               name: item.sandboxName || item.name,
@@ -2577,43 +2345,37 @@ export default function App() {
       }
     } catch (error) {
       setBusy(false);
-      setFileError(
-        error.message || "Could not upload files to the Python workspace."
-      );
+      setFileError(error.message || 'Could not upload files to the Python workspace.');
       return;
     }
     try {
       localStorage.setItem(
-        "nemotron.pendingGeneration",
+        'nemotron.pendingGeneration',
         JSON.stringify({ chatId: chat._id, startedAt: Date.now() })
       );
     } catch {}
     const parts = [];
-    if (text) parts.push({ type: "text", text });
+    if (text) parts.push({ type: 'text', text });
     else if (prepared.length)
       parts.push({
-        type: "text",
-        text: "Please analyze the attached files and media.",
+        type: 'text',
+        text: 'Please analyze the attached files and media.',
       });
     for (const item of prepared) {
-      if (item.dataUrl && item.type.startsWith("image/"))
-        parts.push({ type: "image_url", image_url: { url: item.dataUrl } });
+      if (item.dataUrl && item.type.startsWith('image/'))
+        parts.push({ type: 'image_url', image_url: { url: item.dataUrl } });
       if (item.frames)
         for (const frame of item.frames) {
           parts.push({
-            type: "text",
-            text: `Video frame at ${frame.time.toFixed(2)} seconds from ${
-              item.name
-            }.`,
+            type: 'text',
+            text: `Video frame at ${frame.time.toFixed(2)} seconds from ${item.name}.`,
           });
-          parts.push({ type: "image_url", image_url: { url: frame.dataUrl } });
+          parts.push({ type: 'image_url', image_url: { url: frame.dataUrl } });
         }
     }
     let uploadIndex = 0;
     const attachments = prepared.map((item) => {
-      const upload = sandboxFiles.includes(item)
-        ? uploaded[uploadIndex++]
-        : null;
+      const upload = sandboxFiles.includes(item) ? uploaded[uploadIndex++] : null;
       return {
         name: item.name.slice(0, 140),
         type: item.type,
@@ -2630,36 +2392,34 @@ export default function App() {
       ? null
       : {
           id: crypto.randomUUID(),
-          role: "user",
-          content: text || "Please analyze the attached files and media.",
+          role: 'user',
+          content: text || 'Please analyze the attached files and media.',
           attachments,
           createdAt: new Date().toISOString(),
           ...(prepared.length ? { apiContent: parts } : {}),
         };
     const nextMessages =
-        options.messages ||
-        (options.reuseLastUser ? messages : [...messages, userMessage]),
-      titleBefore = chat.title || "New chat";
+        options.messages || (options.reuseLastUser ? messages : [...messages, userMessage]),
+      titleBefore = chat.title || 'New chat';
     if (activeIdRef.current === chat._id) setMessages(nextMessages);
-    setInput("");
+    setInput('');
     setFiles([]);
-    if (textareaRef.current) textareaRef.current.style.height = "auto";
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
     const assistantId = crypto.randomUUID(),
       assistant = {
         id: assistantId,
-        role: "assistant",
-        content: "",
-        reasoning: "",
+        role: 'assistant',
+        content: '',
+        reasoning: '',
         toolEvents: [],
         createdAt: new Date().toISOString(),
       };
-    if (activeIdRef.current === chat._id)
-      setMessages([...nextMessages, assistant]);
+    if (activeIdRef.current === chat._id) setMessages([...nextMessages, assistant]);
     const controller = new AbortController();
     abortRef.current = controller;
     const started = performance.now();
-    let output = "",
-      thought = "",
+    let output = '',
+      thought = '',
       events = [],
       agentPlan = null,
       agentEvents = [],
@@ -2686,11 +2446,11 @@ export default function App() {
         );
     };
     try {
-      setStatus("Connecting…");
-      const res = await fetch(api("/api/chat/stream"), {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
+      setStatus('Connecting…');
+      const res = await fetch(api('/api/chat/stream'), {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
         body: JSON.stringify({
           chatId: chat._id,
@@ -2717,16 +2477,16 @@ export default function App() {
       }
       const reader = res.body.getReader(),
         decoder = new TextDecoder();
-      let buffer = "";
+      let buffer = '';
       while (true) {
         const chunk = await reader.read();
         buffer += decoder.decode(chunk.value || new Uint8Array(), {
           stream: !chunk.done,
         });
         const blocks = buffer.split(/\r?\n\r?\n/);
-        buffer = blocks.pop() || "";
+        buffer = blocks.pop() || '';
         for (const block of blocks) {
-          const line = block.split(/\r?\n/).find((x) => x.startsWith("data:"));
+          const line = block.split(/\r?\n/).find((x) => x.startsWith('data:'));
           if (!line) continue;
           let event;
           try {
@@ -2734,54 +2494,51 @@ export default function App() {
           } catch {
             continue;
           }
-          if (event.type === "status") setStatus(event.status || "Working…");
-          if (event.type === "chunk") {
-            output += event.content || "";
-            setStatus("Generating…");
+          if (event.type === 'status') setStatus(event.status || 'Working…');
+          if (event.type === 'chunk') {
+            output += event.content || '';
+            setStatus('Generating…');
             update();
           }
-          if (event.type === "reasoning") {
-            thought += event.content || "";
+          if (event.type === 'reasoning') {
+            thought += event.content || '';
             update();
           }
-          if (event.type === "agent_event") {
+          if (event.type === 'agent_event') {
             const item = event.event || {};
             agentEvents = [...agentEvents, item];
-            if (item.type === "plan_created" && item.plan)
-              agentPlan = item.plan;
-            if (item.type === "task_updated" && item.plan)
-              agentPlan = item.plan;
-            if (item.type === "self_correction")
-              setStatus("Recovering from an error…");
-            else if (item.type === "agent_started") setStatus("Planning…");
+            if (item.type === 'plan_created' && item.plan) agentPlan = item.plan;
+            if (item.type === 'task_updated' && item.plan) agentPlan = item.plan;
+            if (item.type === 'self_correction') setStatus('Recovering from an error…');
+            else if (item.type === 'agent_started') setStatus('Planning…');
             update();
           }
-          if (event.type === "tool_start") {
+          if (event.type === 'tool_start') {
             events = [
               ...events,
               {
                 name: event.name,
-                status: "running",
+                status: 'running',
                 arguments: event.arguments,
               },
             ];
-            setStatus(`Using ${event.name.replaceAll("_", " ")}…`);
+            setStatus(`Using ${event.name.replaceAll('_', ' ')}…`);
             update();
           }
-          if (event.type === "tool_result") {
+          if (event.type === 'tool_result') {
             if (
-              ["execute_python", "generate_image"].includes(event.name) &&
+              ['execute_python', 'generate_image'].includes(event.name) &&
               event.result?.artifacts?.length
             )
               setLibraryRefresh((v) => v + 1);
-            if (event.name === "save_memory") {
-              request("/api/account/memories")
+            if (event.name === 'save_memory') {
+              request('/api/account/memories')
                 .then((r) => r.json())
                 .then((data) => setMemories(data.memories || []))
                 .catch(() => {});
-              if (typeof BroadcastChannel !== "undefined") {
-                const channel = new BroadcastChannel("nemotron-memory-sync");
-                channel.postMessage({ type: "refresh" });
+              if (typeof BroadcastChannel !== 'undefined') {
+                const channel = new BroadcastChannel('nemotron-memory-sync');
+                channel.postMessage({ type: 'refresh' });
                 channel.close();
               }
             }
@@ -2799,23 +2556,20 @@ export default function App() {
               );
             update();
           }
-          if (event.type === "done") {
+          if (event.type === 'done') {
             usage = event.usage || usage;
-            durationMs =
-              event.durationMs ?? Math.round(performance.now() - started);
+            durationMs = event.durationMs ?? Math.round(performance.now() - started);
             update();
           }
-          if (event.type === "stopped") setStatus("Stopped");
-          if (event.type === "error")
-            throw new Error(event.error || "Generation failed.");
+          if (event.type === 'stopped') setStatus('Stopped');
+          if (event.type === 'error') throw new Error(event.error || 'Generation failed.');
         }
         if (chunk.done) break;
       }
-      if (!output && thought)
-        output = "(The model returned thinking but no final answer.)";
+      if (!output && thought) output = '(The model returned thinking but no final answer.)';
       liveAssistant = {
         ...assistant,
-        content: output || "(No text was returned.)",
+        content: output || '(No text was returned.)',
         reasoning: thought,
         toolEvents: events,
         agentPlan,
@@ -2825,50 +2579,36 @@ export default function App() {
       };
       const saved = [...nextMessages, liveAssistant];
       if (activeIdRef.current === chat._id) setMessages(saved);
-      if (typeof indexedDB !== "undefined") {
-        const dbOpen = indexedDB.open("nemotron-agent-lab", 1);
+      if (typeof indexedDB !== 'undefined') {
+        const dbOpen = indexedDB.open('nemotron-agent-lab', 1);
         dbOpen.onsuccess = () =>
-          dbOpen.result
-            .transaction("drafts", "readwrite")
-            .objectStore("drafts")
-            .delete("composer");
+          dbOpen.result.transaction('drafts', 'readwrite').objectStore('drafts').delete('composer');
       }
       const refreshed = await (
-        await request(
-          `/api/chats/${chat._id}?branchId=${
-            options.branchId || activeBranchId
-          }`
-        )
+        await request(`/api/chats/${chat._id}?branchId=${options.branchId || activeBranchId}`)
       ).json();
       setChats((current) => [
         refreshed.chat,
         ...current.filter((c) => c._id !== refreshed.chat._id),
       ]);
-      const userTurnCount = saved.filter((m) => m.role === "user").length;
-      if (
-        titleBefore === "New chat" ||
-        (userTurnCount >= 4 && userTurnCount % 4 === 0)
-      ) {
+      const userTurnCount = saved.filter((m) => m.role === 'user').length;
+      if (titleBefore === 'New chat' || (userTurnCount >= 4 && userTurnCount % 4 === 0)) {
         try {
           await generateName(chat._id, saved);
         } catch {
-          const fallback = titleFallback(
-            text || attachments[0]?.name || "New chat"
-          );
+          const fallback = titleFallback(text || attachments[0]?.name || 'New chat');
           await request(`/api/chats/${chat._id}`, {
-            method: "PATCH",
+            method: 'PATCH',
             body: JSON.stringify({ title: fallback }),
           });
           setChats((current) =>
-            current.map((c) =>
-              c._id === chat._id ? { ...c, title: fallback } : c
-            )
+            current.map((c) => (c._id === chat._id ? { ...c, title: fallback } : c))
           );
         }
       }
-      setStatus("Ready");
+      setStatus('Ready');
     } catch (error) {
-      const stopped = error.name === "AbortError";
+      const stopped = error.name === 'AbortError';
       liveAssistant = {
         ...assistant,
         content: output,
@@ -2876,24 +2616,21 @@ export default function App() {
         toolEvents: events,
         agentPlan,
         agentEvents,
-        error: stopped ? "Generation stopped." : error.message,
+        error: stopped ? 'Generation stopped.' : error.message,
         usage,
         durationMs: durationMs ?? Math.round(performance.now() - started),
       };
       if (activeIdRef.current === chat._id)
-        setMessages((current) =>
-          current.map((m) => (m.id === assistantId ? liveAssistant : m))
-        );
-      setStatus(stopped ? "Stopped" : "Request failed");
+        setMessages((current) => current.map((m) => (m.id === assistantId ? liveAssistant : m)));
+      setStatus(stopped ? 'Stopped' : 'Request failed');
       try {
         if (options.branchId)
           await request(`/api/chats/${chat._id}`, {
-            method: "PATCH",
+            method: 'PATCH',
             body: JSON.stringify({
               messages: [...nextMessages, liveAssistant],
               branchId: options.branchId,
-              expectedRevision:
-                options.expectedRevision ?? (chat.revision || 0),
+              expectedRevision: options.expectedRevision ?? (chat.revision || 0),
             }),
           });
         else await saveMessages(chat._id, [...nextMessages, liveAssistant]);
@@ -2903,7 +2640,7 @@ export default function App() {
     } finally {
       abortRef.current = null;
       try {
-        localStorage.removeItem("nemotron.pendingGeneration");
+        localStorage.removeItem('nemotron.pendingGeneration');
       } catch {}
       setBusy(false);
     }
@@ -2911,7 +2648,7 @@ export default function App() {
   const addFiles = (fileList) => {
     const next = [...fileList];
     if (files.length + next.length > 6) {
-      setFileError("Maximum 6 attachments per message.");
+      setFileError('Maximum 6 attachments per message.');
       return;
     }
     setFiles((current) => [...current, ...next]);
@@ -2924,29 +2661,21 @@ export default function App() {
       setScrollDown(distance > 240);
       if (activeIdRef.current) {
         try {
-          localStorage.setItem(
-            `nemotron.scroll.${activeIdRef.current}`,
-            String(el.scrollTop)
-          );
+          localStorage.setItem(`nemotron.scroll.${activeIdRef.current}`, String(el.scrollTop));
         } catch {}
       }
     }
   };
 
-  if (location.pathname.startsWith("/share/"))
-    return (
-      <PublicSharePage
-        shareId={decodeURIComponent(location.pathname.split("/")[2] || "")}
-      />
-    );
+  if (location.pathname.startsWith('/share/'))
+    return <PublicSharePage shareId={decodeURIComponent(location.pathname.split('/')[2] || '')} />;
   if (auth.loading)
     return (
       <div className="loading-screen">
         <LoaderCircle className="spin" /> Loading your workspace…
       </div>
     );
-  if (!auth.user)
-    return <LoginScreen providers={auth.providers} error={auth.error} />;
+  if (!auth.user) return <LoginScreen providers={auth.providers} error={auth.error} />;
 
   return (
     <div className="app agent-lab">
@@ -2967,7 +2696,7 @@ export default function App() {
         </div>
         <div className="top-actions">
           <span className="status-label">
-            <i className={busy ? "pulse-dot" : "ready-dot"} />
+            <i className={busy ? 'pulse-dot' : 'ready-dot'} />
             {status}
           </span>
           {busy && (
@@ -2984,11 +2713,7 @@ export default function App() {
             title={auth.user.name}
             onClick={() => setPrefsOpen(true)}
           >
-            {auth.user.avatar ? (
-              <img src={auth.user.avatar} alt="" />
-            ) : (
-              <UserRound size={16} />
-            )}
+            {auth.user.avatar ? <img src={auth.user.avatar} alt="" /> : <UserRound size={16} />}
           </button>
         </div>
       </header>
@@ -2997,9 +2722,9 @@ export default function App() {
           <div>
             <div className="eyebrow">AGENT WORKSPACE</div>
             <h1>
-              {activeChat?.title && activeChat.title !== "New chat"
+              {activeChat?.title && activeChat.title !== 'New chat'
                 ? activeChat.title
-                : "What are we working on?"}
+                : 'What are we working on?'}
             </h1>
             <p>Research, create, explore and solve problems with tools.</p>
           </div>
@@ -3010,15 +2735,12 @@ export default function App() {
                 value={activeBranchId}
                 onChange={async (e) => {
                   const id = e.target.value;
-                  const result = await request(
-                    `/api/chats/${activeId}/branches/${id}/activate`,
-                    {
-                      method: "PATCH",
-                      body: JSON.stringify({
-                        expectedRevision: activeChat?.revision || 0,
-                      }),
-                    }
-                  );
+                  const result = await request(`/api/chats/${activeId}/branches/${id}/activate`, {
+                    method: 'PATCH',
+                    body: JSON.stringify({
+                      expectedRevision: activeChat?.revision || 0,
+                    }),
+                  });
                   const data = await result.json();
                   setActiveBranchId(id);
                   setMessages(data.messages || []);
@@ -3029,15 +2751,13 @@ export default function App() {
                 }}
               >
                 <option value={activeBranchId}>
-                  Branch{" "}
-                  {branches.findIndex((b) => b.branchId === activeBranchId) + 1}
+                  Branch {branches.findIndex((b) => b.branchId === activeBranchId) + 1}
                 </option>
                 {branches
                   .filter((b) => b.branchId !== activeBranchId)
                   .map((b, i) => (
                     <option key={b.branchId} value={b.branchId}>
-                      Branch{" "}
-                      {branches.findIndex((x) => x.branchId === b.branchId) + 1}
+                      Branch {branches.findIndex((x) => x.branchId === b.branchId) + 1}
                     </option>
                   ))}
               </select>
@@ -3046,7 +2766,7 @@ export default function App() {
               className="text-action"
               title="Generate conversation name"
               onClick={() => generateName()}
-              disabled={!messages.some((m) => m.role === "user") || busy}
+              disabled={!messages.some((m) => m.role === 'user') || busy}
             >
               <Sparkles size={14} />
             </button>
@@ -3072,18 +2792,13 @@ export default function App() {
           <div className="chat-inner">
             {chatLoading ? (
               <div className="chat-loading">
-                <LoaderCircle className="spin" size={18} /> Loading
-                conversation…
+                <LoaderCircle className="spin" size={18} /> Loading conversation…
               </div>
             ) : chatLoadError ? (
               <div className="chat-load-error">
                 <AlertCircle size={17} />
                 <span>{chatLoadError}</span>
-                <button
-                  onClick={() =>
-                    activeId ? selectChat(activeId) : loadAccount()
-                  }
-                >
+                <button onClick={() => (activeId ? selectChat(activeId) : loadAccount())}>
                   Retry
                 </button>
               </div>
@@ -3099,9 +2814,8 @@ export default function App() {
                   <em>something happen.</em>
                 </h2>
                 <p>
-                  Ask a question, analyze data, generate files, research the web
-                  or build something. Your agent capabilities are ready
-                  automatically.
+                  Ask a question, analyze data, generate files, research the web or build something.
+                  Your agent capabilities are ready automatically.
                 </p>
                 <div className="suggestions">
                   {starterSuggestions.map(({ icon: Icon, label, prompt }) => (
@@ -3135,7 +2849,7 @@ export default function App() {
                 followScrollRef.current = true;
                 scrollRef.current?.scrollTo({
                   top: scrollRef.current.scrollHeight,
-                  behavior: "smooth",
+                  behavior: 'smooth',
                 });
               }}
             >
@@ -3148,7 +2862,7 @@ export default function App() {
             <div className="attachment-error">
               <AlertCircle size={13} />
               {fileError}
-              <button onClick={() => setFileError("")}>
+              <button onClick={() => setFileError('')}>
                 <X size={13} />
               </button>
             </div>
@@ -3157,19 +2871,15 @@ export default function App() {
             <div className="pending-files">
               {files.map((f, i) => (
                 <div className="pending-file" key={`${f.name}-${i}`}>
-                  {f.type.startsWith("video") ? (
+                  {f.type.startsWith('video') ? (
                     <Video size={13} />
-                  ) : f.type.startsWith("image") ? (
+                  ) : f.type.startsWith('image') ? (
                     <FileImage size={13} />
                   ) : (
                     <FileText size={13} />
                   )}
                   <span>{f.name}</span>
-                  <button
-                    onClick={() =>
-                      setFiles((current) => current.filter((_, n) => n !== i))
-                    }
-                  >
+                  <button onClick={() => setFiles((current) => current.filter((_, n) => n !== i))}>
                     <X size={12} />
                   </button>
                 </div>
@@ -3188,14 +2898,11 @@ export default function App() {
               value={input}
               onChange={(e) => {
                 setInput(e.target.value);
-                e.target.style.height = "auto";
-                e.target.style.height = `${Math.min(
-                  e.target.scrollHeight,
-                  180
-                )}px`;
+                e.target.style.height = 'auto';
+                e.target.style.height = `${Math.min(e.target.scrollHeight, 180)}px`;
               }}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.shiftKey || e.metaKey)) {
+                if (e.key === 'Enter' && (e.shiftKey || e.metaKey)) {
                   e.preventDefault();
                   sendMessage();
                 }
@@ -3221,12 +2928,12 @@ export default function App() {
                   multiple
                   onChange={(e) => {
                     addFiles(e.target.files);
-                    e.target.value = "";
+                    e.target.value = '';
                   }}
                 />
                 <button
                   type="button"
-                  className={`thinking-control ${thinking ? "enabled" : ""}`}
+                  className={`thinking-control ${thinking ? 'enabled' : ''}`}
                   onClick={() => setThinking((v) => !v)}
                   title="Toggle model thinking"
                 >
@@ -3240,11 +2947,7 @@ export default function App() {
                 type="submit"
                 disabled={busy || (!input.trim() && !files.length)}
               >
-                {busy ? (
-                  <LoaderCircle size={16} className="spin" />
-                ) : (
-                  <ArrowUp size={17} />
-                )}
+                {busy ? <LoaderCircle size={16} className="spin" /> : <ArrowUp size={17} />}
               </button>
             </div>
           </form>
@@ -3252,10 +2955,7 @@ export default function App() {
             <span>
               <kbd>Enter</kbd> newline · <kbd>Shift + Enter</kbd> send
             </span>
-            <span>
-              Agent tools run automatically · Think mode{" "}
-              {thinking ? "on" : "off"}
-            </span>
+            <span>Agent tools run automatically · Think mode {thinking ? 'on' : 'off'}</span>
           </div>
         </div>
       </main>

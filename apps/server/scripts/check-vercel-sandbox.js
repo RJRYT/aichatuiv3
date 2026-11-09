@@ -16,12 +16,16 @@ console.log(`  vCPUs: ${config.vcpus}`);
 console.log(`  Session timeout: ${Math.round(config.timeoutMs / 1000)} seconds`);
 console.log(`  Network mode: ${config.networkMode}`);
 if (!config.configured) {
-  console.error('\nSet VERCEL_TOKEN, VERCEL_TEAM_ID and VERCEL_PROJECT_ID for external hosting. On Vercel, enable project OIDC instead.');
+  console.error(
+    '\nSet VERCEL_TOKEN, VERCEL_TEAM_ID and VERCEL_PROJECT_ID for external hosting. On Vercel, enable project OIDC instead.'
+  );
   process.exitCode = 1;
 } else {
   try {
     await import('@vercel/sandbox');
-    console.log('\nSDK import: OK. Run `npm run sandbox:smoke` to create a real sandbox and execute Python.');
+    console.log(
+      '\nSDK import: OK. Run `npm run sandbox:smoke` to create a real sandbox and execute Python.'
+    );
   } catch (error) {
     console.error(`\nSDK import failed: ${error.message}`);
     process.exitCode = 1;

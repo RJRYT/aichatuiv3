@@ -1,5 +1,11 @@
 import { Router } from 'express';
-import { clearSessionCookie, currentUser, oauthCallback, oauthStart, requireAuth } from '../services/auth.js';
+import {
+  clearSessionCookie,
+  currentUser,
+  oauthCallback,
+  oauthStart,
+  requireAuth,
+} from '../services/auth.js';
 import logger from '../utils/logger.js';
 
 const router = Router();
@@ -25,6 +31,7 @@ router.get('/me', requireAuth, (req, res, next) => {
 });
 router.post('/logout', (_req, res) => {
   log.info('User logout');
-  clearSessionCookie(res); res.json({ ok: true });
+  clearSessionCookie(res);
+  res.json({ ok: true });
 });
 export default router;
