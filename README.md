@@ -2,6 +2,20 @@
 
 A single-model, Agent Lab interface for NVIDIA Nemotron 3.5 Super VL. The frontend is a static React/Vite build; the Express backend owns model inference, OAuth, web search, plugin execution, personalization and memory. MongoDB persists user accounts, preferences, memories and chats.
 
+## v7.3.0 — Chat response UI refresh
+
+Backend regression suite: 42/42 passing. Frontend JSX syntax parsing: passed. Production Vite build: not run successfully because the Vite executable is absent from the supplied dependency tree.
+
+- Replaces the Agent activity/workflow panels with understated inline tool-use disclosures (for example, “Used Python executor”) that expand to show arguments and results.
+- Renders generated artifacts inline after the assistant response as compact filename/size rows with lazy preview and download.
+- Moves the persistent execution plan above the composer, collapsed by default, with editable objective/task text and explicit save.
+- Persists plan data in conversation messages and passes the current plan into subsequent turns so the agent can continue the same work.
+- Shows one live progress sentence above the current chat with elapsed working time and time since last activity; short progress summaries are derived from real plan/tool events, not private chain-of-thought.
+- Adds a subtle animated glaze only while generation is active and removes transient progress when generation ends.
+- Replaces the topbar status badge with in-chat progress and toast notifications.
+- Starts on a landing page without auto-selecting the most recent conversation; deleting the selected conversation returns to the landing page instead of opening another chat.
+- Adds regression-safe persistence for edited plans and retains existing chat, file, and agent features.
+
 ## v7.2.0 — Enforced deliverable execution
 
 This release strengthens concrete build/file requests so the agent cannot silently finish with instructions or unsupported success claims.

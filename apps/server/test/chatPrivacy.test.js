@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sanitizeRetrievedChat } from '../src/services/conversationPrivacy.js';
+import { sanitizeRetrievedChat, sanitizeAgentPlan } from '../src/services/conversationPrivacy.js';
 
 test('legacy reasoning is stripped from messages, branches, and response versions', () => {
   const sanitized = sanitizeRetrievedChat({
@@ -28,4 +28,22 @@ test('legacy reasoning is stripped from messages, branches, and response version
   assert.equal('reasoning' in sanitized.messages[1].versions[0], false);
   assert.equal('reasoning' in sanitized.branches[0].messages[0], false);
   assert.equal(sanitized.messages[0].content, 'Visible answer');
+});
+
+
+test('execution plans are safely normalized for persistence and follow-up turns', () => {
+  const plan = sanitizeAgentPlan({
+    objective: 'Continue a website build',
+    tasks: [
+      { id: 'design', title: 'Design', description: 'Plan the interface', status: 'completed', dependsOn: [] },
+      { id: 'build', title: 'Build', description: 'Implement the interface', status: 'running', dependsOn: ['design'] },
+      { id: 'bad', title: 'Invalid status', description: 'Normalize status', status: 'private-state', dependsOn: [] },
+    ],
+  });
+  assert.equal(plan.objective, 'Continue a website build');
+  assert.equal(plan.tasks[0].status, 'completed');
+  assert.equal(plan.tasks[1].status, 'running');
+  assert.equal(plan.tasks[1].dependsOn[0], 'design');
+  assert.equal(plan.tasks[2].status, 'pending');
+  assert.equal(sanitizeAgentPlan(null), null);
 });

@@ -263,6 +263,7 @@ router.post('/:id/messages/:messageId/versions', async (req, res, next) => {
           {
             content: message.content,
             toolEvents: message.toolEvents,
+            agentPlan: message.agentPlan,
             usage: message.usage,
             createdAt: message.createdAt,
           },
@@ -270,6 +271,7 @@ router.post('/:id/messages/:messageId/versions', async (req, res, next) => {
     message.versions.push({
       content: String(req.body?.content || '').slice(0, 120000),
       toolEvents: Array.isArray(req.body?.toolEvents) ? req.body.toolEvents : [],
+      agentPlan: req.body?.agentPlan,
       createdAt: new Date(),
     });
     message.activeVersion = message.versions.length - 1;

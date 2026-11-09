@@ -556,132 +556,167 @@ function ArtifactCard({ file, expanded = false, onPreview }) {
     </div>
   );
 }
-function ToolActivity({ events = [] }) {
+function toolDisplayName(name = '') {
+  const labels = {
+    execute_python: 'Python executor',
+    generate_image: 'image generator',
+    web_search: 'web search',
+    fetch_public_url: 'web fetch',
+    calculator: 'calculator',
+    get_current_datetime: 'date and time tool',
+    npm_search: 'npm search',
+    github_search: 'GitHub search',
+    search_memories: 'memory search',
+    save_memory: 'memory tool',
+    create_task_plan: 'task planner',
+    update_task_status: 'task planner',
+  };
+  return labels[name] || name.replaceAll('_', ' ');
+}
+
+function ToolUsageInline({ events = [] }) {
   if (!events.length) return null;
   return (
-    <details className="tool-activity" open>
-      <summary>
-        <Wrench size={13} /> Agent activity <span>{events.length}</span>
-      </summary>
-      <div className="tool-list">
-        {events.map((event, i) => (
-          <div className={`tool-row ${event.status}`} key={`${event.name}-${i}`}>
-            <div className="tool-row-title">
-              <PluginIcon name={event.name} />
-              <b>{event.name.replaceAll('_', ' ')}</b>
-              <span>
-                {event.status === 'complete'
-                  ? 'Completed'
-                  : event.status === 'error'
-                    ? 'Failed'
-                    : event.status === 'cancelled'
-                      ? 'Cancelled'
-                      : 'Running'}
-              </span>
-            </div>
+    <div className="tool-usage-inline">
+      {events.map((event, index) => (
+        <details className={`tool-usage-item ${event.status || ''}`} key={`${event.name}-${index}`}>
+          <summary>
+            {event.status === 'error' ? 'Tool failed: ' : 'Used '}
+            {toolDisplayName(event.name)}
+          </summary>
+          <div className="tool-usage-details">
+            {event.error && <p className="tool-error">{event.error}</p>}
             {event.arguments && (
-              <details className="tool-detail">
-                <summary>Arguments</summary>
+              <div>
+                <small>Arguments</small>
                 <pre>{JSON.stringify(event.arguments, null, 2)}</pre>
-              </details>
+              </div>
             )}
             {event.result !== undefined && (
-              <details className="tool-detail">
-                <summary>Result</summary>
+              <div>
+                <small>Result</small>
                 <pre>{JSON.stringify(event.result, null, 2).slice(0, 5000)}</pre>
-              </details>
+              </div>
             )}
-            {event.error && <p className="tool-error">{event.error}</p>}
           </div>
-        ))}
+        </details>
+      ))}
+    </div>
+  );
+}
+
+function InlineArtifact({ file }) {
+  const [downloadError, setDownloadError] = useState('');
+  const [isOpen, setIsOpen] = useState(false);
+  const Icon = artifactIcon(file);
+  const onDownload = async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDownloadError('');
+    try {
+      await downloadArtifact(file);
+    } catch (error) {
+      setDownloadError(error.message || 'Download failed.');
+    }
+  };
+  return (
+    <details className="artifact-inline" onToggle={(event) => setIsOpen(event.currentTarget.open)}>
+      <summary>
+        <Icon size={14} />
+        <b title={file.name}>{file.name}</b>
+        <small>{formatBytes(file.size)}</small>
+        <span>Preview</span>
+      </summary>
+      {isOpen && <div className="artifact-inline-body">
+        <ArtifactPreview file={file} expanded />
+        <button className="artifact-inline-download" onClick={onDownload}>
+          <Download size={13} /> Download file
+        </button>
+        {downloadError && <p className="artifact-preview-error">{downloadError}</p>}
+      </div>}
+    </details>
+  );
+}
+
+function AgentPlanDock({ plan, onSave, disabled = false }) {
+  const [draft, setDraft] = useState(plan);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => setDraft(plan), [plan]);
+  if (!plan?.tasks?.length) return null;
+  const completed = plan.tasks.filter((task) => ['completed', 'skipped'].includes(task.status)).length;
+  const changed = JSON.stringify(draft) !== JSON.stringify(plan);
+  const updateTask = (taskId, patch) => {
+    setDraft((current) => ({
+      ...current,
+      tasks: current.tasks.map((task) => task.id === taskId ? { ...task, ...patch } : task),
+    }));
+  };
+  const save = async () => {
+    setSaving(true);
+    try { await onSave(draft); } finally { setSaving(false); }
+  };
+  return (
+    <details className="agent-plan-dock">
+      <summary>
+        <ListChecks size={14} />
+        <span>Execution plan</span>
+        <small>{completed}/{plan.tasks.length} completed</small>
+        <ChevronRight size={13} className="plan-chevron" />
+      </summary>
+      <div className="agent-plan-dock-body">
+        <label className="plan-objective-label">Objective</label>
+        <textarea
+          value={draft?.objective || ''}
+          disabled={disabled}
+          rows={2}
+          onChange={(event) => setDraft((current) => ({ ...current, objective: event.target.value }))}
+        />
+        <div className="plan-edit-list">
+          {(draft?.tasks || []).map((task) => (
+            <div className={`plan-edit-task ${task.status || 'pending'}`} key={task.id}>
+              <div className="plan-edit-task-state">
+                {task.status === 'completed' ? <Check size={13} /> : task.status === 'running' ? <LoaderCircle size={13} className="spin" /> : task.status === 'failed' ? <AlertCircle size={13} /> : <i />}
+              </div>
+              <div className="plan-edit-fields">
+                <input value={task.title} disabled={disabled} onChange={(event) => updateTask(task.id, { title: event.target.value })} aria-label={`Task ${task.id} title`} />
+                <textarea value={task.description || ''} disabled={disabled} rows={2} onChange={(event) => updateTask(task.id, { description: event.target.value })} aria-label={`Task ${task.id} description`} />
+                <small>{(task.status || 'pending').replaceAll('_', ' ')}</small>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="plan-dock-footer">
+          <span>Changes are saved to this conversation.</span>
+          <button disabled={disabled || saving || !changed} onClick={save}>{saving ? 'Saving…' : 'Save plan'}</button>
+        </div>
       </div>
     </details>
   );
 }
-function AgentTimeline({ plan, events = [] }) {
-  if (!plan && !events.length) return null;
-  const tasks = plan?.tasks || [];
-  const completed = tasks.filter((task) => ['completed', 'skipped'].includes(task.status)).length;
-  const statusLabel = (status) =>
-    ({
-      pending: 'Queued',
-      running: 'In progress',
-      completed: 'Completed',
-      failed: 'Needs attention',
-      skipped: 'Skipped',
-    })[status] || 'Queued';
-  const iconFor = (status) =>
-    status === 'completed' ? (
-      <Check size={13} />
-    ) : status === 'failed' ? (
-      <AlertCircle size={13} />
-    ) : status === 'running' ? (
-      <LoaderCircle size={13} className="spin" />
-    ) : (
-      <span className="agent-task-dot" />
-    );
+
+function LiveProgress({ progress, now }) {
+  if (!progress) return null;
+  const elapsed = (timestamp) => {
+    const seconds = Math.max(0, Math.floor((now - timestamp) / 1000));
+    return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  };
   return (
-    <details
-      className="agent-timeline"
-      open={
-        Boolean(plan && tasks.some((task) => task.status === 'running')) ||
-        events.some((event) => event.type === 'self_correction' || event.type === 'tool_started')
-      }
-    >
-      <summary>
-        <Sparkles size={13} /> Agent workflow{' '}
-        <span>{plan ? `${completed}/${tasks.length} tasks` : `${events.length} events`}</span>
-      </summary>
-      <div className="agent-timeline-body">
-        {plan && (
-          <section className="agent-plan">
-            <div className="agent-plan-objective">{plan.objective}</div>
-            <ol>
-              {tasks.map((task) => (
-                <li className={`agent-task ${task.status || 'pending'}`} key={task.id}>
-                  <span className="agent-task-icon">{iconFor(task.status)}</span>
-                  <span className="agent-task-copy">
-                    <b>{task.title}</b>
-                    {task.description && <small>{task.description}</small>}
-                    {task.note && <small>{task.note}</small>}
-                  </span>
-                  <em>{statusLabel(task.status)}</em>
-                </li>
-              ))}
-            </ol>
-          </section>
-        )}
-        {events.length > 0 && (
-          <div className="agent-event-list">
-            {events.slice(-14).map((event, index) => (
-              <div
-                className={`agent-event ${event.type}`}
-                key={event.id || `${event.type}-${index}`}
-              >
-                <i />
-                <span>
-                  {event.message ||
-                    (event.type === 'tool_started'
-                      ? `Using ${event.label || event.name}`
-                      : event.type === 'tool_completed'
-                        ? `${event.label || event.name} completed`
-                        : event.type === 'task_updated'
-                          ? `Task ${
-                              event.task?.title || event.task?.id
-                            } — ${statusLabel(event.task?.status).toLowerCase()}`
-                          : event.type === 'plan_created'
-                            ? `Created a plan with ${event.plan?.tasks?.length || 0} tasks`
-                            : event.type === 'image_progress'
-                              ? `Saved image ${event.completed}/${event.total}`
-                              : event.type.replaceAll('_', ' '))}
-                </span>
-                {event.status === 'blocked' && <b>Stopped</b>}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </details>
+    <div className="live-progress" role="status" aria-live="polite">
+      <span className="live-progress-orb"><i /></span>
+      <span className="live-progress-message">{progress.message}</span>
+      <span className="live-progress-timing">Working {elapsed(progress.startedAt)} · Last worked {elapsed(progress.lastActivityAt)} ago</span>
+    </div>
+  );
+}
+
+function Toast({ toast, onClose }) {
+  if (!toast) return null;
+  return (
+    <div className={`toast toast-${toast.type || 'error'}`} role={toast.type === 'success' ? 'status' : 'alert'}>
+      {toast.type === 'success' ? <Check size={15} /> : <AlertCircle size={15} />}
+      <span>{toast.message}</span>
+      <button onClick={onClose} aria-label="Dismiss notification"><X size={14} /></button>
+    </div>
   );
 }
 
@@ -723,32 +758,6 @@ function Message({ message, onCopy, onEdit, onBranch, onShare, onRegenerate, onV
             ))}
           </div>
         )}
-        {message.agentPlan || message.agentEvents?.length > 0 ? (
-          <AgentTimeline plan={message.agentPlan} events={message.agentEvents || []} />
-        ) : null}
-        {message.toolEvents?.length > 0 && <ToolActivity events={message.toolEvents} />}
-        {!user &&
-          (() => {
-            const generated = [
-              ...new Map(
-                (message.toolEvents || [])
-                  .flatMap((event) => event.result?.artifacts || [])
-                  .map((file) => [file.id, file])
-              ).values(),
-            ];
-            return generated.length ? (
-              <section className="message-artifacts">
-                <div className="message-artifacts-title">
-                  <Files size={14} /> Generated files <span>{generated.length}</span>
-                </div>
-                <div className="message-artifacts-grid">
-                  {generated.map((file) => (
-                    <ArtifactCard key={file.id} file={file} />
-                  ))}
-                </div>
-              </section>
-            ) : null;
-          })()}
         {content &&
           (user ? (
             editing ? (
@@ -784,6 +793,18 @@ function Message({ message, onCopy, onEdit, onBranch, onShare, onRegenerate, onV
           ) : (
             <Markdown content={content} />
           ))}
+        {!user && !message.isStreaming && <ToolUsageInline events={message.toolEvents || []} />}
+        {!user && !message.isStreaming && (() => {
+          const generated = [...new Map((message.toolEvents || [])
+            .flatMap((event) => event.result?.artifacts || [])
+            .filter((file) => file?.id)
+            .map((file) => [file.id, file])).values()];
+          return generated.length ? (
+            <div className="message-inline-artifacts">
+              {generated.map((file) => <InlineArtifact key={file.id} file={file} />)}
+            </div>
+          ) : null;
+        })()}
         {message.error && (
           <div className="message-error">
             <AlertCircle size={14} />
@@ -1656,13 +1677,15 @@ export default function App() {
     [chatLoadError, setChatLoadError] = useState('');
   const [busy, setBusy] = useState(false),
     [status, setStatus] = useState('Ready'),
+    [toast, setToast] = useState(null),
+    [liveProgress, setLiveProgress] = useState(null),
+    [progressClock, setProgressClock] = useState(Date.now()),
     [drawer, setDrawer] = useState(false),
     [prefsOpen, setPrefsOpen] = useState(false),
     [libraryOpen, setLibraryOpen] = useState(false),
     [libraryRefresh, setLibraryRefresh] = useState(0);
   const [input, setInput] = useState(''),
     [files, setFiles] = useState([]),
-    [fileError, setFileError] = useState(''),
     [thinking, setThinking] = useState(true),
     [scrollDown, setScrollDown] = useState(false);
   const scrollRef = useRef(null),
@@ -1675,6 +1698,8 @@ export default function App() {
     manualTitleIdsRef = useRef(new Set()),
     chatLoadSeqRef = useRef(0);
   const activeChat = useMemo(() => chats.find((c) => c._id === activeId), [chats, activeId]);
+  const activePlan = useMemo(() => [...messages].reverse().find((message) => message.agentPlan)?.agentPlan || null, [messages]);
+  const setFileError = (message) => setToast(message ? { id: Date.now(), message: String(message), type: 'error' } : null);
   const starterSuggestions = useMemo(() => {
     const recent = chats
       .filter((c) => c.title && c.title !== 'New chat')
@@ -1712,7 +1737,7 @@ export default function App() {
       setChatLoading(true);
       setChatLoadError('');
       const query = new URLSearchParams(location.search);
-      if (query.get('account_linked')) setStatus(`${query.get('account_linked')} account linked`);
+      if (query.get('account_linked')) setToast({ id: Date.now(), message: `${query.get('account_linked')} account linked.`, type: 'success' });
       if (query.get('account_link_error')) setFileError(query.get('account_link_error'));
 
       // Load independent account resources concurrently. The chat list endpoint
@@ -1731,32 +1756,14 @@ export default function App() {
       if (chatResult.status !== 'fulfilled') throw chatResult.reason;
       const chatList = Array.isArray(chatResult.value.chats) ? chatResult.value.chats : [];
       setChats(chatList);
-      if (chatList.length) {
-        const preferred = localStorage.getItem('nemotron.activeChatId');
-        const chosen = chatList.find((c) => c._id === preferred) || chatList[0];
-        const sequence = ++chatLoadSeqRef.current;
-        setChatLoading(true);
-        setChatLoadError('');
-        setActiveId(chosen._id);
-        activeIdRef.current = chosen._id;
-        try {
-          const detail = await (await request(`/api/chats/${chosen._id}`)).json();
-          if (sequence === chatLoadSeqRef.current) {
-            setActiveBranchId(detail.chat.activeBranchId || 'main');
-            setBranches(detail.chat.branches || []);
-            setMessages(detail.chat.messages || []);
-          }
-        } catch (error) {
-          if (sequence === chatLoadSeqRef.current)
-            setChatLoadError(
-              `Couldn't load this conversation: ${error.message}. Select it again to retry.`
-            );
-        } finally {
-          if (sequence === chatLoadSeqRef.current) setChatLoading(false);
-        }
-      } else {
-        await newChat();
-      }
+      setActiveId(null);
+      activeIdRef.current = null;
+      setMessages([]);
+      setActiveBranchId('main');
+      setBranches([]);
+      setChatLoading(false);
+      try { localStorage.removeItem('nemotron.activeChatId'); } catch {}
+
     } catch (error) {
       if (error.message === 'Authentication required.') {
         try {
@@ -1785,11 +1792,21 @@ export default function App() {
     }
   }, []);
   useEffect(() => {
+    if (!toast) return undefined;
+    const timer = window.setTimeout(() => setToast(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+  useEffect(() => {
+    if (!busy) return undefined;
+    const timer = window.setInterval(() => setProgressClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [busy]);
+  useEffect(() => {
     try {
       const pending = localStorage.getItem('nemotron.pendingGeneration');
       if (pending) {
         localStorage.removeItem('nemotron.pendingGeneration');
-        setStatus('A previous generation was interrupted. Retry it when ready.');
+        setToast({ id: Date.now(), message: 'A previous generation was interrupted. You can retry it when ready.', type: 'error' });
       }
     } catch {}
     loadAccount();
@@ -1803,6 +1820,7 @@ export default function App() {
   }, [messages]);
   useEffect(() => {
     if (activeId) localStorage.setItem('nemotron.activeChatId', activeId);
+    else localStorage.removeItem('nemotron.activeChatId');
   }, [activeId]);
   useEffect(() => {
     let cancelled = false;
@@ -1871,20 +1889,30 @@ export default function App() {
     setChatLoading(false);
     setChatLoadError('');
     followScrollRef.current = true;
+    setActiveId(null);
+    activeIdRef.current = null;
+    setActiveBranchId('main');
+    setBranches([]);
+    setMessages([]);
+    setInput('');
+    setFiles([]);
+    setLiveProgress(null);
+    setDrawer(false);
+    try { localStorage.removeItem('nemotron.activeChatId'); } catch {}
+    return null;
+  };
+  const createChatRecord = async () => {
     const res = await request('/api/chats', {
       method: 'POST',
       body: JSON.stringify({ title: 'New chat' }),
     });
     const { chat } = await res.json();
-    setChats((current) => [chat, ...current]);
+    setChats((current) => [chat, ...current.filter((item) => item._id !== chat._id)]);
     setActiveId(chat._id);
     activeIdRef.current = chat._id;
     setActiveBranchId('main');
     setBranches(chat.branches || []);
     setMessages([]);
-    setInput('');
-    setFiles([]);
-    setDrawer(false);
     return chat;
   };
   const selectChat = async (id) => {
@@ -1942,6 +1970,19 @@ export default function App() {
     const { chat } = await res.json();
     setChats((current) => [chat, ...current.filter((c) => c._id !== chat._id)]);
   };
+  const saveAgentPlan = async (plan) => {
+    if (!activeId || busy) return;
+    const targetIndex = messages.map((message) => Boolean(message.agentPlan)).lastIndexOf(true);
+    if (targetIndex < 0) return;
+    const next = messages.map((message, messageIndex) => messageIndex === targetIndex ? { ...message, agentPlan: plan } : message);
+    setMessages(next);
+    try {
+      await saveMessages(activeId, next);
+      setToast({ id: Date.now(), message: 'Execution plan saved.', type: 'success' });
+    } catch (error) {
+      setToast({ id: Date.now(), message: error.message || 'Could not save the plan.', type: 'error' });
+    }
+  };
   const renameChat = async (chat) => {
     const title = window.prompt('Rename conversation', chat.title || 'New chat');
     if (!title?.trim()) return;
@@ -1959,13 +2000,14 @@ export default function App() {
     const next = chats.filter((c) => c._id !== id);
     setChats(next);
     if (activeId === id) {
-      if (next.length) selectChat(next[0]._id);
-      else {
-        setActiveId(null);
-        activeIdRef.current = null;
-        setMessages([]);
-        await newChat();
-      }
+      setActiveId(null);
+      activeIdRef.current = null;
+      setMessages([]);
+      setBranches([]);
+      setActiveBranchId('main');
+      setLiveProgress(null);
+      setDrawer(false);
+      try { localStorage.removeItem('nemotron.activeChatId'); } catch {}
     }
   };
   const logout = async () => {
@@ -2133,6 +2175,7 @@ export default function App() {
     if (index < 1 || busy) return;
     setBusy(true);
     setStatus('Regenerating response…');
+    setLiveProgress({ message: 'Reviewing the previous response…', startedAt: Date.now(), lastActivityAt: Date.now() });
     try {
       localStorage.setItem(
         'nemotron.pendingGeneration',
@@ -2153,6 +2196,7 @@ export default function App() {
           expectedRevision: activeChat?.revision || 0,
           preserveExistingMessageId: message.id,
           thinkingEnabled: thinking,
+          activePlan: [...messages.slice(0, index)].reverse().find((item) => item.agentPlan)?.agentPlan || null,
           messages: messages.slice(0, index).map((m) => ({
             role: m.role,
             content: m.apiContent || m.content,
@@ -2178,7 +2222,14 @@ export default function App() {
           const line = block.split(/\r?\n/).find((x) => x.startsWith('data:'));
           if (!line) continue;
           const event = JSON.parse(line.slice(5).trim());
-          if (event.type === 'status') setStatus(event.status || 'Regenerating…');
+          if (event.type === 'status') {
+            setStatus(event.status || 'Regenerating…');
+            setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: event.status || 'Regenerating…', lastActivityAt: Date.now() }));
+          }
+          if (event.type === 'agent_event') {
+            const item = event.event || {};
+            if (item.summary) setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: item.summary, lastActivityAt: Date.now() }));
+          }
           if (event.type === 'error') throw new Error(event.error || 'Regeneration failed.');
         }
         if (part.done) break;
@@ -2198,6 +2249,7 @@ export default function App() {
         localStorage.removeItem('nemotron.pendingGeneration');
       } catch {}
       setBusy(false);
+      setLiveProgress(null);
     }
   };
 
@@ -2277,7 +2329,7 @@ export default function App() {
     let chat = activeChat;
     if (!chat) {
       try {
-        chat = await newChat();
+        chat = await createChatRecord();
       } catch (error) {
         setBusy(false);
         setFileError(error.message);
@@ -2392,6 +2444,7 @@ export default function App() {
     const nextMessages =
         options.messages || (options.reuseLastUser ? messages : [...messages, userMessage]),
       titleBefore = chat.title || 'New chat';
+    const continuingPlan = [...nextMessages].reverse().find((message) => message.agentPlan)?.agentPlan || null;
     if (activeIdRef.current === chat._id) setMessages(nextMessages);
     setInput('');
     setFiles([]);
@@ -2402,15 +2455,18 @@ export default function App() {
         role: 'assistant',
         content: '',
         toolEvents: [],
+        agentPlan: continuingPlan,
+        isStreaming: true,
         createdAt: new Date().toISOString(),
       };
     if (activeIdRef.current === chat._id) setMessages([...nextMessages, assistant]);
     const controller = new AbortController();
     abortRef.current = controller;
     const started = performance.now();
+    setLiveProgress({ message: 'Reviewing your request…', startedAt: Date.now(), lastActivityAt: Date.now() });
     let output = '',
       events = [],
-      agentPlan = null,
+      agentPlan = continuingPlan,
       agentEvents = [],
       usage = null,
       durationMs = null,
@@ -2446,6 +2502,7 @@ export default function App() {
           expectedRevision: options.expectedRevision ?? (chat.revision || 0),
           assistantMessageId: assistantId,
           thinkingEnabled: thinking,
+          activePlan: continuingPlan,
           messages: nextMessages.map((m) => ({
             role: m.role,
             content: m.apiContent || m.content,
@@ -2482,10 +2539,14 @@ export default function App() {
           } catch {
             continue;
           }
-          if (event.type === 'status') setStatus(event.status || 'Working…');
+          if (event.type === 'status') {
+            setStatus(event.status || 'Working…');
+            setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: event.status || 'Working…', lastActivityAt: Date.now() }));
+          }
           if (event.type === 'chunk') {
             output += event.content || '';
             setStatus('Generating…');
+            setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: 'Writing the response…', lastActivityAt: Date.now() }));
             update();
           }
           if (event.type === 'agent_event') {
@@ -2493,8 +2554,12 @@ export default function App() {
             agentEvents = [...agentEvents, item];
             if (item.type === 'plan_created' && item.plan) agentPlan = item.plan;
             if (item.type === 'task_updated' && item.plan) agentPlan = item.plan;
-            if (item.type === 'self_correction') setStatus('Recovering from an error…');
-            else if (item.type === 'agent_started') setStatus('Planning…');
+            if (item.type === 'self_correction') { setStatus('Recovering from an error…'); setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: item.summary || 'Recovering from an issue…', lastActivityAt: Date.now() })); }
+            else if (item.type === 'agent_started') { setStatus('Planning…'); setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: 'Planning the next step…', lastActivityAt: Date.now() })); }
+            else if (item.type === 'plan_created') setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: item.summary || `Plan ready: ${item.plan?.objective || 'working through your request'}`, lastActivityAt: Date.now() }));
+            else if (item.type === 'task_updated' && item.task) setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: item.summary || `${item.task.status === 'completed' ? 'Completed' : item.task.status === 'running' ? 'Working on' : 'Updating'}: ${item.task.title}`, lastActivityAt: Date.now() }));
+            else if (item.type === 'tool_started') setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: item.summary || `Using ${toolDisplayName(item.name)}`, lastActivityAt: Date.now() }));
+            else if (item.type === 'tool_completed') setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: item.summary || 'Checking the result…', lastActivityAt: Date.now() }));
             update();
           }
           if (event.type === 'tool_start') {
@@ -2507,6 +2572,7 @@ export default function App() {
               },
             ];
             setStatus(`Using ${event.name.replaceAll('_', ' ')}…`);
+            setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: `Using ${toolDisplayName(event.name)}`, lastActivityAt: Date.now() }));
             update();
           }
           if (event.type === 'tool_result') {
@@ -2538,6 +2604,7 @@ export default function App() {
                     }
                   : x
               );
+            setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: 'Reviewing tool results…', lastActivityAt: Date.now() }));
             update();
           }
           if (event.type === 'done') {
@@ -2553,6 +2620,7 @@ export default function App() {
       liveAssistant = {
         ...assistant,
         content: output || '(No text was returned.)',
+        isStreaming: false,
         toolEvents: events,
         agentPlan,
         agentEvents,
@@ -2594,6 +2662,7 @@ export default function App() {
       liveAssistant = {
         ...assistant,
         content: output,
+        isStreaming: false,
         toolEvents: events,
         agentPlan,
         agentEvents,
@@ -2624,6 +2693,7 @@ export default function App() {
         localStorage.removeItem('nemotron.pendingGeneration');
       } catch {}
       setBusy(false);
+      setLiveProgress(null);
     }
   };
   const addFiles = (fileList) => {
@@ -2676,10 +2746,6 @@ export default function App() {
           </div>
         </div>
         <div className="top-actions">
-          <span className="status-label">
-            <i className={busy ? 'pulse-dot' : 'ready-dot'} />
-            {status}
-          </span>
           {busy && (
             <button
               className="icon-button stop-button"
@@ -2769,7 +2835,8 @@ export default function App() {
             </button>
           </div>
         </div>
-        <section className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
+        <section className={`chat-scroll ${busy ? 'agent-is-working' : ''}`} ref={scrollRef} onScroll={onScroll}>
+          <LiveProgress progress={busy ? liveProgress : null} now={progressClock} />
           <div className="chat-inner">
             {chatLoading ? (
               <div className="chat-loading">
@@ -2839,15 +2906,7 @@ export default function App() {
           )}
         </section>
         <div className="composer-area">
-          {fileError && (
-            <div className="attachment-error">
-              <AlertCircle size={13} />
-              {fileError}
-              <button onClick={() => setFileError('')}>
-                <X size={13} />
-              </button>
-            </div>
-          )}
+          {activePlan && <AgentPlanDock plan={activePlan} onSave={saveAgentPlan} disabled={busy} />}
           {files.length > 0 && (
             <div className="pending-files">
               {files.map((f, i) => (
@@ -2940,6 +2999,7 @@ export default function App() {
           </div>
         </div>
       </main>
+      <Toast toast={toast} onClose={() => setToast(null)} />
       <HistoryDrawer
         open={drawer}
         onClose={() => setDrawer(false)}

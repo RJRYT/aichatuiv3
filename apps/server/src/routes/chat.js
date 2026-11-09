@@ -155,6 +155,7 @@ router.post('/stream', async (req, res, next) => {
                   {
                     content: target.content,
                     toolEvents: target.toolEvents,
+                    agentPlan: target.agentPlan,
                     usage: target.usage,
                     createdAt: target.createdAt,
                   },
@@ -162,6 +163,7 @@ router.post('/stream', async (req, res, next) => {
             target.versions.push({
               content: alternative.content,
               toolEvents: alternative.toolEvents,
+              agentPlan: alternative.agentPlan,
               usage: alternative.usage,
               createdAt: alternative.createdAt,
             });

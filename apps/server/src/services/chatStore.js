@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { Chat } from '../models/Chat.js';
 import logger from '../utils/logger.js';
-import { sanitizeRetrievedChat } from './conversationPrivacy.js';
+import { sanitizeRetrievedChat, sanitizeAgentPlan } from './conversationPrivacy.js';
 
 const log = logger.child({ component: 'chatStore' });
 const memory = new Map();
@@ -54,11 +54,14 @@ function cleanMessages(messages = []) {
     if (message.usage) safe.usage = message.usage;
     if (message.durationMs != null) safe.durationMs = Number(message.durationMs);
     if (message.toolEvents) safe.toolEvents = message.toolEvents;
+    const agentPlan = sanitizeAgentPlan(message.agentPlan);
+    if (agentPlan) safe.agentPlan = agentPlan;
     if (message.error) safe.error = String(message.error).slice(0, 2000);
     if (Array.isArray(message.versions))
       safe.versions = message.versions.slice(0, 20).map((v) => ({
         content: String(v.content || '').slice(0, 120000),
         toolEvents: Array.isArray(v.toolEvents) ? v.toolEvents : [],
+        ...(sanitizeAgentPlan(v.agentPlan) ? { agentPlan: sanitizeAgentPlan(v.agentPlan) } : {}),
         usage: v.usage,
         createdAt: v.createdAt,
       }));

@@ -41,6 +41,7 @@ async function verifyDeliverableArtifacts(result, userId, contract) {
   const artifacts = Array.isArray(result?.artifacts) ? result.artifacts : [];
   const verified = [];
   const fileContents = new Map();
+  const zipContents = new Map();
   for (const metadata of artifacts) {
     if (!metadata?.id || !Number(metadata.size)) continue;
     const stored = await getArtifact(metadata.id, userId);
@@ -50,19 +51,22 @@ async function verifyDeliverableArtifacts(result, userId, contract) {
     const item = { id: metadata.id, name: metadata.name, size: stored.data.length, mimeType: stored.mimeType };
     if (/\.zip$/i.test(String(metadata.name || '')) || stored.mimeType === 'application/zip') {
       const zip = inspectZipBuffer(stored.data);
-      if (zip.valid) item.zip = zip;
+      if (zip.valid) {
+        zipContents.set(String(metadata.id), zip.entries);
+        item.zip = { valid: true, fileCount: zip.fileCount, entries: zip.entries.map(({ name, compressedSize, uncompressedSize }) => ({ name, compressedSize, uncompressedSize })) };
+      }
     }
     verified.push(item);
   }
   const archive = verified.find((item) => item.zip);
-  const websiteFiles = archive?.zip?.entries || [...fileContents.entries()].map(([name, content]) => ({ name, content, uncompressedSize: content.length }));
+  const websiteFiles = archive ? (zipContents.get(String(archive.id)) || []) : [...fileContents.entries()].map(([name, content]) => ({ name, content, uncompressedSize: content.length }));
   const websiteQuality = contract.website ? assessWebsiteQuality(websiteFiles) : { passed: true, checks: {} };
   const qualityChecks = websiteQuality.checks;
   const qualityPassed = websiteQuality.passed;
   const valid = contract.archiveRequired
     ? Boolean(archive && (!contract.website || qualityPassed))
     : contract.website
-      ? Boolean(html && css && js && qualityPassed)
+      ? qualityPassed
       : verified.length > 0;
   return {
     valid,
@@ -105,6 +109,26 @@ function parseToolArgs(raw) {
     throw new Error(`Invalid tool arguments: ${error.message}`);
   }
 }
+function normalizeActivePlan(plan) {
+  if (!plan || typeof plan !== 'object' || !Array.isArray(plan.tasks)) return null;
+  const allowed = new Set(['pending', 'running', 'completed', 'failed', 'skipped']);
+  const tasks = plan.tasks.slice(0, 12).map((task, index) => ({
+    id: String(task?.id || `task-${index + 1}`).slice(0, 32),
+    title: String(task?.title || `Task ${index + 1}`).slice(0, 100),
+    description: String(task?.description || '').slice(0, 300),
+    dependsOn: Array.isArray(task?.dependsOn) ? task.dependsOn.map(String).slice(0, 12) : [],
+    status: allowed.has(task?.status) ? task.status : 'pending',
+    note: String(task?.note || '').slice(0, 500),
+    ...(task?.updatedAt ? { updatedAt: task.updatedAt } : {}),
+  }));
+  if (!tasks.length) return null;
+  return {
+    objective: String(plan.objective || 'Continue the existing task plan').slice(0, 500),
+    tasks,
+    createdAt: plan.createdAt || new Date().toISOString(),
+  };
+}
+
 function systemPrompt(user) {
   return buildSystemPrompt(user);
 }
@@ -248,6 +272,12 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
   const deliverableContract = detectDeliverableContract(body.messages);
   const messages = [
     { role: 'system', content: systemPrompt(user) },
+    ...(body.activePlan
+      ? [{
+          role: 'system',
+          content: `Continue this existing user-approved task plan instead of silently replacing it. Preserve its task IDs and completed work. Update statuses with update_task_status as work progresses. The user can edit this plan in the UI. If the user explicitly requests a new or revised plan, then create one.\n\nACTIVE PLAN:\n${JSON.stringify(normalizeActivePlan(body.activePlan))}`,
+        }]
+      : []),
     ...(deliverableContract
       ? [{
           role: 'system',
@@ -269,14 +299,30 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
     finalText = '',
     rounds = 0,
     toolEvents = [];
-  const agentState = { plan: null, deliverableContract, deliverableVerification: null, pythonArtifactRuns: 0 };
+  const agentState = { plan: normalizeActivePlan(body.activePlan), deliverableContract, deliverableVerification: null, pythonArtifactRuns: 0 };
   const agentEvents = [];
   const consecutiveFailures = new Map();
   const emitAgentEvent = (eventType, data = {}) => {
+    const summary = eventType === 'plan_created'
+      ? `Planning: ${String(data.plan?.objective || 'organizing the work').slice(0, 180)}`
+      : eventType === 'task_updated'
+        ? `${data.task?.status === 'completed' ? 'Completed' : data.task?.status === 'running' ? 'Working on' : 'Updating'}: ${String(data.task?.title || 'current task').slice(0, 120)}`
+        : eventType === 'tool_started'
+          ? `Using ${String(data.label || data.name || 'a tool').replaceAll('_', ' ')}`
+          : eventType === 'tool_completed'
+            ? `Checking the result from ${String(data.label || data.name || 'the tool').replaceAll('_', ' ')}`
+            : eventType === 'self_correction'
+              ? `Recovering from an issue with ${String(data.tool || 'a tool').replaceAll('_', ' ')}`
+              : eventType === 'agent_completed'
+                ? 'The response is ready.'
+                : eventType === 'deliverable_validation'
+                  ? data.status === 'verified' ? 'Verifying the generated files: complete.' : 'Checking the generated files.'
+                  : '';
     const event = {
       id: crypto.randomUUID(),
       type: eventType,
       at: new Date().toISOString(),
+      ...(summary ? { summary } : {}),
       ...data,
     };
     agentEvents.push(event);
@@ -288,7 +334,7 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
       rounds = round + 1;
       sse(res, {
         type: 'status',
-        status: round === 0 ? 'Thinking…' : 'Reviewing plugin results…',
+        status: round === 0 ? 'Reviewing your request and planning the next step…' : 'Reviewing the latest results…',
         round,
       });
       const planTasks = agentState.plan?.tasks || [];
@@ -298,7 +344,7 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
         planTasks.every((task) => ['completed', 'skipped'].includes(task.status));
       const requiredToolName = deliverableContract
         ? deliverableContract.requiresPlan
-          ? !agentState.plan
+          ? (!agentState.plan || planIsComplete)
             ? 'create_task_plan'
             : !agentState.deliverableVerification?.valid
               ? planHasRunningTask
