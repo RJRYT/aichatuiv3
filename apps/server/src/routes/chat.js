@@ -154,7 +154,6 @@ router.post('/stream', async (req, res, next) => {
               : [
                   {
                     content: target.content,
-                    reasoning: target.reasoning,
                     toolEvents: target.toolEvents,
                     usage: target.usage,
                     createdAt: target.createdAt,
@@ -162,7 +161,6 @@ router.post('/stream', async (req, res, next) => {
                 ];
             target.versions.push({
               content: alternative.content,
-              reasoning: alternative.reasoning,
               toolEvents: alternative.toolEvents,
               usage: alternative.usage,
               createdAt: alternative.createdAt,

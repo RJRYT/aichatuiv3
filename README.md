@@ -1,3 +1,25 @@
+# Nemotron Agent Lab v7.1.0 — Reliability and Privacy Patch
+
+## v7.1.0 changes
+
+- Added backend-side intent detection for concrete file/project deliverables.
+- Substantial website/app/project requests now require a task-plan tool call before implementation.
+- If the model responds with prose instead of producing a requested file, the orchestrator forces bounded Python execution attempts. ZIP requests require a verified `.zip` artifact.
+- Final success is gated on actual artifact metadata (non-empty file, ID, and SHA-256 checksum); otherwise the backend returns an explicit incomplete/failure response.
+- Intermediate model text is buffered until tool selection is known, preventing pre-execution success claims from appearing in the stream.
+- Internal artifact download paths are removed from model-visible tool results and sanitized from final responses.
+- Provider reasoning fields are discarded server-side, no longer persisted, and no longer rendered by the client. Historical chat reads strip legacy reasoning fields, including message versions.
+- Added orchestration regression tests for project/ZIP intent, capability-question handling, artifact evidence validation, and reasoning/path sanitization.
+
+### Verification
+
+- Backend test suite: 35 tests passed.
+- Node syntax checks: server JavaScript modules passed.
+- Frontend production build: not verified in this environment because dependency installation timed out.
+- Live NVIDIA tool-calling and remote Python execution: not tested against production credentials.
+
+---
+
 # Nemotron Agent Lab — MERN monorepo
 
 A single-model, Agent Lab interface for NVIDIA Nemotron 3.5 Super VL. The frontend is a static React/Vite build; the Express backend owns model inference, OAuth, web search, plugin execution, personalization and memory. MongoDB persists user accounts, preferences, memories and chats.

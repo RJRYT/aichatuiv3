@@ -262,7 +262,6 @@ router.post('/:id/messages/:messageId/versions', async (req, res, next) => {
       : [
           {
             content: message.content,
-            reasoning: message.reasoning,
             toolEvents: message.toolEvents,
             usage: message.usage,
             createdAt: message.createdAt,
@@ -270,7 +269,6 @@ router.post('/:id/messages/:messageId/versions', async (req, res, next) => {
         ];
     message.versions.push({
       content: String(req.body?.content || '').slice(0, 120000),
-      reasoning: String(req.body?.reasoning || '').slice(0, 50000),
       toolEvents: Array.isArray(req.body?.toolEvents) ? req.body.toolEvents : [],
       createdAt: new Date(),
     });

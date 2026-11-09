@@ -726,14 +726,6 @@ function Message({ message, onCopy, onEdit, onBranch, onShare, onRegenerate, onV
         {message.agentPlan || message.agentEvents?.length > 0 ? (
           <AgentTimeline plan={message.agentPlan} events={message.agentEvents || []} />
         ) : null}
-        {message.reasoning && (
-          <details className="reasoning-block">
-            <summary>
-              <Brain size={13} /> Thinking process
-            </summary>
-            <div>{message.reasoning}</div>
-          </details>
-        )}
         {message.toolEvents?.length > 0 && <ToolActivity events={message.toolEvents} />}
         {!user &&
           (() => {
@@ -2260,7 +2252,6 @@ export default function App() {
             messages: messages.map((m) => ({
               role: m.role,
               content: textOf(m.content),
-              reasoning: m.reasoning,
               toolEvents: m.toolEvents,
             })),
           },
@@ -2410,7 +2401,6 @@ export default function App() {
         id: assistantId,
         role: 'assistant',
         content: '',
-        reasoning: '',
         toolEvents: [],
         createdAt: new Date().toISOString(),
       };
@@ -2434,7 +2424,6 @@ export default function App() {
               ? {
                   ...liveAssistant,
                   content: output,
-                  reasoning: thought,
                   toolEvents: events,
                   agentPlan,
                   agentEvents,
@@ -2500,10 +2489,6 @@ export default function App() {
             setStatus('Generating…');
             update();
           }
-          if (event.type === 'reasoning') {
-            thought += event.content || '';
-            update();
-          }
           if (event.type === 'agent_event') {
             const item = event.event || {};
             agentEvents = [...agentEvents, item];
@@ -2566,11 +2551,9 @@ export default function App() {
         }
         if (chunk.done) break;
       }
-      if (!output && thought) output = '(The model returned thinking but no final answer.)';
       liveAssistant = {
         ...assistant,
         content: output || '(No text was returned.)',
-        reasoning: thought,
         toolEvents: events,
         agentPlan,
         agentEvents,
@@ -2612,7 +2595,6 @@ export default function App() {
       liveAssistant = {
         ...assistant,
         content: output,
-        reasoning: thought,
         toolEvents: events,
         agentPlan,
         agentEvents,

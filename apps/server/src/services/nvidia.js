@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { getToolDefinitions, runTool } from './tools.js';
 import { buildSystemPrompt } from './systemPrompt.js';
 import logger from '../utils/logger.js';
+import { classifyUserRequest, collectVerifiedArtifacts, sanitizeAssistantText } from './agentOrchestration.js';
 
 export const MODEL_ID = 'nvidia/nemotron-3.5-super-vl-120b-a12b';
 const log = logger.child({ component: 'nvidia' });
@@ -12,16 +13,20 @@ function sse(res, payload) {
   if (!res.writableEnded) res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 function parseToolArgs(raw) {
+  let parsed;
   try {
-    return typeof raw === 'string' ? JSON.parse(raw || '{}') : raw || {};
+    parsed = typeof raw === 'string' ? JSON.parse(raw || '{}') : raw || {};
   } catch {
-    return {};
+    throw new Error('The model returned malformed JSON for a tool call.');
   }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+    throw new Error('Tool arguments must be a JSON object.');
+  return parsed;
 }
 function systemPrompt(user) {
   return buildSystemPrompt(user);
 }
-async function requestRound({ messages, tools, thinkingEnabled, signal, res, round, hasVision }) {
+async function requestRound({ messages, tools, toolChoice = 'auto', thinkingEnabled, signal, res, round, hasVision }) {
   log.debug('NVIDIA request round', { round, toolCount: tools.length, hasVision });
   const body = {
     model: MODEL_ID,
@@ -30,7 +35,7 @@ async function requestRound({ messages, tools, thinkingEnabled, signal, res, rou
     top_p: 0.95,
     stream: true,
     chat_template_kwargs: { enable_thinking: Boolean(thinkingEnabled) },
-    ...(tools.length ? { tools, tool_choice: 'auto', parallel_tool_calls: true } : {}),
+    ...(tools.length ? { tools, tool_choice: toolChoice, parallel_tool_calls: toolChoice === 'auto' } : {}),
   };
   const response = await fetch(NVIDIA_ENDPOINT, {
     method: 'POST',
@@ -53,7 +58,6 @@ async function requestRound({ messages, tools, thinkingEnabled, signal, res, rou
   const decoder = new TextDecoder();
   let buffer = '',
     content = '',
-    reasoning = '',
     finishReason = null,
     usage = null;
   const calls = new Map();
@@ -72,13 +76,8 @@ async function requestRound({ messages, tools, thinkingEnabled, signal, res, rou
       delta = choice?.delta || {};
     if (typeof delta.content === 'string' && delta.content) {
       content += delta.content;
-      sse(res, { type: 'chunk', round, content: delta.content });
     }
-    const thought = delta.reasoning_content ?? delta.reasoning;
-    if (typeof thought === 'string' && thought) {
-      reasoning += thought;
-      sse(res, { type: 'reasoning', round, content: thought });
-    }
+    // Deliberately discard provider reasoning fields. They are private model internals, not user-facing content.
     if (Array.isArray(delta.tool_calls))
       for (const item of delta.tool_calls) {
         const index = Number(item.index ?? 0),
@@ -113,7 +112,6 @@ async function requestRound({ messages, tools, thinkingEnabled, signal, res, rou
   }
   return {
     content,
-    reasoning,
     finishReason,
     usage,
     toolCalls: [...calls.values()].sort((a, b) => a.index - b.index),
@@ -137,6 +135,9 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
     ),
   });
   const tools = getToolDefinitions();
+  const requestIntent = classifyUserRequest(body.messages);
+  const planTool = tools.find((tool) => tool.function?.name === 'create_task_plan');
+  const pythonTool = tools.find((tool) => tool.function?.name === 'execute_python');
   const input = body.messages.map((m) => {
     const files = Array.isArray(m.attachments)
       ? m.attachments.filter((file) => file?.sandboxPath?.startsWith('uploads/'))
@@ -168,9 +169,12 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
   const startedAt = Date.now();
   let finalUsage = null,
     finalText = '',
-    finalReasoning = '',
     rounds = 0,
     toolEvents = [];
+  let planWasRequired = requestIntent.complex;
+  let planExecutionAttempts = 0;
+  let artifactExecutionAttempts = 0;
+  let artifactExecutionForced = false;
   const agentState = { plan: null };
   const agentEvents = [];
   const consecutiveFailures = new Map();
@@ -193,9 +197,22 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
         status: round === 0 ? 'Thinking…' : 'Reviewing plugin results…',
         round,
       });
+      let roundTools = tools;
+      let toolChoice = 'auto';
+      const forcedArtifactRound = artifactExecutionForced;
+      const forcedPlanRound = planWasRequired && !agentState.plan && planExecutionAttempts < 2 && Boolean(planTool);
+      if (forcedPlanRound) {
+        planExecutionAttempts += 1;
+        roundTools = [planTool];
+        toolChoice = { type: 'function', function: { name: 'create_task_plan' } };
+      } else if (artifactExecutionForced && pythonTool) {
+        roundTools = [pythonTool];
+        toolChoice = 'required';
+      }
       const result = await requestRound({
         messages,
-        tools,
+        tools: roundTools,
+        toolChoice,
         thinkingEnabled: body.thinkingEnabled !== false,
         signal: controller.signal,
         res,
@@ -203,9 +220,30 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
         hasVision,
       });
       finalUsage = result.usage || finalUsage;
-      finalText += result.content;
-      finalReasoning += result.reasoning;
-      if (!result.toolCalls.length) break;
+      if (!result.toolCalls.length) {
+        if (forcedPlanRound && !agentState.plan) {
+          messages.push({ role: 'system', content: 'A visible execution plan is required for this substantial project. Call create_task_plan now with an ordered, concise plan. Do not replace the plan tool call with prose.' });
+          emitAgentEvent('planning_required', { attempt: planExecutionAttempts, maxAttempts: 2 });
+          continue;
+        }
+        const currentArtifacts = collectVerifiedArtifacts(toolEvents);
+        const currentArtifactSatisfied = currentArtifacts.length > 0 && (!requestIntent.wantsZip || currentArtifacts.some((artifact) => artifact.name.toLowerCase().endsWith('.zip')));
+        if (requestIntent.deliverable && !currentArtifactSatisfied && artifactExecutionAttempts < 2) {
+          artifactExecutionForced = true;
+          artifactExecutionAttempts += 1;
+          messages.push({ role: 'system', content: `The user explicitly requested a real deliverable. The previous attempt did not produce the required verified artifact. Do not answer with code blocks or instructions. Use execute_python now. Inspect the existing workspace and fix or package the files already created rather than starting over unnecessarily. ${requestIntent.wantsZip ? 'Create a complete project directory and a ZIP archive at the workspace root. The ZIP must contain all source files and a README.' : 'Create the actual requested output file(s) in the workspace root.'} Use normal CPython, inspect the output, and do not claim completion until the tool returns saved artifact metadata.` });
+          emitAgentEvent('execution_required', { message: 'A real file deliverable was requested; preparing workspace execution.' });
+          continue;
+        }
+        if (requestIntent.deliverable && !currentArtifactSatisfied && artifactExecutionAttempts >= 2) {
+          finalText = requestIntent.wantsZip
+            ? 'I could not complete the requested ZIP deliverable. Two execution attempts did not produce a verified ZIP artifact. I will not claim that the project is ready; inspect the execution timeline for the actual errors.'
+            : 'I could not complete the requested file deliverable. Two execution attempts did not produce a verified artifact. I will not claim that a file was created or downloaded; inspect the execution timeline for the actual errors.';
+        } else {
+          finalText = sanitizeAssistantText(result.content);
+        }
+        break;
+      }
       if (round === MAX_TOOL_ROUNDS) throw new Error('Plugin execution exceeded the safety limit.');
       const calls = result.toolCalls.map((call, index) => ({
         id: call.id || `call_${round}_${index}`,
@@ -214,8 +252,10 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
       }));
       messages.push({ role: 'assistant', content: result.content || null, tool_calls: calls });
       for (const call of calls) {
-        const name = call.function.name,
-          args = parseToolArgs(call.function.arguments);
+        const name = call.function.name;
+        let args = {};
+        let argumentError = null;
+        try { args = parseToolArgs(call.function.arguments); } catch (error) { argumentError = error.message; }
         const safeArgs =
           name === 'execute_python'
             ? {
@@ -227,7 +267,9 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
         emitAgentEvent('tool_started', { name, label: name.replaceAll('_', ' '), round });
         const previousFailures = consecutiveFailures.get(name) || 0;
         let outcome;
-        if (previousFailures >= MAX_RECOVERY_ATTEMPTS_PER_TOOL) {
+        if (argumentError) {
+          outcome = { ok: false, error: argumentError };
+        } else if (previousFailures >= MAX_RECOVERY_ATTEMPTS_PER_TOOL) {
           outcome = {
             ok: false,
             error: `Recovery limit reached for ${name}. Stop retrying this tool and explain the remaining limitation.`,
@@ -256,11 +298,13 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
               ? outcome.result?.error || 'Image generation did not complete.'
               : undefined
           : outcome.error;
+        const eventResult = outcome.ok && outcome.result ? { ...outcome.result } : undefined;
+        if (Array.isArray(eventResult?.artifacts)) eventResult.artifacts = eventResult.artifacts.map(({ downloadUrl, ...artifact }) => artifact);
         const event = {
           name,
           arguments: safeArgs,
           status: toolCompleted ? 'complete' : 'error',
-          result: outcome.ok ? outcome.result : undefined,
+          result: eventResult,
           error: errorText,
           attempt: previousFailures + 1,
         };
@@ -286,8 +330,10 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
           });
         }
         sse(res, { type: 'tool_result', ...event, round });
+        const modelResult = eventResult;
         const toolPayload = {
           ...outcome,
+          ...(outcome.ok ? { result: modelResult } : {}),
           ...(!toolCompleted
             ? {
                 recoveryGuidance:
@@ -304,17 +350,33 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
           content: JSON.stringify(toolPayload),
         });
       }
+      if (forcedArtifactRound) artifactExecutionForced = false;
     }
+    const verifiedArtifacts = collectVerifiedArtifacts(toolEvents);
+    const zipVerified = verifiedArtifacts.some((artifact) => artifact.name.toLowerCase().endsWith('.zip'));
+    const artifactSatisfied = !requestIntent.deliverable || (verifiedArtifacts.length > 0 && (!requestIntent.wantsZip || zipVerified));
+    if (requestIntent.deliverable && !artifactSatisfied) {
+      finalText = requestIntent.wantsZip
+        ? 'I could not complete the requested ZIP deliverable. No verified ZIP artifact was produced, so I will not claim that the project is ready. Check the execution timeline for the actual tool result and error.'
+        : 'I could not complete the requested file deliverable. No verified output artifact was produced, so I will not claim that a file was created or downloaded. Check the execution timeline for the actual tool result and error.';
+    } else {
+      finalText = sanitizeAssistantText(finalText);
+      if (requestIntent.deliverable && verifiedArtifacts.length) {
+        const delivered = verifiedArtifacts.filter((artifact) => !requestIntent.wantsZip || artifact.name.toLowerCase().endsWith('.zip'));
+        finalText = `${finalText}${finalText ? '\n\n' : ''}Verified deliverable${delivered.length === 1 ? '' : 's'}: ${delivered.map((artifact) => `${artifact.name} (${artifact.size.toLocaleString()} bytes)`).join(', ')}. The actual file${delivered.length === 1 ? ' is' : 's are'} available in the File Library below.`;
+      }
+      if (planWasRequired && !agentState.plan) finalText = `${finalText}${finalText ? '\n\n' : ''}Note: the required execution plan could not be created, so the planning stage remains incomplete.`;
+    }
+    for (const part of finalText.match(/[^]{1,1200}/g) || []) sse(res, { type: 'chunk', round: rounds - 1, content: part });
     const visible = body.messages.filter((m) => m.role !== 'system' && m.role !== 'tool');
     if (agentEvents.length || agentState.plan) {
-      const allDone =
-        !agentState.plan ||
-        agentState.plan.tasks.every((task) => ['completed', 'skipped'].includes(task.status));
+      const hasFailed = agentState.plan?.tasks.some((task) => task.status === 'failed');
+      const allDone = agentState.plan
+        ? agentState.plan.tasks.every((task) => ['completed', 'skipped'].includes(task.status))
+        : !planWasRequired;
       emitAgentEvent('agent_completed', {
-        status: allDone ? 'completed' : 'finished_with_pending_tasks',
-        message: allDone
-          ? 'The planned work is complete.'
-          : 'The response finished with some planned tasks still pending.',
+        status: hasFailed ? 'failed' : allDone ? 'completed' : 'incomplete',
+        message: hasFailed ? 'Some planned tasks failed.' : allDone ? 'The planned work is complete.' : planWasRequired && !agentState.plan ? 'The required execution plan was not created.' : 'The response finished with planned tasks still pending.',
       });
     }
     await persist?.([
@@ -323,7 +385,6 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
         id: String(body.assistantMessageId || crypto.randomUUID()),
         role: 'assistant',
         content: finalText,
-        reasoning: finalReasoning,
         usage: finalUsage,
         toolEvents,
         agentPlan: agentState.plan,
@@ -336,6 +397,8 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
       rounds,
       durationMs: Date.now() - startedAt,
       toolEventCount: toolEvents.length,
+      verifiedArtifactCount: verifiedArtifacts.length,
+      deliverableSatisfied: artifactSatisfied,
       usage: finalUsage,
     });
     sse(res, {
