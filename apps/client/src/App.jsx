@@ -596,6 +596,30 @@ function toolProgressMessage(name, args = {}) {
   return `Using ${toolDisplayName(name)}...`;
 }
 
+function formatToolArgument(value) {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') {
+    const normalized = value.replace(/\s+/g, ' ').trim();
+    return normalized.length > 180 ? `${normalized.slice(0, 177)}…` : normalized;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'object') {
+    let serialized = '';
+    try { serialized = JSON.stringify(value); } catch { serialized = '[complex value]'; }
+    return serialized.length > 180 ? `${serialized.slice(0, 177)}…` : serialized;
+  }
+  return String(value);
+}
+
+function describeToolCall(event) {
+  const args = event.arguments && typeof event.arguments === 'object' ? event.arguments : {};
+  const entries = Object.entries(args)
+    .filter(([key, value]) => !['code', 'script', 'source', 'content'].includes(key) && value !== undefined && value !== null && value !== '')
+    .slice(0, 3)
+    .map(([key, value]) => `${key}: ${formatToolArgument(value)}`);
+  return entries.length ? `${event.name} · ${entries.join(' · ')}` : event.name;
+}
+
 function ToolUsageInline({ events = [] }) {
   if (!events.length) return null;
   const grouped = [...events.reduce((map, event) => {
@@ -606,12 +630,15 @@ function ToolUsageInline({ events = [] }) {
     return map;
   }, new Map()).values()];
   return (
-    <div className="tool-usage-inline">
+    <div className="tool-usage-inline" aria-label="Tool activity">
       {grouped.map((group) => (
         <details className={`tool-usage-item ${group.status || ''}`} key={`${group.name}-${group.status}`}>
-          <summary>{group.status === 'error' ? 'Tool failed: ' : group.events.some((event) => event.status === 'running') ? 'Using ' : 'Used '}{toolDisplayName(group.name)}{group.events.length > 1 ? ` · ${group.events.length} times` : ''}</summary>
+          <summary>
+            {group.events.length === 1 ? describeToolCall(group.events[0]) : `${group.name} · ${group.events.length} calls`}
+          </summary>
           <div className="tool-usage-details">
             {group.events.map((event, index) => <div className="tool-usage-detail-entry" key={`${group.name}-${index}`}>
+              <div className="tool-usage-call-title">{describeToolCall(event)}</div>
               {event.error && <p className="tool-error">{event.error}</p>}
               {event.arguments && <div><small>Arguments</small><pre>{JSON.stringify(event.arguments, null, 2)}</pre></div>}
               {event.result !== undefined && <div><small>Result</small><pre>{JSON.stringify(event.result, null, 2).slice(0, 5000)}</pre></div>}
@@ -721,7 +748,7 @@ function LiveProgress({ progress, now, toolEvents = [] }) {
   return (
     <div className="live-progress" role="status" aria-live="polite">
       <span className="live-progress-orb"><i /></span>
-      <span className="live-progress-message">{progress.message}</span>
+      <div className="live-progress-message"><Markdown content={progress.message} /></div>
       <span className="live-progress-timing">Working {elapsed(progress.startedAt)} · Last worked {elapsed(progress.lastActivityAt)} ago</span>
       {!!toolEvents.length && <ToolUsageInline events={toolEvents} />}
     </div>
@@ -739,7 +766,7 @@ function Toast({ toast, onClose }) {
   );
 }
 
-function Message({ message, onCopy, onEdit, onBranch, onShare, onRegenerate, onVersion }) {
+function Message({ message, onCopy, onEdit, onBranch, onShare, onRegenerate, onVersion, liveProgress, progressClock }) {
   const [editing, setEditing] = useState(false),
     [editDraft, setEditDraft] = useState(textOf(message.content));
   const user = message.role === 'user',
@@ -761,6 +788,9 @@ function Message({ message, onCopy, onEdit, onBranch, onShare, onRegenerate, onV
           <span>{user ? 'You' : 'Assistant'}</span>
           {message.createdAt && <time>{dateLabel(message.createdAt)}</time>}
         </div>
+        {!user && message.isStreaming && liveProgress && (
+          <LiveProgress progress={liveProgress} now={progressClock} toolEvents={message.toolEvents || []} />
+        )}
         {message.attachments?.length > 0 && (
           <div className="attachment-list">
             {message.attachments.map((f, i) => (
@@ -829,7 +859,7 @@ function Message({ message, onCopy, onEdit, onBranch, onShare, onRegenerate, onV
             {message.error}
           </div>
         )}
-        {!user && (
+        {!user && !message.isStreaming && content.trim() && (
           <div className="message-actions">
             <button onClick={() => onShare(message)} title="Share response">
               <Share2 size={13} />
@@ -864,7 +894,7 @@ function Message({ message, onCopy, onEdit, onBranch, onShare, onRegenerate, onV
             )}
           </div>
         )}
-        {user && (
+        {user && content.trim() && (
           <div className="message-actions">
             <button
               onClick={() => {
@@ -2896,10 +2926,9 @@ export default function App() {
                     onShare={shareResponse}
                     onRegenerate={regenerateResponse}
                     onVersion={changeVersion}
+                    liveProgress={liveProgress}
+                    progressClock={progressClock}
                   />
-                  {busy && m.role === 'user' && !messages.slice(index + 1).some((next) => next.role === 'user') && (
-                    <LiveProgress progress={liveProgress} now={progressClock} toolEvents={messages[index + 1]?.role === 'assistant' && messages[index + 1]?.isStreaming ? messages[index + 1]?.toolEvents || [] : []} />
-                  )}
                 </React.Fragment>
               ))
             )}

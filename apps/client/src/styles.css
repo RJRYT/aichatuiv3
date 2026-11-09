@@ -88,15 +88,15 @@
 }
 
 /* v7.3 response and live-agent UI refresh */
-.live-progress{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:9px;width:min(850px,calc(100% - 42px));margin:-12px auto 22px;padding:3px 0 3px 42px;color:#a9b8a5;font-size:10px;box-sizing:border-box}
+.live-progress{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:7px;width:100%;margin:8px 0 12px;padding:0;color:#a9b8a5;font-size:10px;box-sizing:border-box}
 .live-progress-orb{width:8px;height:8px;display:grid;place-items:center;flex:none}
 .live-progress-orb i{width:7px;height:7px;border-radius:50%;background:#b5e58b;box-shadow:0 0 12px #a6e47a;animation:agentPulse 1.25s ease-in-out infinite}
-.live-progress-message{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:linear-gradient(100deg,#9bad96 0%,#e0f4d2 35%,#9bad96 55%);background-size:220% 100%;background-clip:text;-webkit-background-clip:text;color:transparent;animation:agentTextGlaze 2.8s linear infinite}
+.live-progress-message{min-width:0;flex:1;color:#b7c8b0;line-height:1.55}.live-progress-message .markdown{display:block;min-width:0}.live-progress-message .markdown p{display:inline;margin:0;background:linear-gradient(100deg,#9bad96 0%,#e0f4d2 35%,#9bad96 55%);background-size:220% 100%;background-clip:text;-webkit-background-clip:text;color:transparent;animation:agentTextGlaze 2.8s linear infinite}.live-progress-message .markdown p+p{display:block;margin-top:3px}
 .live-progress-timing{flex:none;color:#748274;font:9px 'DM Mono';white-space:nowrap}
 @keyframes agentPulse{0%,100%{opacity:.45;transform:scale(.8)}50%{opacity:1;transform:scale(1.18)}}
 @keyframes agentTextGlaze{from{background-position:120% 0}to{background-position:-120% 0}}
-.tool-usage-inline{display:flex;flex:1 0 100%;flex-direction:column;align-items:flex-start;gap:5px;width:100%;margin:0 0 0 17px}
-.tool-usage-item{max-width:100%;color:#788779;font-size:10px;line-height:1.5}.live-progress .tool-usage-item{font-size:9px}.live-progress .tool-usage-details{margin-top:4px}
+.tool-usage-inline{display:flex;flex:1 0 100%;flex-direction:column;align-items:flex-start;gap:5px;width:100%;margin:2px 0 0 15px}
+.tool-usage-item{max-width:100%;color:#899a88;font-size:10px;line-height:1.5}.live-progress .tool-usage-item{font-size:9px}.live-progress .tool-usage-details{margin-top:4px}.tool-usage-item>summary span{color:#a7b99e;font-weight:600;margin-right:3px}.tool-usage-call-title{margin:2px 0 7px;color:#c1d0bc;font-size:10px;overflow-wrap:anywhere}
 .tool-usage-item>summary{display:inline;cursor:pointer;list-style:none;outline:none;transition:color .15s ease}
 .tool-usage-item>summary::-webkit-details-marker{display:none}
 .tool-usage-item>summary:hover{color:#b4c8aa}
@@ -151,4 +151,4 @@
 .toast>span{flex:1;min-width:0;line-height:1.5;overflow-wrap:anywhere}
 .toast button{display:grid;place-items:center;border:0;background:transparent;color:inherit;opacity:.75;cursor:pointer}
 @keyframes toastIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
-@media(max-width:760px){.live-progress{width:calc(100% - 18px);gap:7px;padding:8px 9px;margin-bottom:9px}.live-progress-message{font-size:9px}.live-progress-timing{font-size:8px}.artifact-inline{width:100%}.agent-plan-dock>summary{padding:9px}.agent-plan-dock-body{padding:0 8px 9px}.toast{top:66px;right:10px}.plan-dock-footer{align-items:flex-start;flex-direction:column}.plan-dock-footer button{align-self:flex-end}}
+@media(max-width:760px){.live-progress{width:100%;gap:6px;padding:0;margin:7px 0 10px}.live-progress-message{font-size:9px}.live-progress-timing{font-size:8px}.artifact-inline{width:100%}.agent-plan-dock>summary{padding:9px}.agent-plan-dock-body{padding:0 8px 9px}.toast{top:66px;right:10px}.plan-dock-footer{align-items:flex-start;flex-direction:column}.plan-dock-footer button{align-self:flex-end}}

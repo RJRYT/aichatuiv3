@@ -2,6 +2,13 @@
 
 A single-model, Agent Lab interface for NVIDIA Nemotron 3.5 Super VL. The frontend is a static React/Vite build; the Express backend owns model inference, OAuth, web search, plugin execution, personalization and memory. MongoDB persists user accounts, preferences, memories and chats.
 
+## v7.3.3 — Assistant status placement and activity details
+
+- Places the live progress status immediately below the Assistant heading and before the response body.
+- Renders progress through the Markdown formatter so emphasis and multi-line updates remain readable.
+- Hides message action icons when message content is empty and hides assistant actions while a response is streaming.
+- Shows tool usage from actual tool names and call arguments instead of canned labels; expanded entries expose the original arguments, results, and errors.
+
 ## v7.3.2 — Live thinking and tool visibility
 
 Backend regression suite: 42/42 passing. Frontend JSX syntax parsing: passed. Production Vite build: not run successfully because the Vite executable is absent from the supplied dependency tree.
@@ -10,7 +17,7 @@ Backend regression suite: 42/42 passing. Frontend JSX syntax parsing: passed. Pr
 - Renders generated artifacts inline after the assistant response as compact filename/size rows with lazy preview and download.
 - Moves the persistent execution plan above the composer, collapsed by default, with editable objective/task text and explicit save.
 - Persists plan data in conversation messages and passes the current plan into subsequent turns so the agent can continue the same work.
-- Shows concise, meaningful progress sentences directly between the latest user prompt and the assistant reply, with elapsed working time and time since last activity. Updates are derived from real plan/tool events, not private chain-of-thought.
+- Shows concise, meaningful progress sentences directly below the Assistant heading and above the assistant reply, with elapsed working time and time since last activity. Updates are derived from real plan/tool events, not private chain-of-thought.
 - Applies the animated glaze to status text only, groups repeated tool-use entries in a vertical list without arrows, and removes the “Response details” section.
 - Adds a subtle animated glaze only while generation is active and removes transient progress when generation ends.
 - Replaces the topbar status badge with in-chat progress and toast notifications.
