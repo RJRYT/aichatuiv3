@@ -36,6 +36,10 @@ Web search uses Tavily's Search API from the backend. Create a key at https://ta
 
 The model receives the `web_search` function tool. Search results include source title, URL, snippet and publication date where available. The backend system prompt instructs the agent to cite returned URLs in Markdown.
 
+## System prompt and agent identity (v6.2.0)
+
+The authoritative agent prompt lives in `apps/server/prompts/system-prompt.md`. It defines Nemi’s identity and personality, product attribution, private runtime context, confidentiality rules, tool-selection policy, Python upload/output handling, network safety, and response standards. `apps/server/src/services/systemPrompt.js` loads the Markdown file at backend startup and appends sanitized user preferences and relevant saved memories. The prompt is deliberately not stored in environment variables; remove legacy `SYSTEM_PROMPT` and `INITIAL_INSTRUCTIONS` variables from deployment settings. The Docker image copies the prompt file into the runtime image.
+
 ## Agent behavior
 
 - Agent Lab is the only interface; no layout selector or model selector.
@@ -43,7 +47,7 @@ The model receives the `web_search` function tool. Search results include source
 - All registered tools are supplied to the model automatically. Tool execution is surfaced in the conversation; users do not need to select a tool from the composer.
 - The Thinking control toggles `chat_template_kwargs.enable_thinking`. The model's `reasoning_content` is displayed in the message as a collapsible thinking trace.
 - Temperature is fixed server-side to NVIDIA's recommended text value (1.0), or 0.6 for visual requests. No max-output-token cap is sent by default; the hosted deployment still enforces its own output/context limits.
-- System prompt and initial instructions are backend-managed through `SYSTEM_PROMPT` and `INITIAL_INSTRUCTIONS`.
+- The complete system prompt is maintained as a version-controlled Markdown file at `apps/server/prompts/system-prompt.md`; it is loaded by the backend and is not configured through environment variables.
 - Chat names are generated from conversation context. Manually renamed conversations are protected from automatic title replacement.
 - Plugins include web search, public URL reading, GitHub search, npm search, calculator, date/time, save memory and search memories.
 - Images and video are sent as images and sampled video frames, following the model's multimodal input format.
@@ -245,7 +249,7 @@ The repository includes 23 Node.js unit tests covering conversation branches, in
 - Before each Python execution, load the conversation's uploads from owner-scoped MongoDB records, verify byte length and checksum, and compare the actual remote sandbox file bytes against the expected bytes.
 - Repair stale or zero-byte copies left in persistent Vercel snapshots instead of trusting the old upload manifest. Uploads are re-written when missing, empty, truncated or checksum-mismatched, then read back and verified.
 - Return exact mounted file paths, byte sizes and checksums as `inputFiles` in the `execute_python` result. A mount failure now fails the execution clearly rather than allowing the model to report an empty file.
-- The system prompt and attachment context explicitly tell Nemotron to use the exact `uploads/...` paths and to report mount/integrity errors honestly.
+- The versioned Markdown system prompt and attachment context explicitly tell Nemotron to use exact mounted `uploads/...` paths, verify file bytes, and report mount/integrity errors honestly.
 
 ### Conversation loading performance and reliability
 
@@ -266,3 +270,15 @@ The repository includes 23 Node.js unit tests covering conversation branches, in
 ### Verification
 
 `npm test` passes 23 tests, including BSON upload normalization, SHA-256 validation, and repair of stale zero-byte sandbox upload copies. JSX syntax parsing and backend JavaScript syntax checks pass. The Vite production build could not be run in this environment because frontend dependencies are not installed (`vite: not found`); run `npm install` before building locally.
+
+
+## v6.2.0 — Markdown system prompt and agent identity
+
+- Moved the complete agent system prompt into `apps/server/prompts/system-prompt.md`.
+- Removed `SYSTEM_PROMPT` and `INITIAL_INSTRUCTIONS` from `.env.example` and removed runtime environment-variable overrides.
+- Added Nemi's stable identity, personality, product attribution, private runtime/architecture awareness, and strict non-disclosure rules for deployment details, internal routes, and artifact URLs.
+- Added tool-selection guidance for Python, web search, URL fetching, npm/GitHub discovery, calculator, date/time, and memory tools.
+- Strengthened Python upload verification, public-network use, data-exfiltration protection, artifact validation, and honest failure reporting.
+- The backend loads the Markdown prompt at startup, appends sanitized personalization and bounded memory context, and fails fast if the prompt file is missing or empty.
+- Updated the Docker image to include the prompt file.
+- Added system-prompt regression tests.

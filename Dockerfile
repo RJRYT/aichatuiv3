@@ -31,6 +31,7 @@ COPY apps/server/package.json ./package.json
 RUN npm install --omit=dev
 
 COPY apps/server/src/ ./src/
+COPY apps/server/prompts/ ./prompts/
 COPY apps/server/scripts/ ./scripts/
 
 # Copy compiled frontend from builder
