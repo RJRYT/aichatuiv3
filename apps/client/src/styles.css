@@ -3830,6 +3830,11 @@ body[data-theme] {
 }
 .app[data-theme] .share-message {
   border-color: var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+.app[data-theme] .share-message a {
+  color: var(--accent2);
 }
 .app[data-theme] .share-role {
   color: var(--muted);
@@ -3839,6 +3844,99 @@ body[data-theme] {
 }
 
 /* Missing component coverage */
+.app[data-theme] .artifact-inline {
+  background: var(--panel);
+  border-color: var(--border);
+  color: var(--text);
+}
+.app[data-theme] .artifact-inline-body {
+  background: var(--panel);
+  border-color: var(--border);
+  color: var(--text);
+}
+.app[data-theme] .artifact-inline-download {
+  background: var(--panel);
+  border-color: var(--border);
+  color: var(--text);
+}
+.app[data-theme] .library-search {
+  background: var(--panel);
+  border-color: var(--border);
+  color: var(--text);
+}
+.app[data-theme] .library-search input {
+  background: var(--panel2);
+  border-color: var(--border);
+  color: var(--text);
+}
+.app[data-theme] .shared-artifacts {
+  border-color: var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+.app[data-theme] .shared-artifacts h2 {
+  color: var(--text);
+}
+.app[data-theme] .shared-artifacts a span b {
+  color: var(--text);
+}
+.app[data-theme] .shared-artifacts a span small {
+  color: var(--muted);
+}
+.app[data-theme] .user-message {
+  background: var(--panel);
+  border-color: var(--border);
+}
+.app[data-theme] .assistant-message {
+  background: var(--panel);
+  border-color: var(--border);
+}
+.app[data-theme] .linked-providers {
+  border-top-color: var(--border);
+}
+.app[data-theme] .linked-providers b {
+  color: var(--muted);
+}
+.app[data-theme] .linked-providers a,
+.app[data-theme] .provider-linked {
+  border-color: var(--border);
+  color: var(--accent2);
+  background: var(--panel);
+}
+.app[data-theme] .provider-linked {
+  color: var(--accent2);
+}
+.app[data-theme] .library-file-icon {
+  color: var(--text);
+}
+.app[data-theme] .library-summary {
+  border-color: var(--border);
+  background: var(--panel);
+}
+.app[data-theme] .library-summary b {
+  color: var(--text);
+}
+.app[data-theme] .library-summary span {
+  color: var(--muted);
+}
+.app[data-theme] .library-skeleton-list,
+.app[data-theme] .library-skeleton-row,
+.app[data-theme] .account-content-skeleton,
+.app[data-theme] .share-list-skeleton {
+  border-color: var(--border);
+}
+.app[data-theme] .shared-links {
+  color: var(--text);
+}
+.app[data-theme] .shared-links b {
+  color: var(--text);
+}
+.app[data-theme] .shared-links small {
+  color: var(--muted);
+}
+.app[data-theme] .shared-links a {
+  color: var(--accent2);
+}
 .app[data-theme] .linked-providers {
   border-top-color: var(--border);
 }

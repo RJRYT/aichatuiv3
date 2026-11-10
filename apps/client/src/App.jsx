@@ -1,6 +1,3 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import {
   AlertCircle,
   ArrowDown,
@@ -8,43 +5,46 @@ import {
   Bot,
   Brain,
   Check,
+  ChevronLeft,
+  ChevronRight,
+  Code2,
   Copy,
   Download,
-  FileImage,
-  FileText,
-  FileSpreadsheet,
-  FileArchive,
-  Files,
   Eye,
-  RefreshCw,
+  FileArchive,
+  FileImage,
+  Files,
+  FileSpreadsheet,
+  FileText,
+  GitBranch,
+  Github,
   HardDrive,
+  Image as ImageIcon,
+  ListChecks,
   LoaderCircle,
   LogOut,
   MessageSquare,
-  Paperclip,
   PanelLeft,
+  Paperclip,
+  Pencil,
+  PencilLine,
   Plus,
+  RefreshCw,
   Search,
+  Share2,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Square,
   Trash2,
+  UserRound,
   Video,
   Wrench,
   X,
-  Pencil,
-  UserRound,
-  SlidersHorizontal,
-  Code2,
-  Github,
-  Share2,
-  GitBranch,
-  PencilLine,
-  ChevronLeft,
-  ChevronRight,
-  Image as ImageIcon,
-  ListChecks,
 } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
 const DEFAULT_PREFERENCES = {
@@ -580,7 +580,9 @@ function toolUsageSentence(event = {}) {
   const args = event.arguments && typeof event.arguments === 'object' ? event.arguments : {};
   const result = event.result && typeof event.result === 'object' ? event.result : {};
   const quote = (value, limit = 150) => {
-    const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+    const text = String(value ?? '')
+      .replace(/\s+/g, ' ')
+      .trim();
     if (!text) return '';
     const clipped = text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
     return `“${clipped}”`;
@@ -594,18 +596,28 @@ function toolUsageSentence(event = {}) {
       sentence = context
         ? `${running ? 'Running' : 'Ran'} Python to ${String(context).replace(/[.!?]+$/, '')}.`
         : `${running ? 'Running' : 'Ran'} a Python operation.`;
-      if (args.task_id || args.task_title) sentence += ` ${args.task_id ? `Task ${args.task_id}` : 'Task'}${args.task_title ? ` — ${quote(args.task_title, 100)}` : ''}.`;
+      if (args.task_id || args.task_title)
+        sentence += ` ${args.task_id ? `Task ${args.task_id}` : 'Task'}${args.task_title ? ` — ${quote(args.task_title, 100)}` : ''}.`;
       if (args.task_description) sentence += ` Scope: ${quote(args.task_description, 150)}.`;
       if (args.task_note) sentence += ` Progress: ${quote(args.task_note, 120)}.`;
       if (args.objective) sentence += ` Project objective: ${quote(args.objective, 130)}.`;
-      if (Number(args.code_bytes) > 0) sentence += ` Executed ${Number(args.code_bytes).toLocaleString()} bytes of Python code.`;
+      if (Number(args.code_bytes) > 0)
+        sentence += ` Executed ${Number(args.code_bytes).toLocaleString()} bytes of Python code.`;
       if (Array.isArray(result.artifacts) && result.artifacts.length) {
-        sentence += ` Created ${result.artifacts.length} file${result.artifacts.length === 1 ? '' : 's'}: ${result.artifacts.map((file) => file.name).filter(Boolean).slice(0, 4).join(', ')}.`;
+        sentence += ` Created ${result.artifacts.length} file${result.artifacts.length === 1 ? '' : 's'}: ${result.artifacts
+          .map((file) => file.name)
+          .filter(Boolean)
+          .slice(0, 4)
+          .join(', ')}.`;
       } else if (result.status) sentence += ` Execution status: ${result.status}.`;
       break;
     case 'create_task_plan': {
       const objective = args.objective || result.plan?.objective;
-      const count = Array.isArray(args.tasks) ? args.tasks.length : Array.isArray(result.plan?.tasks) ? result.plan.tasks.length : 0;
+      const count = Array.isArray(args.tasks)
+        ? args.tasks.length
+        : Array.isArray(result.plan?.tasks)
+          ? result.plan.tasks.length
+          : 0;
       sentence = objective
         ? `${running ? 'Creating' : 'Created'} a plan for ${quote(objective)}${count ? ` with ${count} steps` : ''}.`
         : `${running ? 'Creating' : 'Created'} an execution plan${count ? ` with ${count} steps` : ''}.`;
@@ -617,7 +629,8 @@ function toolUsageSentence(event = {}) {
         ? `${running ? 'Updating' : 'Updated'} ${quote(task)}${args.task_id ? ` (task ${args.task_id})` : ''} to ${status}.`
         : `${running ? 'Updating' : 'Updated'} task ${quote(args.task_id || 'record')} to ${status}.`;
       if (args.objective) sentence += ` Objective: ${quote(args.objective, 120)}.`;
-      if (args.task_description) sentence += ` ${String(args.task_description).replace(/\s+/g, ' ').trim()}`;
+      if (args.task_description)
+        sentence += ` ${String(args.task_description).replace(/\s+/g, ' ').trim()}`;
       const note = args.note || result.task?.note;
       if (note) sentence += ` Note: ${String(note).replace(/\s+/g, ' ').trim()}`;
       break;
@@ -625,21 +638,30 @@ function toolUsageSentence(event = {}) {
     case 'web_search': {
       const query = args.query || args.search_query || args.q || args.search_terms;
       const count = Array.isArray(result.results) ? result.results.length : 0;
-      sentence = query ? `${running ? 'Searching' : 'Searched'} the web for ${quote(query)}${count ? ` and found ${count} results` : ''}.` : `${running ? 'Searching' : 'Completed'} the web.`;
+      sentence = query
+        ? `${running ? 'Searching' : 'Searched'} the web for ${quote(query)}${count ? ` and found ${count} results` : ''}.`
+        : `${running ? 'Searching' : 'Completed'} the web.`;
       break;
     }
     case 'fetch_public_url': {
       const url = args.url || args.uri || result.url;
       const bytes = typeof result.content === 'string' ? result.content.length : 0;
-      sentence = url ? `${running ? 'Fetching' : 'Fetched'} ${quote(url, 180)}${bytes ? ` and received ${bytes.toLocaleString()} characters` : ''}.` : `${running ? 'Fetching' : 'Fetched'} a public webpage.`;
+      sentence = url
+        ? `${running ? 'Fetching' : 'Fetched'} ${quote(url, 180)}${bytes ? ` and received ${bytes.toLocaleString()} characters` : ''}.`
+        : `${running ? 'Fetching' : 'Fetched'} a public webpage.`;
       break;
     }
     case 'generate_image':
-      sentence = args.prompt ? `${running ? 'Generating' : 'Generated'} an image from ${quote(args.prompt)}.` : `${running ? 'Generating' : 'Generated'} an image.`;
-      if (Array.isArray(result.artifacts) && result.artifacts.length) sentence += ` Saved ${result.artifacts.length} image file${result.artifacts.length === 1 ? '' : 's'}.`;
+      sentence = args.prompt
+        ? `${running ? 'Generating' : 'Generated'} an image from ${quote(args.prompt)}.`
+        : `${running ? 'Generating' : 'Generated'} an image.`;
+      if (Array.isArray(result.artifacts) && result.artifacts.length)
+        sentence += ` Saved ${result.artifacts.length} image file${result.artifacts.length === 1 ? '' : 's'}.`;
       break;
     case 'calculator':
-      sentence = args.expression ? `${running ? 'Calculating' : 'Calculated'} ${quote(args.expression)}${result.result !== undefined ? ` and got ${result.result}` : ''}.` : `${running ? 'Calculating' : 'Completed'} a calculation.`;
+      sentence = args.expression
+        ? `${running ? 'Calculating' : 'Calculated'} ${quote(args.expression)}${result.result !== undefined ? ` and got ${result.result}` : ''}.`
+        : `${running ? 'Calculating' : 'Completed'} a calculation.`;
       break;
     case 'github_search':
     case 'npm_search':
@@ -649,22 +671,34 @@ function toolUsageSentence(event = {}) {
         : `Searched ${humanizeField(event.name)}.`;
       break;
     case 'save_memory':
-      sentence = args.memory ? `Saved the requested memory: ${quote(args.memory)}.` : 'Saved a memory.';
+      sentence = args.memory
+        ? `Saved the requested memory: ${quote(args.memory)}.`
+        : 'Saved a memory.';
       break;
     case 'get_current_datetime':
       sentence = `Retrieved the current date and time${args.timezone ? ` for ${args.timezone}` : ''}.`;
       break;
     default: {
       const meaningful = Object.entries(args)
-        .filter(([key, value]) => !['code', 'script', 'source', 'content'].includes(key) && value !== undefined && value !== null && value !== '')
+        .filter(
+          ([key, value]) =>
+            !['code', 'script', 'source', 'content'].includes(key) &&
+            value !== undefined &&
+            value !== null &&
+            value !== ''
+        )
         .slice(0, 2)
-        .map(([key, value]) => `${humanizeField(key).toLowerCase()} ${quote(formatToolArgument(value), 90)}`);
+        .map(
+          ([key, value]) =>
+            `${humanizeField(key).toLowerCase()} ${quote(formatToolArgument(value), 90)}`
+        );
       sentence = meaningful.length
         ? `${humanizeField(event.name || 'Tool')} used with ${meaningful.join(' and ')}.`
         : `${humanizeField(event.name || 'Tool')} completed.`;
     }
   }
-  if (event.error) sentence += ` The operation reported: ${String(event.error).replace(/\s+/g, ' ').slice(0, 180)}`;
+  if (event.error)
+    sentence += ` The operation reported: ${String(event.error).replace(/\s+/g, ' ').slice(0, 180)}`;
   return sentence;
 }
 
@@ -677,7 +711,11 @@ function formatToolArgument(value) {
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   if (typeof value === 'object') {
     let serialized = '';
-    try { serialized = JSON.stringify(value); } catch { serialized = '[complex value]'; }
+    try {
+      serialized = JSON.stringify(value);
+    } catch {
+      serialized = '[complex value]';
+    }
     return serialized.length > 180 ? `${serialized.slice(0, 177)}…` : serialized;
   }
   return String(value);
@@ -685,27 +723,75 @@ function formatToolArgument(value) {
 
 function ToolUsageInline({ events = [] }) {
   if (!events.length) return null;
-  const grouped = [...events.reduce((map, event) => {
-    const key = `${event.name}:${event.status === 'error' ? 'error' : 'used'}`;
-    const current = map.get(key) || { name: event.name, status: event.status, events: [] };
-    current.events.push(event);
-    map.set(key, current);
-    return map;
-  }, new Map()).values()];
+  const grouped = [
+    ...events
+      .reduce((map, event) => {
+        const key = `${event.name}:${event.status === 'error' ? 'error' : 'used'}`;
+        const current = map.get(key) || { name: event.name, status: event.status, events: [] };
+        current.events.push(event);
+        map.set(key, current);
+        return map;
+      }, new Map())
+      .values(),
+  ];
   return (
     <div className="tool-usage-inline" aria-label="Tool activity">
       {grouped.map((group) => (
-        <details className={`tool-usage-item ${group.status || ''}`} key={`${group.name}-${group.status}`}>
+        <details
+          className={`tool-usage-item ${group.status || ''}`}
+          key={`${group.name}-${group.status}`}
+        >
           <summary>
-            {group.events.length === 1 ? toolUsageSentence(group.events[0]) : `${toolUsageSentence(group.events[0])} (${group.events.length} calls)`}
+            {group.events.length === 1
+              ? toolUsageSentence(group.events[0])
+              : `${toolUsageSentence(group.events[0])} (${group.events.length} calls)`}
           </summary>
           <div className="tool-usage-details">
-            {group.events.map((event, index) => <div className="tool-usage-detail-entry" key={`${group.name}-${index}`}>
-              <div className="tool-usage-call-title">{toolUsageSentence(event)}</div>
-              {event.error && <p className="tool-error">{event.error}</p>}
-              {event.arguments && <div className="tool-usage-fields"><small>Details</small>{Object.entries(event.arguments).filter(([key, value]) => !['code', 'script', 'source', 'content'].includes(key) && value !== undefined && value !== null && value !== '').map(([key, value]) => <div key={key}><b>{humanizeField(key)}</b><span>{formatToolArgument(value)}</span></div>)}</div>}
-              {event.result !== undefined && <div className="tool-usage-fields"><small>Result</small>{Object.entries(event.result || {}).filter(([key, value]) => !['content', 'downloadUrl', 'data', 'buffer'].includes(key) && value !== undefined && value !== null && value !== '').slice(0, 12).map(([key, value]) => <div key={key}><b>{humanizeField(key)}</b><span>{formatToolArgument(value)}</span></div>)}</div>}
-            </div>)}
+            {group.events.map((event, index) => (
+              <div className="tool-usage-detail-entry" key={`${group.name}-${index}`}>
+                <div className="tool-usage-call-title">{toolUsageSentence(event)}</div>
+                {event.error && <p className="tool-error">{event.error}</p>}
+                {event.arguments && (
+                  <div className="tool-usage-fields">
+                    <small>Details</small>
+                    {Object.entries(event.arguments)
+                      .filter(
+                        ([key, value]) =>
+                          !['code', 'script', 'source', 'content'].includes(key) &&
+                          value !== undefined &&
+                          value !== null &&
+                          value !== ''
+                      )
+                      .map(([key, value]) => (
+                        <div key={key}>
+                          <b>{humanizeField(key)}</b>
+                          <span>{formatToolArgument(value)}</span>
+                        </div>
+                      ))}
+                  </div>
+                )}
+                {event.result !== undefined && (
+                  <div className="tool-usage-fields">
+                    <small>Result</small>
+                    {Object.entries(event.result || {})
+                      .filter(
+                        ([key, value]) =>
+                          !['content', 'downloadUrl', 'data', 'buffer'].includes(key) &&
+                          value !== undefined &&
+                          value !== null &&
+                          value !== ''
+                      )
+                      .slice(0, 12)
+                      .map(([key, value]) => (
+                        <div key={key}>
+                          <b>{humanizeField(key)}</b>
+                          <span>{formatToolArgument(value)}</span>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         </details>
       ))}
@@ -735,13 +821,15 @@ function InlineArtifact({ file }) {
         <small>{formatBytes(file.size)}</small>
         <span>Preview</span>
       </summary>
-      {isOpen && <div className="artifact-inline-body">
-        <ArtifactPreview file={file} expanded />
-        <button className="artifact-inline-download" onClick={onDownload}>
-          <Download size={13} /> Download file
-        </button>
-        {downloadError && <p className="artifact-preview-error">{downloadError}</p>}
-      </div>}
+      {isOpen && (
+        <div className="artifact-inline-body">
+          <ArtifactPreview file={file} expanded />
+          <button className="artifact-inline-download" onClick={onDownload}>
+            <Download size={13} /> Download file
+          </button>
+          {downloadError && <p className="artifact-preview-error">{downloadError}</p>}
+        </div>
+      )}
     </details>
   );
 }
@@ -751,24 +839,32 @@ function AgentPlanDock({ plan, onSave, disabled = false }) {
   const [saving, setSaving] = useState(false);
   useEffect(() => setDraft(plan), [plan]);
   if (!plan?.tasks?.length) return null;
-  const completed = plan.tasks.filter((task) => ['completed', 'skipped'].includes(task.status)).length;
+  const completed = plan.tasks.filter((task) =>
+    ['completed', 'skipped'].includes(task.status)
+  ).length;
   const changed = JSON.stringify(draft) !== JSON.stringify(plan);
   const updateTask = (taskId, patch) => {
     setDraft((current) => ({
       ...current,
-      tasks: current.tasks.map((task) => task.id === taskId ? { ...task, ...patch } : task),
+      tasks: current.tasks.map((task) => (task.id === taskId ? { ...task, ...patch } : task)),
     }));
   };
   const save = async () => {
     setSaving(true);
-    try { await onSave(draft); } finally { setSaving(false); }
+    try {
+      await onSave(draft);
+    } finally {
+      setSaving(false);
+    }
   };
   return (
     <details className="agent-plan-dock">
       <summary>
         <ListChecks size={14} />
         <span>Execution plan</span>
-        <small>{completed}/{plan.tasks.length} completed</small>
+        <small>
+          {completed}/{plan.tasks.length} completed
+        </small>
         <ChevronRight size={13} className="plan-chevron" />
       </summary>
       <div className="agent-plan-dock-body">
@@ -777,17 +873,38 @@ function AgentPlanDock({ plan, onSave, disabled = false }) {
           value={draft?.objective || ''}
           disabled={disabled}
           rows={2}
-          onChange={(event) => setDraft((current) => ({ ...current, objective: event.target.value }))}
+          onChange={(event) =>
+            setDraft((current) => ({ ...current, objective: event.target.value }))
+          }
         />
         <div className="plan-edit-list">
           {(draft?.tasks || []).map((task) => (
             <div className={`plan-edit-task ${task.status || 'pending'}`} key={task.id}>
               <div className="plan-edit-task-state">
-                {task.status === 'completed' ? <Check size={13} /> : task.status === 'running' ? <LoaderCircle size={13} className="spin" /> : task.status === 'failed' ? <AlertCircle size={13} /> : <i />}
+                {task.status === 'completed' ? (
+                  <Check size={13} />
+                ) : task.status === 'running' ? (
+                  <LoaderCircle size={13} className="spin" />
+                ) : task.status === 'failed' ? (
+                  <AlertCircle size={13} />
+                ) : (
+                  <i />
+                )}
               </div>
               <div className="plan-edit-fields">
-                <input value={task.title} disabled={disabled} onChange={(event) => updateTask(task.id, { title: event.target.value })} aria-label={`Task ${task.id} title`} />
-                <textarea value={task.description || ''} disabled={disabled} rows={2} onChange={(event) => updateTask(task.id, { description: event.target.value })} aria-label={`Task ${task.id} description`} />
+                <input
+                  value={task.title}
+                  disabled={disabled}
+                  onChange={(event) => updateTask(task.id, { title: event.target.value })}
+                  aria-label={`Task ${task.id} title`}
+                />
+                <textarea
+                  value={task.description || ''}
+                  disabled={disabled}
+                  rows={2}
+                  onChange={(event) => updateTask(task.id, { description: event.target.value })}
+                  aria-label={`Task ${task.id} description`}
+                />
                 <small>{(task.status || 'pending').replaceAll('_', ' ')}</small>
               </div>
             </div>
@@ -795,7 +912,9 @@ function AgentPlanDock({ plan, onSave, disabled = false }) {
         </div>
         <div className="plan-dock-footer">
           <span>Changes are saved to this conversation.</span>
-          <button disabled={disabled || saving || !changed} onClick={save}>{saving ? 'Saving…' : 'Save plan'}</button>
+          <button disabled={disabled || saving || !changed} onClick={save}>
+            {saving ? 'Saving…' : 'Save plan'}
+          </button>
         </div>
       </div>
     </details>
@@ -812,7 +931,9 @@ function LiveProgress({ progress, now, toolEvents = [] }) {
   const message = String(progress.message || 'Thinking...');
   return (
     <div className="live-progress" role="status" aria-live="polite">
-      <span className="live-progress-orb"><i /></span>
+      <span className="live-progress-orb">
+        <i />
+      </span>
       <div
         className="live-progress-message"
         role={toolEvents.length ? 'button' : undefined}
@@ -825,12 +946,20 @@ function LiveProgress({ progress, now, toolEvents = [] }) {
           }
         }}
         aria-expanded={toolEvents.length ? toolsExpanded : undefined}
-        aria-label={toolEvents.length ? `${toolsExpanded ? 'Hide' : 'Show'} tool activity` : 'Current agent progress'}
+        aria-label={
+          toolEvents.length
+            ? `${toolsExpanded ? 'Hide' : 'Show'} tool activity`
+            : 'Current agent progress'
+        }
         title={toolEvents.length ? 'Click to show or hide tool activity' : undefined}
       >
-        <span className="live-progress-typing" key={message}><Markdown content={message} /></span>
+        <span className="live-progress-typing" key={message}>
+          <Markdown content={message} />
+        </span>
       </div>
-      <span className="live-progress-timing">Working {elapsed(progress.startedAt)} · Last worked {elapsed(progress.lastActivityAt)} ago</span>
+      <span className="live-progress-timing">
+        Working {elapsed(progress.startedAt)} · Last worked {elapsed(progress.lastActivityAt)} ago
+      </span>
       {!!toolEvents.length && toolsExpanded && <ToolUsageInline events={toolEvents} />}
     </div>
   );
@@ -839,15 +968,30 @@ function LiveProgress({ progress, now, toolEvents = [] }) {
 function Toast({ toast, onClose }) {
   if (!toast) return null;
   return (
-    <div className={`toast toast-${toast.type || 'error'}`} role={toast.type === 'success' ? 'status' : 'alert'}>
+    <div
+      className={`toast toast-${toast.type || 'error'}`}
+      role={toast.type === 'success' ? 'status' : 'alert'}
+    >
       {toast.type === 'success' ? <Check size={15} /> : <AlertCircle size={15} />}
       <span>{toast.message}</span>
-      <button onClick={onClose} aria-label="Dismiss notification"><X size={14} /></button>
+      <button onClick={onClose} aria-label="Dismiss notification">
+        <X size={14} />
+      </button>
     </div>
   );
 }
 
-function Message({ message, onCopy, onEdit, onBranch, onShare, onRegenerate, onVersion, liveProgress, progressClock }) {
+function Message({
+  message,
+  onCopy,
+  onEdit,
+  onBranch,
+  onShare,
+  onRegenerate,
+  onVersion,
+  liveProgress,
+  progressClock,
+}) {
   const [editing, setEditing] = useState(false),
     [promptExpanded, setPromptExpanded] = useState(false),
     [editDraft, setEditDraft] = useState(textOf(message.content));
@@ -872,7 +1016,11 @@ function Message({ message, onCopy, onEdit, onBranch, onShare, onRegenerate, onV
           {message.createdAt && <time>{dateLabel(message.createdAt)}</time>}
         </div>
         {!user && message.isStreaming && liveProgress && (
-          <LiveProgress progress={liveProgress} now={progressClock} toolEvents={message.toolEvents || []} />
+          <LiveProgress
+            progress={liveProgress}
+            now={progressClock}
+            toolEvents={message.toolEvents || []}
+          />
         )}
         {message.attachments?.length > 0 && (
           <div className="attachment-list">
@@ -921,9 +1069,17 @@ function Message({ message, onCopy, onEdit, onBranch, onShare, onRegenerate, onV
               </div>
             ) : (
               <>
-                <div className={`user-text${longPrompt && !promptExpanded ? ' prompt-collapsed' : ''}`}>{content}</div>
+                <div
+                  className={`user-text${longPrompt && !promptExpanded ? ' prompt-collapsed' : ''}`}
+                >
+                  {content}
+                </div>
                 {longPrompt && (
-                  <button className="prompt-expand" type="button" onClick={() => setPromptExpanded((value) => !value)}>
+                  <button
+                    className="prompt-expand"
+                    type="button"
+                    onClick={() => setPromptExpanded((value) => !value)}
+                  >
                     {promptExpanded ? 'Show less' : 'Show more'}
                   </button>
                 )}
@@ -932,17 +1088,25 @@ function Message({ message, onCopy, onEdit, onBranch, onShare, onRegenerate, onV
           ) : (
             <Markdown content={content} />
           ))}
-        {!user && !message.isStreaming && (() => {
-          const generated = [...new Map((message.toolEvents || [])
-            .flatMap((event) => event.result?.artifacts || [])
-            .filter((file) => file?.id)
-            .map((file) => [file.id, file])).values()];
-          return generated.length ? (
-            <div className="message-inline-artifacts">
-              {generated.map((file) => <InlineArtifact key={file.id} file={file} />)}
-            </div>
-          ) : null;
-        })()}
+        {!user &&
+          !message.isStreaming &&
+          (() => {
+            const generated = [
+              ...new Map(
+                (message.toolEvents || [])
+                  .flatMap((event) => event.result?.artifacts || [])
+                  .filter((file) => file?.id)
+                  .map((file) => [file.id, file])
+              ).values(),
+            ];
+            return generated.length ? (
+              <div className="message-inline-artifacts">
+                {generated.map((file) => (
+                  <InlineArtifact key={file.id} file={file} />
+                ))}
+              </div>
+            ) : null;
+          })()}
         {message.error && (
           <div className="message-error">
             <AlertCircle size={14} />
@@ -1025,14 +1189,19 @@ function LoginScreen({ providers, error, returnTo = '/' }) {
           <em>your agent.</em>
         </h1>
         <p className="login-sub">
-          Sign in or create an account to access your conversations, saved memories and personal preferences.
+          Sign in or create an account to access your conversations, saved memories and personal
+          preferences.
         </p>
         {error && <div className="notice error-notice">{error}</div>}
         <div className="oauth-list">
           {Object.keys(labels).map((provider) => (
             <a
               className={`oauth-button ${providers?.[provider] ? '' : 'disabled'}`}
-              href={providers?.[provider] ? api(`/api/auth/${provider}?returnTo=${encodeURIComponent(returnTo)}`) : undefined}
+              href={
+                providers?.[provider]
+                  ? api(`/api/auth/${provider}?returnTo=${encodeURIComponent(returnTo)}`)
+                  : undefined
+              }
               key={provider}
               onClick={(e) => !providers?.[provider] && e.preventDefault()}
             >
@@ -1162,7 +1331,15 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
         <div className="library-list">
           {loading && !files.length ? (
             <div className="library-skeleton-list">
-              {Array.from({ length: 5 }, (_, index) => <div className="library-skeleton-row" key={index}><Skeleton width={34} height={34} /><span><Skeleton width="55%" height={11} /><Skeleton width="34%" height={8} /></span></div>)}
+              {Array.from({ length: 5 }, (_, index) => (
+                <div className="library-skeleton-row" key={index}>
+                  <Skeleton width={34} height={34} />
+                  <span>
+                    <Skeleton width="55%" height={11} />
+                    <Skeleton width="34%" height={8} />
+                  </span>
+                </div>
+              ))}
             </div>
           ) : filtered.length ? (
             filtered.map((file) => {
@@ -1274,10 +1451,22 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
 }
 
 function Skeleton({ width = '100%', height = 12, radius = 8, className = '' }) {
-  return <span aria-hidden="true" className={`skeleton ${className}`} style={{ width, height, borderRadius: radius }} />;
+  return (
+    <span
+      aria-hidden="true"
+      className={`skeleton ${className}`}
+      style={{ width, height, borderRadius: radius }}
+    />
+  );
 }
 
-function StatusPage({ code = '500', title = 'Something went wrong', message = 'The workspace could not complete this request.', actionLabel = 'Try again', onAction }) {
+function StatusPage({
+  code = '500',
+  title = 'Something went wrong',
+  message = 'The workspace could not complete this request.',
+  actionLabel = 'Try again',
+  onAction,
+}) {
   return (
     <main className="status-page">
       <div className="status-card">
@@ -1286,8 +1475,14 @@ function StatusPage({ code = '500', title = 'Something went wrong', message = 'T
         <h1>{title}</h1>
         <p>{message}</p>
         <div className="status-actions">
-          {onAction && <button className="primary-button" onClick={onAction}>{actionLabel}</button>}
-          <a className="secondary-button" href="/">Go to workspace</a>
+          {onAction && (
+            <button className="primary-button" onClick={onAction}>
+              {actionLabel}
+            </button>
+          )}
+          <a className="secondary-button" href="/">
+            Go to workspace
+          </a>
         </div>
       </div>
     </main>
@@ -1295,11 +1490,27 @@ function StatusPage({ code = '500', title = 'Something went wrong', message = 'T
 }
 
 export class AppErrorBoundary extends React.Component {
-  constructor(props) { super(props); this.state = { error: null }; }
-  static getDerivedStateFromError(error) { return { error }; }
-  componentDidCatch(error) { console.error('Application render failed:', error); }
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error) {
+    console.error('Application render failed:', error);
+  }
   render() {
-    if (this.state.error) return <StatusPage code="500" title="The app hit an unexpected error" message="Your saved conversations are safe. Reload the page to try again." actionLabel="Reload" onAction={() => location.reload()} />;
+    if (this.state.error)
+      return (
+        <StatusPage
+          code="500"
+          title="The app hit an unexpected error"
+          message="Your saved conversations are safe. Reload the page to try again."
+          actionLabel="Reload"
+          onAction={() => location.reload()}
+        />
+      );
     return this.props.children;
   }
 }
@@ -1307,13 +1518,18 @@ export class AppErrorBoundary extends React.Component {
 function WorkspaceSkeleton() {
   return (
     <div className="workspace-skeleton" aria-label="Loading workspace">
-      <div className="skeleton-head"><Skeleton width="34%" height={15} /><Skeleton width="18%" height={28} /></div>
+      <div className="skeleton-head">
+        <Skeleton width="34%" height={15} />
+        <Skeleton width="18%" height={28} />
+      </div>
       <div className="skeleton-conversation">
         <Skeleton width="68%" height={58} />
         <Skeleton width="84%" height={86} />
         <Skeleton width="54%" height={52} />
       </div>
-      <div className="skeleton-composer"><Skeleton width="100%" height={64} /></div>
+      <div className="skeleton-composer">
+        <Skeleton width="100%" height={64} />
+      </div>
     </div>
   );
 }
@@ -1351,23 +1567,58 @@ function HistoryDrawer({
           <Files size={15} /> File Library <span>Generated files</span>
         </button>
         <div className="history-list">
-          {!chatsLoaded ? <div className="history-skeleton">{Array.from({ length: 6 }, (_, index) => <div key={index}><Skeleton width={22} height={22} /><span><Skeleton width="68%" height={10} /><Skeleton width="35%" height={7} /></span></div>)}</div> : chats.map((chat) => (
-            <div className={`history-item ${chat._id === activeId ? 'active' : ''} ${deletingChatIds.has(chat._id) ? 'deleting' : ''}`} key={chat._id}>
-              <button className="history-select" disabled={deletingChatIds.has(chat._id)} onClick={() => onSelect(chat._id)}>
-                <MessageSquare size={15} />
-                <span>
-                  <b>{chat.title || 'New chat'}</b>
-                  <small>{dateLabel(chat.updatedAt)}</small>
-                </span>
-              </button>
-              <button className="delete-chat" disabled={deletingChatIds.has(chat._id)} onClick={() => onRename(chat)} title="Rename">
-                <Pencil size={13} />
-              </button>
-              <button className="delete-chat" disabled={deletingChatIds.has(chat._id)} onClick={() => onDelete(chat._id)} title={deletingChatIds.has(chat._id) ? 'Deleting conversation' : 'Delete'}>
-                {deletingChatIds.has(chat._id) ? <LoaderCircle size={14} className="spin" /> : <Trash2 size={14} />}
-              </button>
+          {!chatsLoaded ? (
+            <div className="history-skeleton">
+              {Array.from({ length: 6 }, (_, index) => (
+                <div key={index}>
+                  <Skeleton width={22} height={22} />
+                  <span>
+                    <Skeleton width="68%" height={10} />
+                    <Skeleton width="35%" height={7} />
+                  </span>
+                </div>
+              ))}
             </div>
-          ))}
+          ) : (
+            chats.map((chat) => (
+              <div
+                className={`history-item ${chat._id === activeId ? 'active' : ''} ${deletingChatIds.has(chat._id) ? 'deleting' : ''}`}
+                key={chat._id}
+              >
+                <button
+                  className="history-select"
+                  disabled={deletingChatIds.has(chat._id)}
+                  onClick={() => onSelect(chat._id)}
+                >
+                  <MessageSquare size={15} />
+                  <span>
+                    <b>{chat.title || 'New chat'}</b>
+                    <small>{dateLabel(chat.updatedAt)}</small>
+                  </span>
+                </button>
+                <button
+                  className="delete-chat"
+                  disabled={deletingChatIds.has(chat._id)}
+                  onClick={() => onRename(chat)}
+                  title="Rename"
+                >
+                  <Pencil size={13} />
+                </button>
+                <button
+                  className="delete-chat"
+                  disabled={deletingChatIds.has(chat._id)}
+                  onClick={() => onDelete(chat._id)}
+                  title={deletingChatIds.has(chat._id) ? 'Deleting conversation' : 'Delete'}
+                >
+                  {deletingChatIds.has(chat._id) ? (
+                    <LoaderCircle size={14} className="spin" />
+                  ) : (
+                    <Trash2 size={14} />
+                  )}
+                </button>
+              </div>
+            ))
+          )}
           {chatsLoaded && !chats.length && <p className="empty-history">No conversations yet.</p>}
         </div>
       </aside>
@@ -1510,29 +1761,52 @@ function PreferencesDialog({
         </div>
         {tab === 'shares' ? (
           <div className="shared-links">
-            {sharesLoading ? <div className="share-list-skeleton">{Array.from({ length: 3 }, (_, index) => <div key={index}><Skeleton width="58%" height={11} /><Skeleton width="24%" height={8} /></div>)}</div> : shares.map((share) => (
-              <div key={share.shareId}>
-                <span>
-                  <b>{share.title}</b>
-                  <small>{share.shareType === 'chat' ? 'Full conversation' : 'Response snapshot'} · {dateLabel(share.createdAt)}</small>
-                </span>
-                <a href={`/share/${share.shareId}`} target="_blank" rel="noreferrer">
-                  Open
-                </a>
-                <button
-                  onClick={() =>
-                    navigator.clipboard.writeText(`${location.origin}/share/${share.shareId}`)
-                  }
-                >
-                  Copy link
-                </button>
-                <button onClick={() => revokeShare(share.shareId)}>Revoke</button>
+            {sharesLoading ? (
+              <div className="share-list-skeleton">
+                {Array.from({ length: 3 }, (_, index) => (
+                  <div key={index}>
+                    <Skeleton width="58%" height={11} />
+                    <Skeleton width="24%" height={8} />
+                  </div>
+                ))}
               </div>
-            ))}
-            {!sharesLoading && !shares.length && <p className="empty-history">No active shared links.</p>}
+            ) : (
+              shares.map((share) => (
+                <div key={share.shareId}>
+                  <span>
+                    <b>{share.title}</b>
+                    <small>
+                      {share.shareType === 'chat' ? 'Full conversation' : 'Response snapshot'} ·{' '}
+                      {dateLabel(share.createdAt)}
+                    </small>
+                  </span>
+                  <a href={`/share/${share.shareId}`} target="_blank" rel="noreferrer">
+                    Open
+                  </a>
+                  <button
+                    onClick={() =>
+                      navigator.clipboard.writeText(`${location.origin}/share/${share.shareId}`)
+                    }
+                  >
+                    Copy link
+                  </button>
+                  <button onClick={() => revokeShare(share.shareId)}>Revoke</button>
+                </div>
+              ))
+            )}
+            {!sharesLoading && !shares.length && (
+              <p className="empty-history">No active shared links.</p>
+            )}
           </div>
         ) : accountResourcesLoading ? (
-          <div className="account-content-skeleton">{Array.from({ length: 5 }, (_, index) => <div key={index}><Skeleton width="32%" height={9} /><Skeleton width="100%" height={34} /></div>)}</div>
+          <div className="account-content-skeleton">
+            {Array.from({ length: 5 }, (_, index) => (
+              <div key={index}>
+                <Skeleton width="32%" height={9} />
+                <Skeleton width="100%" height={34} />
+              </div>
+            ))}
+          </div>
         ) : tab === 'profile' ? (
           <div className="profile-settings">
             <label>
@@ -1617,9 +1891,12 @@ function PreferencesDialog({
                     aria-pressed={theme === preset.id}
                     title={preset.name}
                   >
-                    <span className="theme-swatch" style={{ background: preset.colors[0], borderColor: preset.colors[1] }}>
+                    <span
+                      className="theme-swatch"
+                      style={{ background: preset.colors[0], borderColor: preset.colors[1] }}
+                    >
                       <i style={{ background: preset.colors[1] }} />
-                      <i style={{ background: preset.colors[1], opacity: .55 }} />
+                      <i style={{ background: preset.colors[1], opacity: 0.55 }} />
                     </span>
                     <span>{preset.name}</span>
                     {theme === preset.id && <Check size={13} />}
@@ -1807,7 +2084,10 @@ function PublicSharePage({ shareId }) {
         if (alive) setShare(data.share);
       })
       .catch((e) => {
-        if (alive) { setError(e.message); setErrorStatus(e.status || 0); }
+        if (alive) {
+          setError(e.message);
+          setErrorStatus(e.status || 0);
+        }
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -1821,8 +2101,24 @@ function PublicSharePage({ shareId }) {
       ? `${share.title} · Nemotron Agent Lab`
       : 'Shared response · Nemotron Agent Lab';
   }, [share]);
-  if (!loading && errorStatus === 404) return <StatusPage code="404" title="Shared content not found" message={error || 'This link may have been revoked or expired.'} />;
-  if (!loading && errorStatus === 503) return <StatusPage code="503" title="Sharing service unavailable" message={error} actionLabel="Retry" onAction={() => location.reload()} />;
+  if (!loading && errorStatus === 404)
+    return (
+      <StatusPage
+        code="404"
+        title="Shared content not found"
+        message={error || 'This link may have been revoked or expired.'}
+      />
+    );
+  if (!loading && errorStatus === 503)
+    return (
+      <StatusPage
+        code="503"
+        title="Sharing service unavailable"
+        message={error}
+        actionLabel="Retry"
+        onAction={() => location.reload()}
+      />
+    );
   return (
     <div className="public-share-page">
       <header>
@@ -1832,7 +2128,11 @@ function PublicSharePage({ shareId }) {
       </header>
       <main>
         {loading ? (
-          <div className="share-loading-skeleton"><Skeleton width="42%" height={18} /><Skeleton width="86%" height={80} /><Skeleton width="70%" height={58} /></div>
+          <div className="share-loading-skeleton">
+            <Skeleton width="42%" height={18} />
+            <Skeleton width="86%" height={80} />
+            <Skeleton width="70%" height={58} />
+          </div>
         ) : error ? (
           <div className="share-error">
             <AlertCircle />
@@ -1840,7 +2140,9 @@ function PublicSharePage({ shareId }) {
           </div>
         ) : (
           <>
-            <div className="eyebrow">{share.shareType === 'chat' ? 'SHARED CONVERSATION' : 'PUBLIC SNAPSHOT'}</div>
+            <div className="eyebrow">
+              {share.shareType === 'chat' ? 'SHARED CONVERSATION' : 'PUBLIC SNAPSHOT'}
+            </div>
             <h1>{share.title}</h1>
             {share.messages.map((message, i) => (
               <article className="share-message" key={i}>
@@ -1858,14 +2160,25 @@ function PublicSharePage({ shareId }) {
               <section className="shared-artifacts">
                 <h2>Generated files</h2>
                 {share.artifacts.map((file) => (
-                  <a key={file.id} href={api(`/api/public/shares/${encodeURIComponent(shareId)}/artifacts/${encodeURIComponent(file.id)}`)}>
-                    <FileText size={15} /><span><b>{file.name}</b><small>{formatBytes(file.size)}</small></span><Download size={14} />
+                  <a
+                    key={file.id}
+                    href={api(
+                      `/api/public/shares/${encodeURIComponent(shareId)}/artifacts/${encodeURIComponent(file.id)}`
+                    )}
+                  >
+                    <FileText size={15} />
+                    <span>
+                      <b>{file.name}</b>
+                      <small>{formatBytes(file.size)}</small>
+                    </span>
+                    <Download size={14} />
                   </a>
                 ))}
               </section>
             )}
             <p className="share-disclaimer">
-              This is a read-only, point-in-time snapshot. Private credentials and live account access are not included.
+              This is a read-only, point-in-time snapshot. Private credentials and live account
+              access are not included.
             </p>
           </>
         )}
@@ -1886,7 +2199,9 @@ export default function App() {
       try {
         const saved = localStorage.getItem('nemotron.colorTheme');
         return COLOR_THEMES.some((item) => item.id === saved) ? saved : 'forest';
-      } catch { return 'forest'; }
+      } catch {
+        return 'forest';
+      }
     }),
     [memories, setMemories] = useState([]),
     [shares, setShares] = useState([]),
@@ -1930,8 +2245,12 @@ export default function App() {
     loadStartedRef = useRef(false),
     authFeedbackRef = useRef(null);
   const activeChat = useMemo(() => chats.find((c) => c._id === activeId), [chats, activeId]);
-  const activePlan = useMemo(() => [...messages].reverse().find((message) => message.agentPlan)?.agentPlan || null, [messages]);
-  const setFileError = (message) => setToast(message ? { id: Date.now(), message: String(message), type: 'error' } : null);
+  const activePlan = useMemo(
+    () => [...messages].reverse().find((message) => message.agentPlan)?.agentPlan || null,
+    [messages]
+  );
+  const setFileError = (message) =>
+    setToast(message ? { id: Date.now(), message: String(message), type: 'error' } : null);
   const starterSuggestions = useMemo(() => {
     const recent = chats
       .filter((c) => c.title && c.title !== 'New chat')
@@ -1957,8 +2276,16 @@ export default function App() {
         feedbackQuery.delete('account_linked');
         feedbackQuery.delete('account_link_error');
         const query = feedbackQuery.toString();
-        if (authFeedbackRef.current.authError || authFeedbackRef.current.linkedProvider || authFeedbackRef.current.linkError)
-          history.replaceState({}, '', `${location.pathname}${query ? `?${query}` : ''}${location.hash}`);
+        if (
+          authFeedbackRef.current.authError ||
+          authFeedbackRef.current.linkedProvider ||
+          authFeedbackRef.current.linkError
+        )
+          history.replaceState(
+            {},
+            '',
+            `${location.pathname}${query ? `?${query}` : ''}${location.hash}`
+          );
       }
       const { authError, linkedProvider, linkError } = authFeedbackRef.current;
       const [meRes, healthRes] = await Promise.all([
@@ -1985,7 +2312,8 @@ export default function App() {
       setChatLoading(true);
       setChatsLoaded(false);
       setChatLoadError('');
-      if (linkedProvider) setToast({ id: Date.now(), message: `${linkedProvider} account linked.`, type: 'success' });
+      if (linkedProvider)
+        setToast({ id: Date.now(), message: `${linkedProvider} account linked.`, type: 'success' });
       if (linkError) setFileError(linkError);
 
       setAccountResourcesLoading(true);
@@ -2013,8 +2341,9 @@ export default function App() {
       setActiveBranchId('main');
       setBranches([]);
       setChatLoading(false);
-      try { localStorage.removeItem('nemotron.activeChatId'); } catch {}
-
+      try {
+        localStorage.removeItem('nemotron.activeChatId');
+      } catch {}
     } catch (error) {
       setAccountResourcesLoading(false);
       if (error.message === 'Authentication required.') {
@@ -2037,7 +2366,11 @@ export default function App() {
       } else {
         setChatLoading(false);
         if (error.status === 503 || error.status === 502 || error.name === 'TypeError')
-          setFatalError({ status: 503, message: 'The service is temporarily unavailable. Check your server and database, then retry.' });
+          setFatalError({
+            status: 503,
+            message:
+              'The service is temporarily unavailable. Check your server and database, then retry.',
+          });
         setChatLoadError(
           `Workspace loading failed: ${error.message}. Refresh the page or retry a conversation.`
         );
@@ -2048,7 +2381,9 @@ export default function App() {
   useEffect(() => {
     const selected = COLOR_THEMES.find((item) => item.id === theme) || COLOR_THEMES[0];
     document.documentElement.dataset.theme = selected.id;
-    try { localStorage.setItem('nemotron.colorTheme', selected.id); } catch {}
+    try {
+      localStorage.setItem('nemotron.colorTheme', selected.id);
+    } catch {}
   }, [theme]);
   useEffect(() => {
     if (!toast) return undefined;
@@ -2067,7 +2402,11 @@ export default function App() {
       const pending = localStorage.getItem('nemotron.pendingGeneration');
       if (pending) {
         localStorage.removeItem('nemotron.pendingGeneration');
-        setToast({ id: Date.now(), message: 'A previous generation was interrupted. You can retry it when ready.', type: 'error' });
+        setToast({
+          id: Date.now(),
+          message: 'A previous generation was interrupted. You can retry it when ready.',
+          type: 'error',
+        });
       }
     } catch {}
     loadAccount();
@@ -2145,7 +2484,9 @@ export default function App() {
     setDrawer(false);
     setRouteError('');
     if (navigate && location.pathname !== '/') history.pushState({}, '', '/');
-    try { localStorage.removeItem('nemotron.activeChatId'); } catch {}
+    try {
+      localStorage.removeItem('nemotron.activeChatId');
+    } catch {}
     return null;
   };
   const createChatRecord = async () => {
@@ -2168,7 +2509,8 @@ export default function App() {
     setActiveId(id);
     activeIdRef.current = id;
     setRouteError('');
-    if (navigate && location.pathname !== `/c/${encodeURIComponent(id)}`) history.pushState({}, '', `/c/${encodeURIComponent(id)}`);
+    if (navigate && location.pathname !== `/c/${encodeURIComponent(id)}`)
+      history.pushState({}, '', `/c/${encodeURIComponent(id)}`);
     setChatLoading(true);
     setChatLoadError('');
     setDrawer(false);
@@ -2200,7 +2542,8 @@ export default function App() {
     } catch (error) {
       if (sequence === chatLoadSeqRef.current) {
         if (error.status === 404) setRouteError('not-found');
-        if (error.status === 503 || error.status === 502) setFatalError({ status: 503, message: error.message });
+        if (error.status === 503 || error.status === 502)
+          setFatalError({ status: 503, message: error.message });
         setChatLoadError(
           `Couldn't load this conversation: ${error.message}. Please try selecting it again.`
         );
@@ -2226,13 +2569,19 @@ export default function App() {
     if (!activeId || busy) return;
     const targetIndex = messages.map((message) => Boolean(message.agentPlan)).lastIndexOf(true);
     if (targetIndex < 0) return;
-    const next = messages.map((message, messageIndex) => messageIndex === targetIndex ? { ...message, agentPlan: plan } : message);
+    const next = messages.map((message, messageIndex) =>
+      messageIndex === targetIndex ? { ...message, agentPlan: plan } : message
+    );
     setMessages(next);
     try {
       await saveMessages(activeId, next);
       setToast({ id: Date.now(), message: 'Execution plan saved.', type: 'success' });
     } catch (error) {
-      setToast({ id: Date.now(), message: error.message || 'Could not save the plan.', type: 'error' });
+      setToast({
+        id: Date.now(),
+        message: error.message || 'Could not save the plan.',
+        type: 'error',
+      });
     }
   };
   const renameChat = async (chat) => {
@@ -2268,13 +2617,23 @@ export default function App() {
         setDrawer(false);
         setRouteError('');
         history.replaceState({}, '', '/');
-        try { localStorage.removeItem('nemotron.activeChatId'); } catch {}
+        try {
+          localStorage.removeItem('nemotron.activeChatId');
+        } catch {}
       }
       setToast({ id: Date.now(), message: 'Conversation deleted.', type: 'success' });
     } catch (error) {
-      setToast({ id: Date.now(), message: error.message || 'Could not delete conversation.', type: 'error' });
+      setToast({
+        id: Date.now(),
+        message: error.message || 'Could not delete conversation.',
+        type: 'error',
+      });
     } finally {
-      setDeletingChatIds((current) => { const next = new Set(current); next.delete(id); return next; });
+      setDeletingChatIds((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
     }
   };
   useEffect(() => {
@@ -2298,8 +2657,11 @@ export default function App() {
   }, [auth.user?._id, chatsLoaded]);
 
   const logout = async () => {
-    try { await request('/api/auth/logout', { method: 'POST' }); }
-    finally { location.replace('/'); }
+    try {
+      await request('/api/auth/logout', { method: 'POST' });
+    } finally {
+      location.replace('/');
+    }
   };
   const savePreferences = async (update) => {
     const next = typeof update === 'function' ? update(preferences) : update;
@@ -2357,8 +2719,14 @@ export default function App() {
       const data = await (await request('/api/shares')).json();
       setShares(data.shares || []);
     } catch (error) {
-      setToast({ id: Date.now(), message: error.message || 'Could not load shared links.', type: 'error' });
-    } finally { setSharesLoading(false); }
+      setToast({
+        id: Date.now(),
+        message: error.message || 'Could not load shared links.',
+        type: 'error',
+      });
+    } finally {
+      setSharesLoading(false);
+    }
   };
   const revokeShare = async (shareId) => {
     await request(`/api/shares/${shareId}`, { method: 'DELETE' });
@@ -2373,7 +2741,8 @@ export default function App() {
     setAuth((a) => ({ ...a, user: { ...a.user, ...data.user } }));
     return data.user;
   };
-  const linkProvider = (provider) => api(`/api/auth/${provider}/link?returnTo=${encodeURIComponent(location.pathname)}`);
+  const linkProvider = (provider) =>
+    api(`/api/auth/${provider}/link?returnTo=${encodeURIComponent(location.pathname)}`);
   const createBranchFrom = async (message) => {
     if (!activeId || !message?.id) return;
     const res = await request(`/api/chats/${activeId}/branches`, {
@@ -2424,8 +2793,11 @@ export default function App() {
       },
       ...current,
     ]);
-    try { await navigator.clipboard.writeText(data.url); }
-    catch { window.prompt('Copy this share link', data.url); }
+    try {
+      await navigator.clipboard.writeText(data.url);
+    } catch {
+      window.prompt('Copy this share link', data.url);
+    }
     setStatus('Share link copied');
   };
   const shareChat = async () => {
@@ -2437,13 +2809,35 @@ export default function App() {
         body: JSON.stringify({ chatId: activeId, branchId: activeBranchId, shareType: 'chat' }),
       });
       const data = await res.json();
-      setShares((current) => [{ shareId: data.shareId, title: activeChat?.title || 'Shared conversation', chatId: activeId, shareType: 'chat', createdAt: new Date().toISOString() }, ...current]);
-      try { await navigator.clipboard.writeText(data.url); }
-      catch { window.prompt('Copy this full conversation share link', data.url); }
-      setToast({ id: Date.now(), message: `Full conversation link created${data.artifactCount ? ` with ${data.artifactCount} generated file(s)` : ''}.`, type: 'success' });
+      setShares((current) => [
+        {
+          shareId: data.shareId,
+          title: activeChat?.title || 'Shared conversation',
+          chatId: activeId,
+          shareType: 'chat',
+          createdAt: new Date().toISOString(),
+        },
+        ...current,
+      ]);
+      try {
+        await navigator.clipboard.writeText(data.url);
+      } catch {
+        window.prompt('Copy this full conversation share link', data.url);
+      }
+      setToast({
+        id: Date.now(),
+        message: `Full conversation link created${data.artifactCount ? ` with ${data.artifactCount} generated file(s)` : ''}.`,
+        type: 'success',
+      });
     } catch (error) {
-      setToast({ id: Date.now(), message: error.message || 'Could not share conversation.', type: 'error' });
-    } finally { setShareBusy(false); }
+      setToast({
+        id: Date.now(),
+        message: error.message || 'Could not share conversation.',
+        type: 'error',
+      });
+    } finally {
+      setShareBusy(false);
+    }
   };
   const editUserMessage = async (message, value) => {
     if (value == null || !value.trim()) return;
@@ -2484,8 +2878,16 @@ export default function App() {
     if (index < 1 || busy) return;
     setBusy(true);
     setStatus('Regenerating response…');
-    setLiveProgress(thinking ? { message: 'Thinking...', startedAt: Date.now(), lastActivityAt: Date.now() } : null);
-    setMessages((current) => current.map((item) => item.id === message.id ? { ...item, isStreaming: true, toolEvents: [] } : item));
+    setLiveProgress(
+      thinking
+        ? { message: 'Thinking...', startedAt: Date.now(), lastActivityAt: Date.now() }
+        : null
+    );
+    setMessages((current) =>
+      current.map((item) =>
+        item.id === message.id ? { ...item, isStreaming: true, toolEvents: [] } : item
+      )
+    );
     try {
       localStorage.setItem(
         'nemotron.pendingGeneration',
@@ -2506,7 +2908,9 @@ export default function App() {
           expectedRevision: activeChat?.revision || 0,
           preserveExistingMessageId: message.id,
           thinkingEnabled: thinking,
-          activePlan: [...messages.slice(0, index)].reverse().find((item) => item.agentPlan)?.agentPlan || null,
+          activePlan:
+            [...messages.slice(0, index)].reverse().find((item) => item.agentPlan)?.agentPlan ||
+            null,
           messages: messages.slice(0, index).map((m) => ({
             role: m.role,
             content: m.apiContent || m.content,
@@ -2538,24 +2942,73 @@ export default function App() {
           if (event.type === 'agent_event') {
             const item = event.event || {};
             const progressMessage = item.type === 'progress_update' ? item.message : '';
-            if (progressMessage && thinking) setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: progressMessage, lastActivityAt: Date.now() }));
+            if (progressMessage && thinking)
+              setLiveProgress((current) => ({
+                ...(current || { startedAt: Date.now() }),
+                message: progressMessage,
+                lastActivityAt: Date.now(),
+              }));
           }
           if (event.type === 'final_content') {
             regeneratedOutput = event.content || '';
-            setMessages((current) => current.map((item) => item.id === message.id ? { ...item, content: regeneratedOutput, isStreaming: true, toolEvents: regenerationToolEvents } : item));
+            setMessages((current) =>
+              current.map((item) =>
+                item.id === message.id
+                  ? {
+                      ...item,
+                      content: regeneratedOutput,
+                      isStreaming: true,
+                      toolEvents: regenerationToolEvents,
+                    }
+                  : item
+              )
+            );
           }
           if (event.type === 'chunk') {
             regeneratedOutput += event.content || '';
-            setMessages((current) => current.map((item) => item.id === message.id ? { ...item, content: regeneratedOutput, isStreaming: true, toolEvents: regenerationToolEvents } : item));
+            setMessages((current) =>
+              current.map((item) =>
+                item.id === message.id
+                  ? {
+                      ...item,
+                      content: regeneratedOutput,
+                      isStreaming: true,
+                      toolEvents: regenerationToolEvents,
+                    }
+                  : item
+              )
+            );
           }
           if (event.type === 'tool_start') {
-            regenerationToolEvents = [...regenerationToolEvents, { name: event.name, status: 'running', arguments: event.arguments || {} }];
-            setMessages((current) => current.map((item) => item.id === message.id ? { ...item, isStreaming: true, toolEvents: regenerationToolEvents } : item));
+            regenerationToolEvents = [
+              ...regenerationToolEvents,
+              { name: event.name, status: 'running', arguments: event.arguments || {} },
+            ];
+            setMessages((current) =>
+              current.map((item) =>
+                item.id === message.id
+                  ? { ...item, isStreaming: true, toolEvents: regenerationToolEvents }
+                  : item
+              )
+            );
           }
           if (event.type === 'tool_result') {
-            const lastIndex = regenerationToolEvents.map((item) => item.name).lastIndexOf(event.name);
-            if (lastIndex >= 0) regenerationToolEvents = regenerationToolEvents.map((item, itemIndex) => itemIndex === lastIndex ? { ...item, status: event.status, result: event.result, error: event.error } : item);
-            setMessages((current) => current.map((item) => item.id === message.id ? { ...item, isStreaming: true, toolEvents: regenerationToolEvents } : item));
+            const lastIndex = regenerationToolEvents
+              .map((item) => item.name)
+              .lastIndexOf(event.name);
+            if (lastIndex >= 0)
+              regenerationToolEvents = regenerationToolEvents.map((item, itemIndex) =>
+                itemIndex === lastIndex
+                  ? { ...item, status: event.status, result: event.result, error: event.error }
+                  : item
+              );
+            setMessages((current) =>
+              current.map((item) =>
+                item.id === message.id
+                  ? { ...item, isStreaming: true, toolEvents: regenerationToolEvents }
+                  : item
+              )
+            );
           }
           if (event.type === 'error') throw new Error(event.error || 'Regeneration failed.');
         }
@@ -2568,7 +3021,9 @@ export default function App() {
       setChats((current) => [refreshed.chat, ...current.filter((c) => c._id !== activeId)]);
       setStatus('Response regenerated');
     } catch (error) {
-      setMessages((current) => current.map((item) => item.id === message.id ? { ...message, isStreaming: false } : item));
+      setMessages((current) =>
+        current.map((item) => (item.id === message.id ? { ...message, isStreaming: false } : item))
+      );
       setStatus(error.name === 'AbortError' ? 'Stopped' : 'Regeneration failed');
       setFileError(error.message);
     } finally {
@@ -2772,7 +3227,8 @@ export default function App() {
     const nextMessages =
         options.messages || (options.reuseLastUser ? messages : [...messages, userMessage]),
       titleBefore = chat.title || 'New chat';
-    const continuingPlan = [...nextMessages].reverse().find((message) => message.agentPlan)?.agentPlan || null;
+    const continuingPlan =
+      [...nextMessages].reverse().find((message) => message.agentPlan)?.agentPlan || null;
     if (activeIdRef.current === chat._id) setMessages(nextMessages);
     setInput('');
     setFiles([]);
@@ -2791,7 +3247,11 @@ export default function App() {
     const controller = new AbortController();
     abortRef.current = controller;
     const started = performance.now();
-    setLiveProgress(thinking ? { message: 'Thinking...', startedAt: Date.now(), lastActivityAt: Date.now() } : null);
+    setLiveProgress(
+      thinking
+        ? { message: 'Thinking...', startedAt: Date.now(), lastActivityAt: Date.now() }
+        : null
+    );
     let output = '',
       events = [],
       agentPlan = continuingPlan,
@@ -2807,7 +3267,7 @@ export default function App() {
               ? {
                   ...liveAssistant,
                   content: output,
-                            toolEvents: events,
+                  toolEvents: events,
                   agentPlan,
                   agentEvents,
                   usage,
@@ -2883,7 +3343,12 @@ export default function App() {
             if (item.type === 'plan_created' && item.plan) agentPlan = item.plan;
             if (item.type === 'task_updated' && item.plan) agentPlan = item.plan;
             const message = item.type === 'progress_update' ? item.message : '';
-            if (message && thinking) setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message, lastActivityAt: Date.now() }));
+            if (message && thinking)
+              setLiveProgress((current) => ({
+                ...(current || { startedAt: Date.now() }),
+                message,
+                lastActivityAt: Date.now(),
+              }));
             update();
           }
           if (event.type === 'tool_start') {
@@ -3043,14 +3508,51 @@ export default function App() {
   if (location.pathname.startsWith('/share/'))
     return <PublicSharePage shareId={decodeURIComponent(location.pathname.split('/')[2] || '')} />;
   if (location.pathname !== '/' && !/^\/c\/[^/]+$/.test(location.pathname))
-    return <StatusPage code="404" title="Page not found" message="The page you are looking for does not exist." />;
+    return (
+      <StatusPage
+        code="404"
+        title="Page not found"
+        message="The page you are looking for does not exist."
+      />
+    );
   if (auth.loading)
-    return <div className="loading-screen"><div className="loading-card"><Skeleton width={150} height={16} /><Skeleton width={240} height={10} /><Skeleton width={190} height={10} /></div></div>;
+    return (
+      <div className="loading-screen">
+        <div className="loading-card">
+          <Skeleton width={150} height={16} />
+          <Skeleton width={240} height={10} />
+          <Skeleton width={190} height={10} />
+        </div>
+      </div>
+    );
   if (fatalError?.status === 503)
-    return <StatusPage code="503" title="Service temporarily unavailable" message={fatalError.message} actionLabel="Retry connection" onAction={() => { setFatalError(null); initialRouteHandledRef.current = false; setChatsLoaded(false); setAuth((current) => ({ ...current, loading: true })); loadAccount(); }} />;
+    return (
+      <StatusPage
+        code="503"
+        title="Service temporarily unavailable"
+        message={fatalError.message}
+        actionLabel="Retry connection"
+        onAction={() => {
+          setFatalError(null);
+          initialRouteHandledRef.current = false;
+          setChatsLoaded(false);
+          setAuth((current) => ({ ...current, loading: true }));
+          loadAccount();
+        }}
+      />
+    );
   if (routeError === 'not-found')
-    return <StatusPage code="404" title="Conversation not found" message="This conversation may have been deleted or you may not have access to it." />;
-  if (!auth.user) return <LoginScreen providers={auth.providers} error={auth.error} returnTo={location.pathname} />;
+    return (
+      <StatusPage
+        code="404"
+        title="Conversation not found"
+        message="This conversation may have been deleted or you may not have access to it."
+      />
+    );
+  if (!auth.user)
+    return (
+      <LoginScreen providers={auth.providers} error={auth.error} returnTo={location.pathname} />
+    );
 
   return (
     <div className="app agent-lab" data-theme={theme}>
@@ -3306,7 +3808,10 @@ export default function App() {
                 <button
                   type="button"
                   className={`thinking-control ${thinking ? 'enabled' : ''}`}
-                  onClick={() => { if (thinking) setLiveProgress(null); setThinking((value) => !value); }}
+                  onClick={() => {
+                    if (thinking) setLiveProgress(null);
+                    setThinking((value) => !value);
+                  }}
                   title="Toggle model thinking"
                 >
                   <Brain size={14} />
