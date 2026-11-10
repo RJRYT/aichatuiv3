@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   initializePlanProgress,
   advancePlanAfterExecution,
+  startNextPlanTask,
 } from '../src/services/agentPlanProgress.js';
 
 function createState() {
@@ -58,4 +59,13 @@ test('successful execution advances to the next pending task and verified delive
   assert.equal(state.plan.tasks[2].status, 'running');
   advancePlanAfterExecution(state, emit, true);
   assert.ok(state.plan.tasks.every((task) => task.status === 'completed'));
+});
+
+
+test('startNextPlanTask is exported for the NVIDIA execution service', () => {
+  const state = createState();
+  const emit = () => {};
+  const task = startNextPlanTask(state, emit, 'Execution is starting.');
+  assert.equal(task.id, '1');
+  assert.equal(task.status, 'running');
 });

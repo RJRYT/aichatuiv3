@@ -1,5 +1,10 @@
 # Nemotron Agent Lab — MERN monorepo
 
+## v7.3.6 — Plan progression runtime hotfix
+
+- Fixed the missing `startNextPlanTask` import/export that caused a runtime error when execution started.
+- Includes the v7.3.5 reliability and prompt UX improvements.
+
 ## v7.3.5 — Reliability and prompt UX
 
 - Fixed missing account read endpoints for preferences and memories.

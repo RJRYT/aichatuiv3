@@ -6,7 +6,7 @@ function emitPlanTask(agentState, task, status, note, emitAgentEvent) {
   emitAgentEvent('task_updated', { task: { ...task }, plan: agentState.plan });
 }
 
-function startNextPlanTask(agentState, emitAgentEvent, note = 'Work is in progress.') {
+export function startNextPlanTask(agentState, emitAgentEvent, note = 'Work is in progress.') {
   const tasks = agentState.plan?.tasks || [];
   if (tasks.some((task) => task.status === 'running')) return tasks.find((task) => task.status === 'running');
   const next = tasks.find((task) => task.status === 'pending' &&

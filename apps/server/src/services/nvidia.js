@@ -4,7 +4,7 @@ import { buildSystemPrompt } from './systemPrompt.js';
 import logger from '../utils/logger.js';
 import { getArtifact } from './interpreter/artifactStore.js';
 import { detectDeliverableContract, inspectZipBuffer, assessWebsiteQuality } from './deliverablePolicy.js';
-import { initializePlanProgress, advancePlanAfterExecution } from './agentPlanProgress.js';
+import { initializePlanProgress, advancePlanAfterExecution, startNextPlanTask } from './agentPlanProgress.js';
 
 export const MODEL_ID = 'nvidia/nemotron-3.5-super-vl-120b-a12b';
 const log = logger.child({ component: 'nvidia' });
