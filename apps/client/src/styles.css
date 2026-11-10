@@ -3249,7 +3249,7 @@ a {
 }
 .app[data-theme] .welcome-symbol,
 .app[data-theme] .message-avatar {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
   color: var(--accent2);
 }
@@ -3269,7 +3269,7 @@ a {
 .app[data-theme] .suggestions button:hover,
 .app[data-theme] .icon-button:hover,
 .app[data-theme] .text-action:hover {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--accent);
 }
 .app[data-theme] .message-heading,
@@ -3286,13 +3286,13 @@ a {
 .app[data-theme] input,
 .app[data-theme] textarea,
 .app[data-theme] select {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
   color: var(--text);
 }
 .app[data-theme] .secondary-button,
 .app[data-theme] .tab-row button {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
   color: var(--text);
 }
@@ -3346,7 +3346,7 @@ a {
   padding: 7px;
   border: 1px solid var(--border);
   border-radius: 9px;
-  background: var(--panel2);
+  background: var(--panel);
   color: var(--muted);
   font-size: 10px;
   text-align: left;
@@ -3399,12 +3399,12 @@ a {
 }
 .app[data-theme] .preference-grid select,
 .app[data-theme] .memory-add textarea {
-  background: var(--panel2);
+  background: var(--panel);
   color: var(--text);
   border-color: var(--border);
 }
 .app[data-theme] .memory-add {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
 }
 .app[data-theme] .memory-item p {
@@ -3444,12 +3444,12 @@ body[data-theme] {
 }
 [data-theme] .notice,
 [data-theme] .error-notice {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
   color: var(--text);
 }
 [data-theme] .oauth-button {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
   color: var(--text);
 }
@@ -3489,12 +3489,12 @@ body[data-theme] {
   color: var(--text);
 }
 .app[data-theme] .attachment-pill {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
   color: var(--text);
 }
 .app[data-theme] .inline-edit textarea {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
   color: var(--text);
 }
@@ -3507,7 +3507,7 @@ body[data-theme] {
   color: var(--accent);
 }
 .app[data-theme] .message-actions button {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
   color: var(--text);
 }
@@ -3540,7 +3540,7 @@ body[data-theme] {
 .app[data-theme] .skeleton-head,
 .app[data-theme] .skeleton-conversation,
 .app[data-theme] .skeleton-composer {
-  background: var(--panel2);
+  background: var(--panel);
 }
 .app[data-theme] .loading-screen {
   background: var(--bg);
@@ -3560,7 +3560,7 @@ body[data-theme] {
   color: var(--text);
 }
 .app[data-theme] .chat-load-error {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
   color: var(--text);
 }
@@ -3577,7 +3577,7 @@ body[data-theme] {
   color: var(--muted);
 }
 .app[data-theme] .pending-file {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
   color: var(--text);
 }
@@ -3585,7 +3585,7 @@ body[data-theme] {
   color: var(--muted);
 }
 .app[data-theme] .composer-icon {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
   color: var(--text);
 }
@@ -3598,12 +3598,12 @@ body[data-theme] {
   color: var(--text);
 }
 .app[data-theme] .stop-button {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
   color: var(--text);
 }
 .app[data-theme] .profile-button {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
   color: var(--text);
 }
@@ -3623,7 +3623,7 @@ body[data-theme] {
 }
 .app[data-theme] .new-chat-button,
 .app[data-theme] .library-nav-button {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
   color: var(--text);
 }
@@ -3635,7 +3635,7 @@ body[data-theme] {
   color: var(--text);
 }
 .app[data-theme] .history-item {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
 }
 .app[data-theme] .history-item.active {
@@ -3658,7 +3658,7 @@ body[data-theme] {
   color: var(--text);
 }
 .app[data-theme] .library-list {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
 }
 .app[data-theme] .library-file {
@@ -3673,7 +3673,7 @@ body[data-theme] {
   color: var(--muted);
 }
 .app[data-theme] .library-file-actions .library-action {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
   color: var(--text);
 }
@@ -3698,7 +3698,7 @@ body[data-theme] {
   color: var(--muted);
 }
 .app[data-theme] .plan-edit-fields {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
 }
 .app[data-theme] .plan-edit-task-state {
@@ -3710,7 +3710,7 @@ body[data-theme] {
 
 /* Code block & markdown */
 .app[data-theme] .code-shell {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
 }
 .app[data-theme] .code-head {
@@ -3723,7 +3723,7 @@ body[data-theme] {
   color: var(--text);
 }
 .app[data-theme] .inline-code {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
   color: var(--text);
 }
@@ -3755,7 +3755,7 @@ body[data-theme] {
   color: var(--muted);
 }
 .app[data-theme] .artifact-card-actions .library-action {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
   color: var(--text);
 }
@@ -3770,7 +3770,7 @@ body[data-theme] {
 .app[data-theme] .artifact-preview-loading,
 .app[data-theme] .artifact-preview-error,
 .app[data-theme] .artifact-preview-unavailable {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
   color: var(--text);
 }
@@ -3802,7 +3802,7 @@ body[data-theme] {
   border-bottom-color: var(--border);
 }
 .app[data-theme] .account-avatar-fallback {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
   color: var(--text);
 }
@@ -3816,7 +3816,7 @@ body[data-theme] {
   color: var(--muted);
 }
 .app[data-theme] .memory-item {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
   color: var(--text);
 }
@@ -3843,7 +3843,7 @@ body[data-theme] {
   background: rgba(0, 0, 0, 0.5);
 }
 .app[data-theme] .live-progress {
-  background: var(--panel2);
+  background: var(--panel);
   border-color: var(--border);
   color: var(--text);
 }
