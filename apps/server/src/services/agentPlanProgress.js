@@ -40,9 +40,20 @@ export function advancePlanAfterExecution(agentState, emitAgentEvent, verified) 
     return;
   }
   const running = tasks.find((task) => task.status === 'running');
-  if (running) {
-    emitPlanTask(agentState, running, 'completed', 'This execution pass completed; remaining validation or packaging work is continuing.', emitAgentEvent);
+  const nextReady = tasks.find((task) => task.status === 'pending' &&
+    (task.dependsOn || []).every((id) => {
+      const dependency = tasks.find((candidate) => candidate.id === id);
+      return dependency?.status === 'completed' || dependency?.id === running?.id;
+    }));
+  if (running && nextReady) {
+    emitPlanTask(agentState, running, 'completed', 'This execution pass completed; the next validation or packaging step is continuing.', emitAgentEvent);
+    startNextPlanTask(agentState, emitAgentEvent, 'Continuing with the next implementation, packaging, or verification step.');
+    return;
   }
-  startNextPlanTask(agentState, emitAgentEvent, 'Continuing with the next implementation, packaging, or verification step.');
+  // Do not show 5/5 complete when independent deliverable verification failed.
+  // Keep the final task pending so a recovery pass can retry it.
+  if (running) {
+    emitPlanTask(agentState, running, 'pending', 'Verification has not passed yet. This task remains open for a recovery attempt.', emitAgentEvent);
+  }
 }
 

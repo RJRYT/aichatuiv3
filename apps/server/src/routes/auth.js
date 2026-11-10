@@ -4,6 +4,7 @@ import {
   currentUser,
   oauthCallback,
   oauthStart,
+  optionalAuth,
   requireAuth,
 } from '../services/auth.js';
 import logger from '../utils/logger.js';
@@ -25,7 +26,7 @@ for (const provider of ['google', 'github', 'discord']) {
     oauthStart(req, res, provider);
   });
 }
-router.get('/me', requireAuth, (req, res, next) => {
+router.get('/me', optionalAuth, (req, res, next) => {
   log.debug('Current user requested', { userId: String(req.user._id) });
   currentUser(req, res).catch(next);
 });

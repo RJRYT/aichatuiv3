@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { getToolDefinitions, runTool } from './tools.js';
 import { buildSystemPrompt } from './systemPrompt.js';
 import logger from '../utils/logger.js';
-import { getArtifact } from './interpreter/artifactStore.js';
+import { getArtifact, listArtifacts } from './interpreter/artifactStore.js';
 import { detectDeliverableContract, inspectZipBuffer, assessWebsiteQuality } from './deliverablePolicy.js';
 import { initializePlanProgress, advancePlanAfterExecution, startNextPlanTask } from './agentPlanProgress.js';
 
@@ -39,8 +39,29 @@ The backend independently checks the requested artifact before accepting complet
 
 
 
-async function verifyDeliverableArtifacts(result, userId, contract) {
-  const artifacts = Array.isArray(result?.artifacts) ? result.artifacts : [];
+async function verifyDeliverableArtifacts(result, userId, contract, chatId = '') {
+  const returnedArtifacts = Array.isArray(result?.artifacts) ? result.artifacts : [];
+  // The sandbox response is the primary source. Query the per-chat library as a
+  // recovery path in case a provider response omitted artifact metadata after save.
+  let storedArtifacts = [];
+  if (chatId) {
+    try {
+      const library = await listArtifacts(userId, { chatId, limit: 100 });
+      const recentCutoff = Date.now() - 15 * 60 * 1000;
+      storedArtifacts = (Array.isArray(library.files) ? library.files : []).filter((item) => {
+        if (result?.executionId && String(item.executionId || '') === String(result.executionId)) return true;
+        const updatedAt = new Date(item.createdAt || 0).getTime();
+        return Number.isFinite(updatedAt) && updatedAt >= recentCutoff;
+      });
+    } catch (error) {
+      log.warn('Could not query chat artifacts during verification', { chatId, error: error.message });
+    }
+  }
+  const byId = new Map();
+  for (const item of [...returnedArtifacts, ...storedArtifacts]) {
+    if (item?.id) byId.set(String(item.id), item);
+  }
+  const artifacts = [...byId.values()];
   const verified = [];
   const fileContents = new Map();
   const zipContents = new Map();
@@ -526,7 +547,8 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
             agentState.deliverableVerification = await verifyDeliverableArtifacts(
               outcome.result,
               userId,
-              deliverableContract
+              deliverableContract,
+              body.chatId
             );
           } catch (verificationError) {
             agentState.deliverableVerification = {

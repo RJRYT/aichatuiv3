@@ -145,7 +145,7 @@ const tools = [
     function: {
       name: 'save_memory',
       description:
-        'Save a concise, useful fact or preference about the user to their long-term memory. Only use when the user explicitly asks you to remember or save something.',
+        'Save a concise, durable, non-sensitive fact or preference about the user to long-term memory. Use proactively when the user shares stable preferences, ongoing projects, technical stack, goals, or recurring workflow context that would materially improve future answers; also honor explicit remember/save requests. Do not save transient details, secrets, credentials, financial account data, or sensitive personal/medical/legal/identity information. Avoid duplicates and phrase memories as neutral facts.',
       parameters: {
         type: 'object',
         properties: {
@@ -352,7 +352,7 @@ async function executeTool(name, args, user, options = {}) {
     const existed = Boolean(await User.exists({ _id: user._id, 'memories.text': memory }));
     let updated = await User.findOneAndUpdate(
       { _id: user._id, 'memories.text': { $ne: memory } },
-      { $push: { memories: { text: memory, source: 'assistant' } } },
+      { $push: { memories: { $each: [{ text: memory, source: 'assistant' }], $slice: -50 } } },
       { new: true }
     )
       .select('memories')

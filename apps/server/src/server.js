@@ -33,6 +33,8 @@ const allowedOrigins = String(
   .split(',')
   .map((x) => x.trim())
   .filter(Boolean);
+if (process.env.NODE_ENV === 'production' && allowedOrigins.includes('*'))
+  throw new Error('CORS_ORIGIN must list explicit trusted origins in production; wildcard origins cannot be used with credentialed sessions.');
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
 app.use(
@@ -64,8 +66,9 @@ const limiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'Too many requests. Please wait and retry.' },
 });
-app.get('/api/health', (_req, res) =>
-  res.json({
+app.get('/api/health', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  return res.json({
     ok: true,
     database: getDatabaseMode(),
     authRequired: process.env.AUTH_REQUIRED !== 'false',
@@ -74,10 +77,17 @@ app.get('/api/health', (_req, res) =>
       github: Boolean(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET),
       discord: Boolean(process.env.DISCORD_CLIENT_ID && process.env.DISCORD_CLIENT_SECRET),
     },
-  })
-);
+  });
+});
 app.use('/api/auth', authRouter);
 app.use('/api/public/shares', limiter, publicShareRouter);
+app.use('/api', (req, res, next) => {
+  if (!['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method)) return next();
+  const origin = req.get('Origin');
+  if (origin && !allowedOrigins.includes('*') && !allowedOrigins.includes(origin))
+    return res.status(403).json({ error: 'Request origin is not allowed.' });
+  return next();
+});
 app.use('/api', requireAuth);
 app.use('/api/account', accountRouter);
 app.use('/api/shares', sharesRouter);
@@ -85,6 +95,7 @@ app.use('/api/interpreter', limiter, interpreterRouter);
 app.get('/api/plugins', (_req, res) => res.json({ plugins: getPluginCatalog() }));
 app.use('/api/chats', limiter, chatsRouter);
 app.use('/api/chat', limiter, chatRouter);
+app.use('/api', (_req, res) => res.status(404).json({ error: 'API endpoint not found.' }));
 if (process.env.SERVE_STATIC !== 'false' && fs.existsSync(frontendDist)) {
   app.use(
     express.static(frontendDist, {

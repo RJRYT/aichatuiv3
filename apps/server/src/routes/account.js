@@ -121,7 +121,7 @@ router.post('/memories', async (req, res) => {
   log.info('Memory saved', { userId, memoryLength: text.length });
   let user = await User.findOneAndUpdate(
     { _id: req.user._id, 'memories.text': { $ne: text } },
-    { $push: { memories: { text, source: 'user' } } },
+    { $push: { memories: { $each: [{ text, source: 'user' }], $slice: -50 } } },
     { new: true }
   )
     .select('memories')

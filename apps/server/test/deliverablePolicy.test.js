@@ -137,3 +137,12 @@ test('deliverable plans are capped at eight focused tasks', () => {
     /no more than 8/
   );
 });
+
+test('detects a standalone Python script as a file deliverable', () => {
+  const contract = detectDeliverableContract([
+    { role: 'user', content: 'Generate a simple Python script of drawing multiple circles.' },
+  ]);
+  assert.equal(contract.required, true);
+  assert.equal(contract.executionTool, 'execute_python');
+  assert.equal(contract.archiveRequired, false);
+});

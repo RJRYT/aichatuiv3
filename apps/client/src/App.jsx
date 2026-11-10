@@ -995,7 +995,7 @@ function Message({ message, onCopy, onEdit, onBranch, onShare, onRegenerate, onV
   );
 }
 
-function LoginScreen({ providers, error }) {
+function LoginScreen({ providers, error, returnTo = '/' }) {
   const labels = {
     google: 'Continue with Google',
     github: 'Continue with GitHub',
@@ -1013,14 +1013,14 @@ function LoginScreen({ providers, error }) {
           <em>your agent.</em>
         </h1>
         <p className="login-sub">
-          Sign in to access your conversations, saved memories and personal preferences.
+          Sign in or create an account to access your conversations, saved memories and personal preferences.
         </p>
         {error && <div className="notice error-notice">{error}</div>}
         <div className="oauth-list">
           {Object.keys(labels).map((provider) => (
             <a
               className={`oauth-button ${providers?.[provider] ? '' : 'disabled'}`}
-              href={providers?.[provider] ? api(`/api/auth/${provider}`) : undefined}
+              href={providers?.[provider] ? api(`/api/auth/${provider}?returnTo=${encodeURIComponent(returnTo)}`) : undefined}
               key={provider}
               onClick={(e) => !providers?.[provider] && e.preventDefault()}
             >
@@ -1149,8 +1149,8 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
         {error && <div className="notice error-notice">{error}</div>}
         <div className="library-list">
           {loading && !files.length ? (
-            <div className="library-empty">
-              <LoaderCircle className="spin" size={19} /> Loading files…
+            <div className="library-skeleton-list">
+              {Array.from({ length: 5 }, (_, index) => <div className="library-skeleton-row" key={index}><Skeleton width={34} height={34} /><span><Skeleton width="55%" height={11} /><Skeleton width="34%" height={8} /></span></div>)}
             </div>
           ) : filtered.length ? (
             filtered.map((file) => {
@@ -1261,6 +1261,51 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
   );
 }
 
+function Skeleton({ width = '100%', height = 12, radius = 8, className = '' }) {
+  return <span aria-hidden="true" className={`skeleton ${className}`} style={{ width, height, borderRadius: radius }} />;
+}
+
+function StatusPage({ code = '500', title = 'Something went wrong', message = 'The workspace could not complete this request.', actionLabel = 'Try again', onAction }) {
+  return (
+    <main className="status-page">
+      <div className="status-card">
+        <div className="brand-mark large">✦</div>
+        <div className="status-code">{code}</div>
+        <h1>{title}</h1>
+        <p>{message}</p>
+        <div className="status-actions">
+          {onAction && <button className="primary-button" onClick={onAction}>{actionLabel}</button>}
+          <a className="secondary-button" href="/">Go to workspace</a>
+        </div>
+      </div>
+    </main>
+  );
+}
+
+export class AppErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error) { console.error('Application render failed:', error); }
+  render() {
+    if (this.state.error) return <StatusPage code="500" title="The app hit an unexpected error" message="Your saved conversations are safe. Reload the page to try again." actionLabel="Reload" onAction={() => location.reload()} />;
+    return this.props.children;
+  }
+}
+
+function WorkspaceSkeleton() {
+  return (
+    <div className="workspace-skeleton" aria-label="Loading workspace">
+      <div className="skeleton-head"><Skeleton width="34%" height={15} /><Skeleton width="18%" height={28} /></div>
+      <div className="skeleton-conversation">
+        <Skeleton width="68%" height={58} />
+        <Skeleton width="84%" height={86} />
+        <Skeleton width="54%" height={52} />
+      </div>
+      <div className="skeleton-composer"><Skeleton width="100%" height={64} /></div>
+    </div>
+  );
+}
+
 function HistoryDrawer({
   open,
   onClose,
@@ -1271,6 +1316,8 @@ function HistoryDrawer({
   onDelete,
   onRename,
   onOpenLibrary,
+  deletingChatIds = new Set(),
+  chatsLoaded = true,
 }) {
   if (!open) return null;
   return (
@@ -1292,24 +1339,24 @@ function HistoryDrawer({
           <Files size={15} /> File Library <span>Generated files</span>
         </button>
         <div className="history-list">
-          {chats.map((chat) => (
-            <div className={`history-item ${chat._id === activeId ? 'active' : ''}`} key={chat._id}>
-              <button className="history-select" onClick={() => onSelect(chat._id)}>
+          {!chatsLoaded ? <div className="history-skeleton">{Array.from({ length: 6 }, (_, index) => <div key={index}><Skeleton width={22} height={22} /><span><Skeleton width="68%" height={10} /><Skeleton width="35%" height={7} /></span></div>)}</div> : chats.map((chat) => (
+            <div className={`history-item ${chat._id === activeId ? 'active' : ''} ${deletingChatIds.has(chat._id) ? 'deleting' : ''}`} key={chat._id}>
+              <button className="history-select" disabled={deletingChatIds.has(chat._id)} onClick={() => onSelect(chat._id)}>
                 <MessageSquare size={15} />
                 <span>
                   <b>{chat.title || 'New chat'}</b>
                   <small>{dateLabel(chat.updatedAt)}</small>
                 </span>
               </button>
-              <button className="delete-chat" onClick={() => onRename(chat)} title="Rename">
+              <button className="delete-chat" disabled={deletingChatIds.has(chat._id)} onClick={() => onRename(chat)} title="Rename">
                 <Pencil size={13} />
               </button>
-              <button className="delete-chat" onClick={() => onDelete(chat._id)} title="Delete">
-                <Trash2 size={14} />
+              <button className="delete-chat" disabled={deletingChatIds.has(chat._id)} onClick={() => onDelete(chat._id)} title={deletingChatIds.has(chat._id) ? 'Deleting conversation' : 'Delete'}>
+                {deletingChatIds.has(chat._id) ? <LoaderCircle size={14} className="spin" /> : <Trash2 size={14} />}
               </button>
             </div>
           ))}
-          {!chats.length && <p className="empty-history">No conversations yet.</p>}
+          {chatsLoaded && !chats.length && <p className="empty-history">No conversations yet.</p>}
         </div>
       </aside>
     </div>
@@ -1330,8 +1377,10 @@ function PreferencesDialog({
   linkProvider,
   shares,
   loadShares,
+  sharesLoading = false,
   revokeShare,
   providers,
+  accountResourcesLoading = false,
 }) {
   const [tab, setTab] = useState('profile'),
     [draft, setDraft] = useState(''),
@@ -1447,11 +1496,11 @@ function PreferencesDialog({
         </div>
         {tab === 'shares' ? (
           <div className="shared-links">
-            {shares.map((share) => (
+            {sharesLoading ? <div className="share-list-skeleton">{Array.from({ length: 3 }, (_, index) => <div key={index}><Skeleton width="58%" height={11} /><Skeleton width="24%" height={8} /></div>)}</div> : shares.map((share) => (
               <div key={share.shareId}>
                 <span>
                   <b>{share.title}</b>
-                  <small>{dateLabel(share.createdAt)}</small>
+                  <small>{share.shareType === 'chat' ? 'Full conversation' : 'Response snapshot'} · {dateLabel(share.createdAt)}</small>
                 </span>
                 <a href={`/share/${share.shareId}`} target="_blank" rel="noreferrer">
                   Open
@@ -1466,8 +1515,10 @@ function PreferencesDialog({
                 <button onClick={() => revokeShare(share.shareId)}>Revoke</button>
               </div>
             ))}
-            {!shares.length && <p className="empty-history">No active shared links.</p>}
+            {!sharesLoading && !shares.length && <p className="empty-history">No active shared links.</p>}
           </div>
+        ) : accountResourcesLoading ? (
+          <div className="account-content-skeleton">{Array.from({ length: 5 }, (_, index) => <div key={index}><Skeleton width="32%" height={9} /><Skeleton width="100%" height={34} /></div>)}</div>
         ) : tab === 'profile' ? (
           <div className="profile-settings">
             <label>
@@ -1703,16 +1754,21 @@ function Toggle({ label, value, onChange }) {
 function PublicSharePage({ shareId }) {
   const [share, setShare] = useState(null),
     [error, setError] = useState(''),
+    [errorStatus, setErrorStatus] = useState(0),
     [loading, setLoading] = useState(true);
   useEffect(() => {
     let alive = true;
+    setLoading(true);
+    setError('');
+    setErrorStatus(0);
+    setShare(null);
     request(`/api/public/shares/${encodeURIComponent(shareId)}`)
       .then((r) => r.json())
       .then((data) => {
         if (alive) setShare(data.share);
       })
       .catch((e) => {
-        if (alive) setError(e.message);
+        if (alive) { setError(e.message); setErrorStatus(e.status || 0); }
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -1726,18 +1782,18 @@ function PublicSharePage({ shareId }) {
       ? `${share.title} · Nemotron Agent Lab`
       : 'Shared response · Nemotron Agent Lab';
   }, [share]);
+  if (!loading && errorStatus === 404) return <StatusPage code="404" title="Shared content not found" message={error || 'This link may have been revoked or expired.'} />;
+  if (!loading && errorStatus === 503) return <StatusPage code="503" title="Sharing service unavailable" message={error} actionLabel="Retry" onAction={() => location.reload()} />;
   return (
     <div className="public-share-page">
       <header>
         <div className="brand-mark">✦</div>
         <b>Nemotron Agent Lab</b>
-        <span>Shared response</span>
+        <span>Shared content</span>
       </header>
       <main>
         {loading ? (
-          <div className="loading-screen">
-            <LoaderCircle className="spin" /> Loading shared response…
-          </div>
+          <div className="share-loading-skeleton"><Skeleton width="42%" height={18} /><Skeleton width="86%" height={80} /><Skeleton width="70%" height={58} /></div>
         ) : error ? (
           <div className="share-error">
             <AlertCircle />
@@ -1745,7 +1801,7 @@ function PublicSharePage({ shareId }) {
           </div>
         ) : (
           <>
-            <div className="eyebrow">PUBLIC SNAPSHOT</div>
+            <div className="eyebrow">{share.shareType === 'chat' ? 'SHARED CONVERSATION' : 'PUBLIC SNAPSHOT'}</div>
             <h1>{share.title}</h1>
             {share.messages.map((message, i) => (
               <article className="share-message" key={i}>
@@ -1759,9 +1815,18 @@ function PublicSharePage({ shareId }) {
                 )}
               </article>
             ))}
+            {share.artifacts?.length > 0 && (
+              <section className="shared-artifacts">
+                <h2>Generated files</h2>
+                {share.artifacts.map((file) => (
+                  <a key={file.id} href={api(`/api/public/shares/${encodeURIComponent(shareId)}/artifacts/${encodeURIComponent(file.id)}`)}>
+                    <FileText size={15} /><span><b>{file.name}</b><small>{formatBytes(file.size)}</small></span><Download size={14} />
+                  </a>
+                ))}
+              </section>
+            )}
             <p className="share-disclaimer">
-              This is a read-only snapshot. Private chat history and internal tool credentials are
-              not included.
+              This is a read-only, point-in-time snapshot. Private credentials and live account access are not included.
             </p>
           </>
         )}
@@ -1779,9 +1844,16 @@ export default function App() {
   });
   const [preferences, setPreferences] = useState(DEFAULT_PREFERENCES),
     [memories, setMemories] = useState([]),
-    [shares, setShares] = useState([]);
+    [shares, setShares] = useState([]),
+    [sharesLoading, setSharesLoading] = useState(false),
+    [accountResourcesLoading, setAccountResourcesLoading] = useState(false),
+    [shareBusy, setShareBusy] = useState(false);
   const [chats, setChats] = useState([]),
     [activeId, setActiveId] = useState(null),
+    [deletingChatIds, setDeletingChatIds] = useState(() => new Set()),
+    [chatsLoaded, setChatsLoaded] = useState(false),
+    [routeError, setRouteError] = useState(''),
+    [fatalError, setFatalError] = useState(null),
     [messages, setMessages] = useState([]),
     [activeBranchId, setActiveBranchId] = useState('main'),
     [branches, setBranches] = useState([]),
@@ -1808,7 +1880,10 @@ export default function App() {
     titleRequestRef = useRef(0),
     activeIdRef = useRef(null),
     manualTitleIdsRef = useRef(new Set()),
-    chatLoadSeqRef = useRef(0);
+    chatLoadSeqRef = useRef(0),
+    initialRouteHandledRef = useRef(false),
+    loadStartedRef = useRef(false),
+    authFeedbackRef = useRef(null);
   const activeChat = useMemo(() => chats.find((c) => c._id === activeId), [chats, activeId]);
   const activePlan = useMemo(() => [...messages].reverse().find((message) => message.agentPlan)?.agentPlan || null, [messages]);
   const setFileError = (message) => setToast(message ? { id: Date.now(), message: String(message), type: 'error' } : null);
@@ -1826,6 +1901,21 @@ export default function App() {
 
   const loadAccount = useCallback(async () => {
     try {
+      if (authFeedbackRef.current === null) {
+        const feedbackQuery = new URLSearchParams(location.search);
+        authFeedbackRef.current = {
+          authError: feedbackQuery.get('auth_error') || '',
+          linkedProvider: feedbackQuery.get('account_linked') || '',
+          linkError: feedbackQuery.get('account_link_error') || '',
+        };
+        feedbackQuery.delete('auth_error');
+        feedbackQuery.delete('account_linked');
+        feedbackQuery.delete('account_link_error');
+        const query = feedbackQuery.toString();
+        if (authFeedbackRef.current.authError || authFeedbackRef.current.linkedProvider || authFeedbackRef.current.linkError)
+          history.replaceState({}, '', `${location.pathname}${query ? `?${query}` : ''}${location.hash}`);
+      }
+      const { authError, linkedProvider, linkError } = authFeedbackRef.current;
       const [meRes, healthRes] = await Promise.all([
         request('/api/auth/me'),
         request('/api/health'),
@@ -1836,10 +1926,11 @@ export default function App() {
           loading: false,
           user: null,
           providers: health.oauth || {},
-          error: new URLSearchParams(location.search).get('auth_error') || '',
+          error: authError,
         });
         return;
       }
+      setFatalError(null);
       setAuth({
         loading: false,
         user: me.user,
@@ -1847,11 +1938,12 @@ export default function App() {
         error: '',
       });
       setChatLoading(true);
+      setChatsLoaded(false);
       setChatLoadError('');
-      const query = new URLSearchParams(location.search);
-      if (query.get('account_linked')) setToast({ id: Date.now(), message: `${query.get('account_linked')} account linked.`, type: 'success' });
-      if (query.get('account_link_error')) setFileError(query.get('account_link_error'));
+      if (linkedProvider) setToast({ id: Date.now(), message: `${linkedProvider} account linked.`, type: 'success' });
+      if (linkError) setFileError(linkError);
 
+      setAccountResourcesLoading(true);
       // Load independent account resources concurrently. The chat list endpoint
       // returns metadata only; fetch the selected conversation once afterwards.
       const [prefResult, memoryResult, chatResult] = await Promise.allSettled([
@@ -1865,9 +1957,11 @@ export default function App() {
           ...prefResult.value.preferences,
         });
       if (memoryResult.status === 'fulfilled') setMemories(memoryResult.value.memories || []);
+      setAccountResourcesLoading(false);
       if (chatResult.status !== 'fulfilled') throw chatResult.reason;
       const chatList = Array.isArray(chatResult.value.chats) ? chatResult.value.chats : [];
       setChats(chatList);
+      setChatsLoaded(true);
       setActiveId(null);
       activeIdRef.current = null;
       setMessages([]);
@@ -1877,6 +1971,7 @@ export default function App() {
       try { localStorage.removeItem('nemotron.activeChatId'); } catch {}
 
     } catch (error) {
+      setAccountResourcesLoading(false);
       if (error.message === 'Authentication required.') {
         try {
           const h = await (await request('/api/health')).json();
@@ -1896,6 +1991,8 @@ export default function App() {
         }
       } else {
         setChatLoading(false);
+        if (error.status === 503 || error.status === 502 || error.name === 'TypeError')
+          setFatalError({ status: 503, message: 'The service is temporarily unavailable. Check your server and database, then retry.' });
         setChatLoadError(
           `Workspace loading failed: ${error.message}. Refresh the page or retry a conversation.`
         );
@@ -1914,6 +2011,8 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [busy]);
   useEffect(() => {
+    if (loadStartedRef.current) return;
+    loadStartedRef.current = true;
     try {
       const pending = localStorage.getItem('nemotron.pendingGeneration');
       if (pending) {
@@ -1996,7 +2095,7 @@ export default function App() {
     };
   }, []);
 
-  const newChat = async () => {
+  const newChat = async ({ navigate = true } = {}) => {
     ++chatLoadSeqRef.current;
     setChatLoading(false);
     setChatLoadError('');
@@ -2010,6 +2109,8 @@ export default function App() {
     setFiles([]);
     setLiveProgress(null);
     setDrawer(false);
+    setRouteError('');
+    if (navigate && location.pathname !== '/') history.pushState({}, '', '/');
     try { localStorage.removeItem('nemotron.activeChatId'); } catch {}
     return null;
   };
@@ -2027,11 +2128,13 @@ export default function App() {
     setMessages([]);
     return chat;
   };
-  const selectChat = async (id) => {
+  const selectChat = async (id, { navigate = true } = {}) => {
     const sequence = ++chatLoadSeqRef.current;
     followScrollRef.current = true;
     setActiveId(id);
     activeIdRef.current = id;
+    setRouteError('');
+    if (navigate && location.pathname !== `/c/${encodeURIComponent(id)}`) history.pushState({}, '', `/c/${encodeURIComponent(id)}`);
     setChatLoading(true);
     setChatLoadError('');
     setDrawer(false);
@@ -2061,10 +2164,13 @@ export default function App() {
         }
       });
     } catch (error) {
-      if (sequence === chatLoadSeqRef.current)
+      if (sequence === chatLoadSeqRef.current) {
+        if (error.status === 404) setRouteError('not-found');
+        if (error.status === 503 || error.status === 502) setFatalError({ status: 503, message: error.message });
         setChatLoadError(
           `Couldn't load this conversation: ${error.message}. Please try selecting it again.`
         );
+      }
     } finally {
       if (sequence === chatLoadSeqRef.current) setChatLoading(false);
     }
@@ -2108,20 +2214,55 @@ export default function App() {
     setChats((current) => current.map((item) => (item._id === chat._id ? data.chat : item)));
   };
   const removeChat = async (id) => {
-    await request(`/api/chats/${id}`, { method: 'DELETE' });
-    const next = chats.filter((c) => c._id !== id);
-    setChats(next);
-    if (activeId === id) {
-      setActiveId(null);
-      activeIdRef.current = null;
-      setMessages([]);
-      setBranches([]);
-      setActiveBranchId('main');
-      setLiveProgress(null);
-      setDrawer(false);
-      try { localStorage.removeItem('nemotron.activeChatId'); } catch {}
+    if (deletingChatIds.has(id)) return;
+    setDeletingChatIds((current) => new Set(current).add(id));
+    try {
+      await request(`/api/chats/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      setChats((current) => current.filter((chat) => chat._id !== id));
+      if (activeIdRef.current === id) {
+        ++chatLoadSeqRef.current;
+        abortRef.current?.abort();
+        setBusy(false);
+        setActiveId(null);
+        activeIdRef.current = null;
+        setMessages([]);
+        setBranches([]);
+        setActiveBranchId('main');
+        setLiveProgress(null);
+        setChatLoading(false);
+        setChatLoadError('');
+        setDrawer(false);
+        setRouteError('');
+        history.replaceState({}, '', '/');
+        try { localStorage.removeItem('nemotron.activeChatId'); } catch {}
+      }
+      setToast({ id: Date.now(), message: 'Conversation deleted.', type: 'success' });
+    } catch (error) {
+      setToast({ id: Date.now(), message: error.message || 'Could not delete conversation.', type: 'error' });
+    } finally {
+      setDeletingChatIds((current) => { const next = new Set(current); next.delete(id); return next; });
     }
   };
+  useEffect(() => {
+    const onPopState = () => {
+      const match = location.pathname.match(/^\/c\/([^/]+)$/);
+      if (match) selectChat(decodeURIComponent(match[1]), { navigate: false });
+      else if (location.pathname === '/') newChat({ navigate: false });
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+  useEffect(() => {
+    if (!auth.user || !chatsLoaded || initialRouteHandledRef.current) return;
+    const match = location.pathname.match(/^\/c\/([^/]+)$/);
+    if (match) {
+      initialRouteHandledRef.current = true;
+      selectChat(decodeURIComponent(match[1]), { navigate: false });
+    } else if (location.pathname === '/') {
+      initialRouteHandledRef.current = true;
+    }
+  }, [auth.user?._id, chatsLoaded]);
+
   const logout = async () => {
     await request('/api/auth/logout', { method: 'POST' });
     location.href = '/';
@@ -2177,10 +2318,13 @@ export default function App() {
     }
   };
   const loadShares = async () => {
+    setSharesLoading(true);
     try {
       const data = await (await request('/api/shares')).json();
       setShares(data.shares || []);
-    } catch {}
+    } catch (error) {
+      setToast({ id: Date.now(), message: error.message || 'Could not load shared links.', type: 'error' });
+    } finally { setSharesLoading(false); }
   };
   const revokeShare = async (shareId) => {
     await request(`/api/shares/${shareId}`, { method: 'DELETE' });
@@ -2195,7 +2339,7 @@ export default function App() {
     setAuth((a) => ({ ...a, user: { ...a.user, ...data.user } }));
     return data.user;
   };
-  const linkProvider = (provider) => api(`/api/auth/${provider}/link`);
+  const linkProvider = (provider) => api(`/api/auth/${provider}/link?returnTo=${encodeURIComponent(location.pathname)}`);
   const createBranchFrom = async (message) => {
     if (!activeId || !message?.id) return;
     const res = await request(`/api/chats/${activeId}/branches`, {
@@ -2241,12 +2385,31 @@ export default function App() {
         shareId: data.shareId,
         title: activeChat?.title || 'Shared response',
         chatId: activeId,
+        shareType: 'snapshot',
         createdAt: new Date().toISOString(),
       },
       ...current,
     ]);
-    await navigator.clipboard.writeText(data.url);
+    try { await navigator.clipboard.writeText(data.url); }
+    catch { window.prompt('Copy this share link', data.url); }
     setStatus('Share link copied');
+  };
+  const shareChat = async () => {
+    if (!activeId || !messages.length || busy || shareBusy) return;
+    setShareBusy(true);
+    try {
+      const res = await request('/api/shares', {
+        method: 'POST',
+        body: JSON.stringify({ chatId: activeId, branchId: activeBranchId, shareType: 'chat' }),
+      });
+      const data = await res.json();
+      setShares((current) => [{ shareId: data.shareId, title: activeChat?.title || 'Shared conversation', chatId: activeId, shareType: 'chat', createdAt: new Date().toISOString() }, ...current]);
+      try { await navigator.clipboard.writeText(data.url); }
+      catch { window.prompt('Copy this full conversation share link', data.url); }
+      setToast({ id: Date.now(), message: `Full conversation link created${data.artifactCount ? ` with ${data.artifactCount} generated file(s)` : ''}.`, type: 'success' });
+    } catch (error) {
+      setToast({ id: Date.now(), message: error.message || 'Could not share conversation.', type: 'error' });
+    } finally { setShareBusy(false); }
   };
   const editUserMessage = async (message, value) => {
     if (value == null || !value.trim()) return;
@@ -2845,13 +3008,15 @@ export default function App() {
 
   if (location.pathname.startsWith('/share/'))
     return <PublicSharePage shareId={decodeURIComponent(location.pathname.split('/')[2] || '')} />;
+  if (location.pathname !== '/' && !/^\/c\/[^/]+$/.test(location.pathname))
+    return <StatusPage code="404" title="Page not found" message="The page you are looking for does not exist." />;
   if (auth.loading)
-    return (
-      <div className="loading-screen">
-        <LoaderCircle className="spin" /> Loading your workspace…
-      </div>
-    );
-  if (!auth.user) return <LoginScreen providers={auth.providers} error={auth.error} />;
+    return <div className="loading-screen"><div className="loading-card"><Skeleton width={150} height={16} /><Skeleton width={240} height={10} /><Skeleton width={190} height={10} /></div></div>;
+  if (fatalError?.status === 503)
+    return <StatusPage code="503" title="Service temporarily unavailable" message={fatalError.message} actionLabel="Retry connection" onAction={() => { setFatalError(null); initialRouteHandledRef.current = false; setChatsLoaded(false); setAuth((current) => ({ ...current, loading: true })); loadAccount(); }} />;
+  if (routeError === 'not-found')
+    return <StatusPage code="404" title="Conversation not found" message="This conversation may have been deleted or you may not have access to it." />;
+  if (!auth.user) return <LoginScreen providers={auth.providers} error={auth.error} returnTo={location.pathname} />;
 
   return (
     <div className="app agent-lab">
@@ -2944,6 +3109,14 @@ export default function App() {
             </button>
             <button
               className="text-action"
+              title="Share full conversation with generated files"
+              onClick={shareChat}
+              disabled={!messages.length || busy || shareBusy}
+            >
+              {shareBusy ? <LoaderCircle size={14} className="spin" /> : <Share2 size={14} />}
+            </button>
+            <button
+              className="text-action"
               title="Export conversation"
               onClick={exportChat}
               disabled={!messages.length}
@@ -2963,9 +3136,7 @@ export default function App() {
         <section className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
           <div className="chat-inner">
             {chatLoading ? (
-              <div className="chat-loading">
-                <LoaderCircle className="spin" size={18} /> Loading conversation…
-              </div>
+              <WorkspaceSkeleton />
             ) : chatLoadError ? (
               <div className="chat-load-error">
                 <AlertCircle size={17} />
@@ -3140,6 +3311,8 @@ export default function App() {
           setDrawer(false);
           setLibraryOpen(true);
         }}
+        deletingChatIds={deletingChatIds}
+        chatsLoaded={chatsLoaded}
       />
       <FileLibraryDialog
         open={libraryOpen}
@@ -3162,6 +3335,8 @@ export default function App() {
         providers={auth.providers}
         shares={shares}
         loadShares={loadShares}
+        sharesLoading={sharesLoading}
+        accountResourcesLoading={accountResourcesLoading}
         revokeShare={revokeShare}
       />
     </div>

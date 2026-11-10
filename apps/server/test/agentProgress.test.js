@@ -69,3 +69,15 @@ test('startNextPlanTask is exported for the NVIDIA execution service', () => {
   assert.equal(task.id, '1');
   assert.equal(task.status, 'running');
 });
+
+test('failed final verification never marks the complete plan as finished', () => {
+  const state = createState();
+  const emit = () => {};
+  initializePlanProgress(state, emit);
+  advancePlanAfterExecution(state, emit, false);
+  assert.equal(state.plan.tasks[1].status, 'completed');
+  assert.equal(state.plan.tasks[2].status, 'running');
+  advancePlanAfterExecution(state, emit, false);
+  assert.equal(state.plan.tasks[2].status, 'pending');
+  assert.equal(state.plan.tasks.every((task) => ['completed', 'skipped'].includes(task.status)), false);
+});

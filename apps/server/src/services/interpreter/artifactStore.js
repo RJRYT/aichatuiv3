@@ -252,13 +252,14 @@ export async function storeArtifact({
   return publicMetadata(item);
 }
 
-export async function listArtifacts(ownerId, { search = '', limit = 100 } = {}) {
+export async function listArtifacts(ownerId, { search = '', limit = 100, chatId = '' } = {}) {
   const useDatabase = await databaseReady();
   const owner = String(ownerId);
   const safeLimit = Math.max(1, Math.min(100, Number(limit) || 100));
   if (useDatabase) {
     const Artifact = await artifactModel();
     const filter = { ownerId: owner };
+    if (chatId) filter.chatId = String(chatId);
     const term = String(search || '')
       .trim()
       .slice(0, 100);
@@ -282,7 +283,7 @@ export async function listArtifacts(ownerId, { search = '', limit = 100 } = {}) 
     };
   }
   const all = [...memoryArtifacts.values()]
-    .filter((item) => item.ownerId === owner)
+    .filter((item) => item.ownerId === owner && (!chatId || item.chatId === String(chatId)))
     .sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
   const term = String(search || '').toLowerCase();
   const filtered = term ? all.filter((item) => item.name.toLowerCase().includes(term)) : all;

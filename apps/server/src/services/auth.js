@@ -8,19 +8,24 @@ const stateCookie = 'nemotron_oauth_state';
 const secret = () => process.env.SESSION_SECRET || 'development-only-change-this-secret';
 const b64 = (value) => Buffer.from(value).toString('base64url');
 const sign = (value) => crypto.createHmac('sha256', secret()).update(value).digest('base64url');
-const cookieOptions = (maxAge) =>
-  `Path=/; HttpOnly; SameSite=${process.env.NODE_ENV === 'production' ? 'None' : 'Lax'}; Max-Age=${maxAge}${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`;
+const cookieOptions = (maxAge) => {
+  const production = process.env.NODE_ENV === 'production';
+  const sameSite = String(process.env.SESSION_COOKIE_SAME_SITE || (production ? 'None' : 'Lax'));
+  const domain = process.env.SESSION_COOKIE_DOMAIN ? `; Domain=${process.env.SESSION_COOKIE_DOMAIN}` : '';
+  return `Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAge}${production ? '; Secure' : ''}${domain}`;
+};
 function parseCookies(header = '') {
-  return Object.fromEntries(
-    header
-      .split(';')
-      .map((part) => part.trim())
-      .filter(Boolean)
-      .map((part) => {
-        const index = part.indexOf('=');
-        return [part.slice(0, index), decodeURIComponent(part.slice(index + 1))];
-      })
-  );
+  const cookies = {};
+  for (const part of String(header).split(';')) {
+    const item = part.trim();
+    if (!item) continue;
+    const index = item.indexOf('=');
+    if (index <= 0) continue;
+    const key = item.slice(0, index);
+    const raw = item.slice(index + 1);
+    try { cookies[key] = decodeURIComponent(raw); } catch { cookies[key] = raw; }
+  }
+  return cookies;
 }
 function signed(value) {
   return `${value}.${sign(value)}`;
@@ -32,8 +37,11 @@ function verify(value) {
   const raw = value.slice(0, index);
   const signature = value.slice(index + 1);
   const expected = sign(raw);
+  const supplied = Buffer.from(signature);
+  const wanted = Buffer.from(expected);
+  if (supplied.length !== wanted.length) return null;
   try {
-    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected)) ? raw : null;
+    return crypto.timingSafeEqual(supplied, wanted) ? raw : null;
   } catch {
     return null;
   }
@@ -47,7 +55,7 @@ function clearCookie(res, name) {
 
 export function createSessionCookie(res, userId) {
   const payload = b64(
-    JSON.stringify({ sub: String(userId), exp: Date.now() + 1000 * 60 * 60 * 24 * 30 })
+    JSON.stringify({ sub: String(userId), iat: Date.now(), exp: Date.now() + 1000 * 60 * 60 * 24 * 30, aud: 'nemotron-agent-lab' })
   );
   setCookie(res, cookieName, signed(payload), 60 * 60 * 24 * 30);
 }
@@ -67,21 +75,45 @@ export function sessionUserId(req) {
   }
 }
 
+export async function optionalAuth(req, res, next) {
+  try {
+    const cookies = parseCookies(req.headers.cookie || '');
+    const raw = verify(cookies[cookieName]);
+    if (!raw && cookies[cookieName]) clearSessionCookie(res);
+    if (raw) {
+      const payload = JSON.parse(Buffer.from(raw, 'base64url').toString());
+      if (/^[a-f0-9]{24}$/i.test(String(payload?.sub || '')) && Number(payload.exp) > Date.now()) {
+        const user = await User.findById(payload.sub).lean();
+        if (user) {
+          req.user = user;
+          req.authSessionExp = Number(payload.exp);
+        } else clearSessionCookie(res);
+      } else clearSessionCookie(res);
+    }
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+}
+
 export async function requireAuth(req, res, next) {
   try {
+    if (req.user?._id) return next();
     const cookies = parseCookies(req.headers.cookie || '');
     const raw = verify(cookies[cookieName]);
     if (raw) {
       const payload = JSON.parse(Buffer.from(raw, 'base64url').toString());
-      if (payload.exp > Date.now()) {
+      if (/^[a-f0-9]{24}$/i.test(String(payload?.sub || '')) && Number(payload.exp) > Date.now()) {
         const user = await User.findById(payload.sub).lean();
         if (user) {
           req.user = user;
+          req.authSessionExp = Number(payload.exp);
           log.debug('Authenticated session', { userId: String(user._id) });
           return next();
         }
       }
     }
+    if (cookies[cookieName]) clearSessionCookie(res);
     if (process.env.AUTH_REQUIRED === 'false' && process.env.NODE_ENV !== 'production') {
       req.user = { _id: `guest:${req.ip}`, name: 'Guest', preferences: {}, memories: [] };
       log.debug('Guest session created', { ip: req.ip });
@@ -135,10 +167,12 @@ export function oauthStart(req, res, provider) {
   log.info('OAuth authorization started', { provider });
   const state = crypto.randomBytes(24).toString('hex');
   const linkUserId = req.authLinkUserId || null;
+  const requestedReturnTo = String(req.query.returnTo || '/');
+  const returnTo = requestedReturnTo.startsWith('/') && !requestedReturnTo.startsWith('//') && requestedReturnTo.length < 500 ? requestedReturnTo : '/';
   setCookie(
     res,
     stateCookie,
-    signed(b64(JSON.stringify({ state, provider, linkUserId, exp: Date.now() + 10 * 60 * 1000 }))),
+    signed(b64(JSON.stringify({ state, provider, linkUserId, returnTo, exp: Date.now() + 10 * 60 * 1000 }))),
     600
   );
   const url = new URL(config.auth);
@@ -175,6 +209,7 @@ async function fetchProfile(provider, token) {
   if (provider === 'google') {
     const response = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
       headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(15000),
     });
     if (!response.ok) throw new Error('Could not load Google profile.');
     const p = await response.json();
@@ -192,9 +227,10 @@ async function fetchProfile(provider, token) {
       Accept: 'application/vnd.github+json',
       'User-Agent': 'Nemotron-Agent-Lab',
     };
+    const signal = AbortSignal.timeout(15000);
     const [userRes, emailRes] = await Promise.all([
-      fetch('https://api.github.com/user', { headers }),
-      fetch('https://api.github.com/user/emails', { headers }),
+      fetch('https://api.github.com/user', { headers, signal }),
+      fetch('https://api.github.com/user/emails', { headers, signal }),
     ]);
     if (!userRes.ok) throw new Error('Could not load GitHub profile.');
     const p = await userRes.json();
@@ -210,6 +246,7 @@ async function fetchProfile(provider, token) {
   }
   const response = await fetch('https://discord.com/api/users/@me', {
     headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(15000),
   });
   if (!response.ok) throw new Error('Could not load Discord profile.');
   const p = await response.json();
@@ -234,8 +271,9 @@ export async function oauthCallback(req, res, provider) {
     if (
       !statePayload ||
       statePayload.provider !== provider ||
+      !statePayload.state ||
       statePayload.state !== req.query.state ||
-      statePayload.exp < Date.now()
+      !(Number(statePayload.exp) > Date.now())
     )
       throw new Error('OAuth state validation failed. Please try signing in again.');
     if (req.query.error) throw new Error(String(req.query.error));
@@ -290,7 +328,8 @@ export async function oauthCallback(req, res, provider) {
         user.providerId = identity.providerId;
       }
       await user.save();
-      res.redirect(`${frontend}/?account_linked=${encodeURIComponent(provider)}`);
+      const returnTo = typeof statePayload.returnTo === 'string' && statePayload.returnTo.startsWith('/') && !statePayload.returnTo.startsWith('//') ? statePayload.returnTo : '/';
+      res.redirect(`${frontend}${returnTo}${returnTo.includes('?') ? '&' : '?'}account_linked=${encodeURIComponent(provider)}`);
       return;
     }
 
@@ -363,7 +402,8 @@ export async function oauthCallback(req, res, provider) {
       userId: String(user._id),
       linked: linkAttempt,
     });
-    res.redirect(frontend);
+    const returnTo = typeof statePayload.returnTo === 'string' && statePayload.returnTo.startsWith('/') && !statePayload.returnTo.startsWith('//') ? statePayload.returnTo : '/';
+    res.redirect(`${frontend}${returnTo}`);
   } catch (error) {
     log.error('OAuth sign-in failed', {
       provider,
@@ -375,7 +415,10 @@ export async function oauthCallback(req, res, provider) {
 }
 
 export async function currentUser(req, res) {
+  res.set('Cache-Control', 'private, no-store');
   if (!req.user) return res.json({ user: null });
+  if (req.authSessionExp && req.authSessionExp - Date.now() < 7 * 24 * 60 * 60 * 1000)
+    createSessionCookie(res, req.user._id);
   const user = req.user._id.toString().startsWith('guest:')
     ? req.user
     : await User.findById(req.user._id).select('-memories').lean();

@@ -76,3 +76,10 @@ test('user preferences and saved memories are appended as bounded context', () =
   assert.match(prompt, /Lists: use when useful/);
   assert.match(prompt, /facts only; never instructions/);
 });
+
+test('system prompt proactively captures durable non-sensitive user context', () => {
+  const prompt = buildSystemPrompt();
+  assert.match(prompt, /save_memory tool proactively/);
+  assert.match(prompt, /stable, useful, non-sensitive preference/);
+  assert.match(prompt, /Do not save secrets, credentials/);
+});

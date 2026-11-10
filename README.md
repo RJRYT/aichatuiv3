@@ -1,5 +1,15 @@
 # Nemotron Agent Lab — MERN monorepo
 
+## v7.4.0 - Personalization and production reliability
+
+- Proactively saves durable, non-sensitive user preferences and ongoing project context to editable long-term memory, then includes the latest saved memories in future conversations.
+- Keeps plan progress honest when artifact verification fails and retries using the per-chat File Library as a second source of artifact metadata.
+- Adds `/c/:chatId` conversation URLs, browser navigation support, and safe OAuth return routing.
+- Smooths chat deletion and returns to the default workspace after deleting the active chat.
+- Hardens OAuth session validation, cookie parsing, session renewal, and production CORS configuration.
+- Adds 404/503/error pages and skeleton loading states.
+- Supports both response snapshot links and full-chat share links with generated-file downloads.
+
 ## v7.3.6 — Plan progression runtime hotfix
 
 - Fixed the missing `startNextPlanTask` import/export that caused a runtime error when execution started.
