@@ -3478,8 +3478,8 @@ body[data-theme] {
 /* Message & user text */
 .app[data-theme] .user-message,
 .app[data-theme] .assistant-message {
-  background: var(--panel);
   border-color: var(--border);
+  background: transparent;
 }
 .app[data-theme] .message-avatar.user-avatar {
   background: var(--accent);
@@ -3838,6 +3838,120 @@ body[data-theme] {
   color: var(--text);
 }
 
+/* Missing component coverage */
+.app[data-theme] .linked-providers {
+  border-top-color: var(--border);
+}
+.app[data-theme] .linked-providers b {
+  color: var(--muted);
+}
+.app[data-theme] .linked-providers a,
+.app[data-theme] .provider-linked {
+  border-color: var(--border);
+  color: var(--accent2);
+  background: var(--panel);
+}
+.app[data-theme] .provider-linked {
+  color: var(--accent2);
+}
+.app[data-theme] .library-file-icon {
+  color: var(--text);
+}
+.app[data-theme] .library-summary {
+  border-color: var(--border);
+  background: var(--panel);
+}
+.app[data-theme] .library-summary b {
+  color: var(--text);
+}
+.app[data-theme] .library-summary span {
+  color: var(--muted);
+}
+.app[data-theme] .library-skeleton-list,
+.app[data-theme] .library-skeleton-row,
+.app[data-theme] .account-content-skeleton,
+.app[data-theme] .share-list-skeleton {
+  border-color: var(--border);
+}
+.app[data-theme] .shared-links {
+  color: var(--text);
+}
+.app[data-theme] .shared-links b {
+  color: var(--text);
+}
+.app[data-theme] .shared-links small {
+  color: var(--muted);
+}
+.app[data-theme] .shared-links a {
+  color: var(--accent2);
+}
+.app[data-theme] .shared-artifacts {
+  color: var(--text);
+}
+.app[data-theme] .shared-artifacts h2 {
+  color: var(--text);
+}
+.app[data-theme] .shared-artifacts a span b {
+  color: var(--text);
+}
+.app[data-theme] .shared-artifacts a span small {
+  color: var(--muted);
+}
+.app[data-theme] .share-disclaimer {
+  color: var(--muted);
+}
+.app[data-theme] .attachment-list,
+.app[data-theme] .attachment-pill,
+.app[data-theme] .pending-file {
+  border-color: var(--border);
+  background: var(--panel);
+  color: var(--muted);
+}
+.app[data-theme] .profile-settings {
+  color: var(--text);
+}
+.app[data-theme] .field-error {
+  color: #fca5a5;
+}
+.app[data-theme] .save-hint {
+  color: var(--muted);
+}
+.app[data-theme] .markdown {
+  color: var(--text);
+}
+.app[data-theme] .markdown h1,
+.app[data-theme] .markdown h2,
+.app[data-theme] .markdown h3,
+.app[data-theme] .markdown h4 {
+  color: var(--text);
+}
+.app[data-theme] .markdown p,
+.app[data-theme] .markdown li {
+  color: var(--muted);
+}
+.app[data-theme] .markdown a {
+  color: var(--accent2);
+}
+.app[data-theme] .markdown blockquote {
+  border-left-color: var(--accent);
+  background: var(--panel);
+  color: var(--muted);
+}
+.app[data-theme] .markdown hr {
+  border-top-color: var(--border);
+}
+.app[data-theme] .markdown table {
+  border-color: var(--border);
+}
+.app[data-theme] .markdown th,
+.app[data-theme] .markdown td {
+  border-color: var(--border);
+  color: var(--text);
+}
+.app[data-theme] .markdown th {
+  background: var(--panel);
+}
+
 /* Remaining component coverage */
 .app[data-theme] .modal-layer {
   background: rgba(0, 0, 0, 0.5);
@@ -3852,6 +3966,10 @@ body[data-theme] {
 }
 .app[data-theme] .live-progress-orb {
   background: var(--accent);
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
 }
 .app[data-theme] .live-progress-timing,
 .app[data-theme] .live-progress-typing {
