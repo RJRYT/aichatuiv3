@@ -582,9 +582,11 @@ function toolUsageSentence(event = {}) {
       sentence = context
         ? `${running ? 'Running' : 'Ran'} Python to ${String(context).replace(/[.!?]+$/, '')}.`
         : `${running ? 'Running' : 'Ran'} a Python operation.`;
-      if (args.task_title) sentence += ` Workstream: ${quote(args.task_title, 100)}.`;
-      if (args.objective) sentence += ` Objective: ${quote(args.objective, 120)}.`;
-      if (Number(args.code_bytes) > 0) sentence += ` Code size: ${Number(args.code_bytes).toLocaleString()} bytes.`;
+      if (args.task_id || args.task_title) sentence += ` ${args.task_id ? `Task ${args.task_id}` : 'Task'}${args.task_title ? ` — ${quote(args.task_title, 100)}` : ''}.`;
+      if (args.task_description) sentence += ` Scope: ${quote(args.task_description, 150)}.`;
+      if (args.task_note) sentence += ` Progress: ${quote(args.task_note, 120)}.`;
+      if (args.objective) sentence += ` Project objective: ${quote(args.objective, 130)}.`;
+      if (Number(args.code_bytes) > 0) sentence += ` Executed ${Number(args.code_bytes).toLocaleString()} bytes of Python code.`;
       if (Array.isArray(result.artifacts) && result.artifacts.length) {
         sentence += ` Created ${result.artifacts.length} file${result.artifacts.length === 1 ? '' : 's'}: ${result.artifacts.map((file) => file.name).filter(Boolean).slice(0, 4).join(', ')}.`;
       } else if (result.status) sentence += ` Execution status: ${result.status}.`;
@@ -789,17 +791,35 @@ function AgentPlanDock({ plan, onSave, disabled = false }) {
 }
 
 function LiveProgress({ progress, now, toolEvents = [] }) {
+  const [toolsExpanded, setToolsExpanded] = useState(true);
   if (!progress) return null;
   const elapsed = (timestamp) => {
-    const seconds = Math.max(0, Math.floor((now - timestamp) / 1000));
+    const seconds = Math.max(0, Math.floor((now - (timestamp || now)) / 1000));
     return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
   };
+  const message = String(progress.message || 'Thinking...');
   return (
     <div className="live-progress" role="status" aria-live="polite">
       <span className="live-progress-orb"><i /></span>
-      <div className="live-progress-message">{progress.message ? <Markdown content={progress.message} /> : <span className="live-progress-awaiting" aria-label="Waiting for progress update" />}</div>
+      <div
+        className="live-progress-message"
+        role={toolEvents.length ? 'button' : undefined}
+        tabIndex={toolEvents.length ? 0 : undefined}
+        onClick={() => toolEvents.length && setToolsExpanded((value) => !value)}
+        onKeyDown={(event) => {
+          if (toolEvents.length && (event.key === 'Enter' || event.key === ' ')) {
+            event.preventDefault();
+            setToolsExpanded((value) => !value);
+          }
+        }}
+        aria-expanded={toolEvents.length ? toolsExpanded : undefined}
+        aria-label={toolEvents.length ? `${toolsExpanded ? 'Hide' : 'Show'} tool activity` : 'Current agent progress'}
+        title={toolEvents.length ? 'Click to show or hide tool activity' : undefined}
+      >
+        <span className="live-progress-typing" key={message}><Markdown content={message} /></span>
+      </div>
       <span className="live-progress-timing">Working {elapsed(progress.startedAt)} · Last worked {elapsed(progress.lastActivityAt)} ago</span>
-      {!!toolEvents.length && <ToolUsageInline events={toolEvents} />}
+      {!!toolEvents.length && toolsExpanded && <ToolUsageInline events={toolEvents} />}
     </div>
   );
 }
@@ -817,9 +837,11 @@ function Toast({ toast, onClose }) {
 
 function Message({ message, onCopy, onEdit, onBranch, onShare, onRegenerate, onVersion, liveProgress, progressClock }) {
   const [editing, setEditing] = useState(false),
+    [promptExpanded, setPromptExpanded] = useState(false),
     [editDraft, setEditDraft] = useState(textOf(message.content));
   const user = message.role === 'user',
-    content = textOf(message.content);
+    content = textOf(message.content),
+    longPrompt = user && (content.length > 560 || content.split('\n').length > 7);
   const versions = message.versions || [];
   const activeVersion = Number.isInteger(message.activeVersion)
     ? message.activeVersion
@@ -886,7 +908,14 @@ function Message({ message, onCopy, onEdit, onBranch, onShare, onRegenerate, onV
                 </div>
               </div>
             ) : (
-              <div className="user-text">{content}</div>
+              <>
+                <div className={`user-text${longPrompt && !promptExpanded ? ' prompt-collapsed' : ''}`}>{content}</div>
+                {longPrompt && (
+                  <button className="prompt-expand" type="button" onClick={() => setPromptExpanded((value) => !value)}>
+                    {promptExpanded ? 'Show less' : 'Show more'}
+                  </button>
+                )}
+              </>
             )
           ) : (
             <Markdown content={content} />
@@ -2258,7 +2287,7 @@ export default function App() {
     if (index < 1 || busy) return;
     setBusy(true);
     setStatus('Regenerating response…');
-    setLiveProgress({ message: '', startedAt: Date.now(), lastActivityAt: Date.now() });
+    setLiveProgress({ message: 'Thinking...', startedAt: Date.now(), lastActivityAt: Date.now() });
     setMessages((current) => current.map((item) => item.id === message.id ? { ...item, isStreaming: true, toolEvents: [] } : item));
     try {
       localStorage.setItem(
@@ -2313,6 +2342,10 @@ export default function App() {
             const item = event.event || {};
             const progressMessage = item.type === 'progress_update' ? item.message : '';
             if (progressMessage) setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: progressMessage, lastActivityAt: Date.now() }));
+          }
+          if (event.type === 'final_content') {
+            regeneratedOutput = event.content || '';
+            setMessages((current) => current.map((item) => item.id === message.id ? { ...item, content: regeneratedOutput, isStreaming: true, toolEvents: regenerationToolEvents } : item));
           }
           if (event.type === 'chunk') {
             regeneratedOutput += event.content || '';
@@ -2561,7 +2594,7 @@ export default function App() {
     const controller = new AbortController();
     abortRef.current = controller;
     const started = performance.now();
-    setLiveProgress({ message: '', startedAt: Date.now(), lastActivityAt: Date.now() });
+    setLiveProgress({ message: 'Thinking...', startedAt: Date.now(), lastActivityAt: Date.now() });
     let output = '',
       events = [],
       agentPlan = continuingPlan,
@@ -2638,6 +2671,10 @@ export default function App() {
             continue;
           }
           if (event.type === 'status') setStatus(event.status || 'Working');
+          if (event.type === 'final_content') {
+            output = event.content || '';
+            update();
+          }
           if (event.type === 'chunk') {
             output += event.content || '';
             setStatus('Generating');

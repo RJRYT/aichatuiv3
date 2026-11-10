@@ -159,3 +159,18 @@
 .tool-usage-fields>div{display:grid;grid-template-columns:minmax(90px,130px) minmax(0,1fr);gap:9px;font-size:9px;line-height:1.5}
 .tool-usage-fields>div b{color:#81927f;font-weight:500}
 .tool-usage-fields>div span{color:#b0bdae;overflow-wrap:anywhere;white-space:pre-wrap}
+
+
+/* v7.3.5: long prompt disclosure, progress typing and tool activity toggle */
+.user-text.prompt-collapsed{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:5;overflow:hidden;white-space:pre-wrap;position:relative}
+.prompt-expand{display:block;margin:6px 0 0;padding:3px 0;border:0;background:transparent;color:#a8d88c;font-size:10px;cursor:pointer}
+.prompt-expand:hover{color:#d4efc3;text-decoration:underline}
+.live-progress-message{display:block;min-width:0;flex:1;padding:0;border:0;background:transparent;text-align:left;color:inherit;font:inherit;cursor:pointer;outline:none}
+.live-progress-message:not([role=button]){cursor:default}
+.live-progress-message:focus-visible{border-radius:4px;outline:1px solid #668653;outline-offset:3px}
+.live-progress-message:not(:disabled):hover .live-progress-typing{color:#d4e8c9}
+.live-progress-typing{display:inline-block;max-width:100%;overflow:hidden;vertical-align:bottom;animation:progressTypeReveal .72s steps(34,end) both}
+.live-progress-typing .markdown{display:block;min-width:0}
+.live-progress-typing .markdown p{display:inline;margin:0}
+@keyframes progressTypeReveal{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
+@media(prefers-reduced-motion:reduce){.live-progress-typing{animation:none}}

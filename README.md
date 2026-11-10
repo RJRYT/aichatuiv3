@@ -1,5 +1,14 @@
 # Nemotron Agent Lab — MERN monorepo
 
+## v7.3.5 — Reliability and prompt UX
+
+- Fixed missing account read endpoints for preferences and memories.
+- Deliverable task progress is now coordinated by the backend, while model-authored progress sentences remain separate from private reasoning.
+- A failed ZIP or website-quality validation is returned to the model as a corrective instruction and triggers another bounded execution attempt.
+- The stream now sends a canonical final-content event, ensuring generated fallback responses appear in the UI rather than an empty-response placeholder.
+- Long user prompts collapse with a Show more control. Live progress starts with “Thinking...”, uses a typing reveal, and toggles the tool activity list when clicked.
+
+
 A single-model, Agent Lab interface for NVIDIA Nemotron 3.5 Super VL. The frontend is a static React/Vite build; the Express backend owns model inference, OAuth, web search, plugin execution, personalization and memory. MongoDB persists user accounts, preferences, memories and chats.
 
 ## v7.3.4 — Model-authored live progress

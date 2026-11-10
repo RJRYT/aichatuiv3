@@ -90,6 +90,16 @@ router.get('/profile', async (req, res) => {
   const user = await User.findById(req.user._id).select('-memories').lean();
   res.json({ user });
 });
+router.get('/preferences', async (req, res) => {
+  if (guest(req)) return res.json({ preferences: { ...defaults } });
+  const user = await User.findById(req.user._id).select('preferences').lean();
+  res.json({ preferences: { ...defaults, ...(user?.preferences || {}) } });
+});
+router.get('/memories', async (req, res) => {
+  if (guest(req)) return res.json({ memories: [] });
+  const user = await User.findById(req.user._id).select('memories').lean();
+  res.json({ memories: user?.memories || [] });
+});
 router.patch('/preferences', async (req, res) => {
   const userId = String(req.user._id);
   const next = {};

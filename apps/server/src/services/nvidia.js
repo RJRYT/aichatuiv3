@@ -4,6 +4,7 @@ import { buildSystemPrompt } from './systemPrompt.js';
 import logger from '../utils/logger.js';
 import { getArtifact } from './interpreter/artifactStore.js';
 import { detectDeliverableContract, inspectZipBuffer, assessWebsiteQuality } from './deliverablePolicy.js';
+import { initializePlanProgress, advancePlanAfterExecution } from './agentPlanProgress.js';
 
 export const MODEL_ID = 'nvidia/nemotron-3.5-super-vl-120b-a12b';
 const log = logger.child({ component: 'nvidia' });
@@ -129,6 +130,7 @@ function normalizeActivePlan(plan) {
     createdAt: plan.createdAt || new Date().toISOString(),
   };
 }
+
 
 function systemPrompt(user) {
   return buildSystemPrompt(user);
@@ -298,6 +300,7 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
   const startedAt = Date.now();
   let finalUsage = null,
     finalText = '',
+    modelText = '',
     rounds = 0,
     toolEvents = [];
   const agentState = { plan: normalizeActivePlan(body.activePlan), deliverableContract, deliverableVerification: null, pythonArtifactRuns: 0 };
@@ -345,22 +348,9 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
         status: 'Working',
         round,
       });
-      const planTasks = agentState.plan?.tasks || [];
-      const planHasRunningTask = planTasks.some((task) => task.status === 'running');
-      const planIsComplete =
-        planTasks.length > 0 &&
-        planTasks.every((task) => ['completed', 'skipped'].includes(task.status));
       const requiredToolName = deliverableContract
-        ? deliverableContract.requiresPlan
-          ? (!agentState.plan || planIsComplete)
-            ? 'create_task_plan'
-            : !agentState.deliverableVerification?.valid
-              ? planHasRunningTask
-                ? deliverableContract.executionTool
-                : 'update_task_status'
-              : !planIsComplete
-                ? 'update_task_status'
-                : null
+        ? deliverableContract.requiresPlan && !agentState.plan
+          ? 'create_task_plan'
           : !agentState.deliverableVerification?.valid
             ? deliverableContract.executionTool
             : null
@@ -379,7 +369,8 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
         hasVision,
       });
       finalUsage = result.usage || finalUsage;
-      finalText += result.content;
+      modelText += result.content;
+      if (!result.toolCalls.length) finalText = result.content;
       if (!result.toolCalls.length) {
         if (expectedToolName === 'report_progress' && progressRetries < 2) {
           progressRetries += 1;
@@ -474,13 +465,20 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
           break;
         }
         executionToolCalls += 1;
-        const activeTask = agentState.plan?.tasks?.find((task) => String(task.id) === String(args.task_id));
+        if (name === deliverableContract?.executionTool && deliverableContract?.requiresPlan) {
+          startNextPlanTask(agentState, emitAgentEvent, 'The implementation or packaging operation is starting.');
+        }
+        const activeTask = agentState.plan?.tasks?.find((task) => String(task.id) === String(args.task_id))
+          || agentState.plan?.tasks?.find((task) => task.status === 'running');
         const safeArgs = name === 'execute_python'
           ? {
+              ...(activeTask?.id ? { task_id: activeTask.id } : {}),
+              ...(activeTask?.title ? { task_title: activeTask.title } : {}),
+              ...(activeTask?.description ? { task_description: activeTask.description } : {}),
+              ...(activeTask?.note ? { task_note: activeTask.note } : {}),
+              ...(agentState.plan?.objective ? { objective: agentState.plan.objective } : {}),
               task_context: String(args.task_context || '').slice(0, 500),
               code_bytes: Buffer.byteLength(String(args.code || ''), 'utf8'),
-              ...(agentState.plan?.objective ? { objective: agentState.plan.objective } : {}),
-              ...(activeTask?.title ? { task_title: activeTask.title } : {}),
             }
           : name === 'update_task_status'
             ? {
@@ -519,6 +517,9 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
           outcome.ok &&
           (name !== 'execute_python' || outcome.result?.status === 'completed') &&
           (name !== 'generate_image' || outcome.result?.status === 'completed');
+        if (name === 'create_task_plan' && toolCompleted) {
+          initializePlanProgress(agentState, emitAgentEvent);
+        }
         if (deliverableContract && name === deliverableContract.executionTool && outcome.ok && outcome.result?.status === 'completed') {
           agentState.pythonArtifactRuns += 1;
           try {
@@ -541,6 +542,9 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
               ? 'Requested deliverable was found in storage and independently verified.'
               : agentState.deliverableVerification.reason,
           });
+        }
+        if (deliverableContract?.requiresPlan && name === deliverableContract.executionTool && toolCompleted) {
+          advancePlanAfterExecution(agentState, emitAgentEvent, Boolean(agentState.deliverableVerification?.valid));
         }
         if (toolCompleted) consecutiveFailures.delete(name);
         else consecutiveFailures.set(name, previousFailures + 1);
@@ -602,6 +606,17 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
           name,
           content: JSON.stringify(toolPayload),
         });
+        if (
+          deliverableContract &&
+          name === deliverableContract.executionTool &&
+          outcome.ok && outcome.result?.status === 'completed' &&
+          agentState.deliverableVerification && !agentState.deliverableVerification.valid
+        ) {
+          messages.push({
+            role: 'system',
+            content: `The previous Python execution succeeded, but the requested deliverable FAILED independent validation: ${agentState.deliverableVerification.reason} Do not stop and do not answer the user yet. Inspect the validation result, modify the existing workspace files as needed, create or repair the requested archive, rerun relevant checks, and invoke execute_python again. Preserve the existing work; do not restart from scratch.`,
+          });
+        }
         // Require a fresh, model-authored progress sentence after each real operation.
         progressReported = false;
         if (!toolCompleted && previousFailures >= MAX_RECOVERY_ATTEMPTS_PER_TOOL) {
@@ -657,11 +672,9 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
         break;
       }
     }
-    if (deliverableContract && !agentState.deliverableVerification?.valid && !requiredToolBlocked) {
+    if (deliverableContract && !agentState.deliverableVerification?.valid) {
       requiredToolBlocked = true;
-      if (!finalText.trim()) {
-        finalText = `I wasn't able to verify the requested deliverable. ${agentState.deliverableVerification?.reason || 'The required output is not available yet.'} I won't mark it as complete.`;
-      }
+      finalText = `I couldn't complete the requested deliverable. ${agentState.deliverableVerification?.reason || 'The required generation or verification step did not finish.'} The work completed so far is preserved, but I won't report it as finished.`;
     }
     if (
       deliverableContract?.requiresPlan &&
@@ -669,7 +682,7 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
         !agentState.plan.tasks.every((task) => ['completed', 'skipped'].includes(task.status)))
     ) {
       requiredToolBlocked = true;
-      if (!finalText.trim()) finalText = 'The task is not complete yet. Some planned steps remain unfinished, so I am not marking the deliverable as complete.';
+      finalText = 'The deliverable is not complete yet because some execution steps remain unfinished. Any generated files are preserved, but I will not mark the request as complete.';
     }
     const visible = body.messages.filter((m) => m.role !== 'system' && m.role !== 'tool');
     if (deliverableContract && !finalText.trim() && agentState.deliverableVerification?.valid) {
@@ -677,6 +690,19 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
       finalText = `The requested deliverable was generated and verified. Available file${names.length === 1 ? '' : 's'}: ${names.join(', ')}. Use the generated-file controls in this conversation to access them.`;
     }
     finalText = finalText.replace(/\/?api\/interpreter\/artifacts\/[a-zA-Z0-9_-]+/g, '[use the generated-file controls in this conversation]');
+    if (!finalText.trim()) {
+      if (deliverableContract && agentState.deliverableVerification?.valid) {
+        const names = agentState.deliverableVerification.verified.map((item) => item.name).filter(Boolean);
+        finalText = `The requested deliverable has been generated and independently verified. Files: ${names.join(', ') || 'generated files are available in the File Library'}.`;
+      } else if (deliverableContract) {
+        finalText = `I couldn't complete the requested deliverable. ${agentState.deliverableVerification?.reason || 'The required generation or verification step did not finish.'} The work completed so far is preserved, but I won't report it as finished.`;
+      } else {
+        finalText = 'I could not produce a response this time. Please retry; your conversation has been preserved.';
+      }
+    }
+    // Replace any partial/tool-round text with the canonical final response. This also
+    // delivers backend-generated recovery messages that were not streamed by the model.
+    if (finalText !== modelText) sse(res, { type: 'final_content', content: finalText });
     if (agentEvents.length || agentState.plan) {
       const allDone =
         !agentState.plan ||
