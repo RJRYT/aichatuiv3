@@ -556,44 +556,102 @@ function ArtifactCard({ file, expanded = false, onPreview }) {
     </div>
   );
 }
-function toolDisplayName(name = '') {
-  const labels = {
-    execute_python: 'Python executor',
-    generate_image: 'image generator',
-    web_search: 'web search',
-    fetch_public_url: 'web fetch',
-    calculator: 'calculator',
-    get_current_datetime: 'date and time tool',
-    npm_search: 'npm search',
-    github_search: 'GitHub search',
-    search_memories: 'memory search',
-    save_memory: 'memory tool',
-    create_task_plan: 'task planner',
-    update_task_status: 'task planner',
-  };
-  return labels[name] || name.replaceAll('_', ' ');
+function humanizeField(name = '') {
+  return String(name)
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replaceAll('_', ' ')
+    .replace(/\b(id|url|api|npm|html|css|js|json)\b/gi, (part) => part.toUpperCase())
+    .replace(/^./, (part) => part.toUpperCase());
 }
 
-function toolProgressMessage(name, args = {}) {
-  const firstText = (...values) => values.find((value) => typeof value === 'string' && value.trim())?.trim();
-  if (name === 'web_search') {
-    const query = firstText(args.query, args.search_query, args.q, args.search_terms);
-    return query ? `Searching for ${query.slice(0, 90)}...` : 'Searching the web...';
+function toolUsageSentence(event = {}) {
+  const args = event.arguments && typeof event.arguments === 'object' ? event.arguments : {};
+  const result = event.result && typeof event.result === 'object' ? event.result : {};
+  const quote = (value, limit = 150) => {
+    const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+    if (!text) return '';
+    const clipped = text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+    return `“${clipped}”`;
+  };
+  const task = args.task_title || args.title || args.task_id;
+  const context = args.task_context || args.description || args.objective;
+  const running = event.status === 'running';
+  let sentence = '';
+  switch (event.name) {
+    case 'execute_python':
+      sentence = context
+        ? `${running ? 'Running' : 'Ran'} Python to ${String(context).replace(/[.!?]+$/, '')}.`
+        : `${running ? 'Running' : 'Ran'} a Python operation.`;
+      if (args.task_title) sentence += ` Workstream: ${quote(args.task_title, 100)}.`;
+      if (args.objective) sentence += ` Objective: ${quote(args.objective, 120)}.`;
+      if (Number(args.code_bytes) > 0) sentence += ` Code size: ${Number(args.code_bytes).toLocaleString()} bytes.`;
+      if (Array.isArray(result.artifacts) && result.artifacts.length) {
+        sentence += ` Created ${result.artifacts.length} file${result.artifacts.length === 1 ? '' : 's'}: ${result.artifacts.map((file) => file.name).filter(Boolean).slice(0, 4).join(', ')}.`;
+      } else if (result.status) sentence += ` Execution status: ${result.status}.`;
+      break;
+    case 'create_task_plan': {
+      const objective = args.objective || result.plan?.objective;
+      const count = Array.isArray(args.tasks) ? args.tasks.length : Array.isArray(result.plan?.tasks) ? result.plan.tasks.length : 0;
+      sentence = objective
+        ? `${running ? 'Creating' : 'Created'} a plan for ${quote(objective)}${count ? ` with ${count} steps` : ''}.`
+        : `${running ? 'Creating' : 'Created'} an execution plan${count ? ` with ${count} steps` : ''}.`;
+      break;
+    }
+    case 'update_task_status': {
+      const status = String(args.status || result.task?.status || 'updated').replaceAll('_', ' ');
+      sentence = task
+        ? `${running ? 'Updating' : 'Updated'} ${quote(task)}${args.task_id ? ` (task ${args.task_id})` : ''} to ${status}.`
+        : `${running ? 'Updating' : 'Updated'} task ${quote(args.task_id || 'record')} to ${status}.`;
+      if (args.objective) sentence += ` Objective: ${quote(args.objective, 120)}.`;
+      if (args.task_description) sentence += ` ${String(args.task_description).replace(/\s+/g, ' ').trim()}`;
+      const note = args.note || result.task?.note;
+      if (note) sentence += ` Note: ${String(note).replace(/\s+/g, ' ').trim()}`;
+      break;
+    }
+    case 'web_search': {
+      const query = args.query || args.search_query || args.q || args.search_terms;
+      const count = Array.isArray(result.results) ? result.results.length : 0;
+      sentence = query ? `${running ? 'Searching' : 'Searched'} the web for ${quote(query)}${count ? ` and found ${count} results` : ''}.` : `${running ? 'Searching' : 'Completed'} the web.`;
+      break;
+    }
+    case 'fetch_public_url': {
+      const url = args.url || args.uri || result.url;
+      const bytes = typeof result.content === 'string' ? result.content.length : 0;
+      sentence = url ? `${running ? 'Fetching' : 'Fetched'} ${quote(url, 180)}${bytes ? ` and received ${bytes.toLocaleString()} characters` : ''}.` : `${running ? 'Fetching' : 'Fetched'} a public webpage.`;
+      break;
+    }
+    case 'generate_image':
+      sentence = args.prompt ? `${running ? 'Generating' : 'Generated'} an image from ${quote(args.prompt)}.` : `${running ? 'Generating' : 'Generated'} an image.`;
+      if (Array.isArray(result.artifacts) && result.artifacts.length) sentence += ` Saved ${result.artifacts.length} image file${result.artifacts.length === 1 ? '' : 's'}.`;
+      break;
+    case 'calculator':
+      sentence = args.expression ? `${running ? 'Calculating' : 'Calculated'} ${quote(args.expression)}${result.result !== undefined ? ` and got ${result.result}` : ''}.` : `${running ? 'Calculating' : 'Completed'} a calculation.`;
+      break;
+    case 'github_search':
+    case 'npm_search':
+    case 'search_memories':
+      sentence = args.query
+        ? `Searched ${event.name === 'github_search' ? 'GitHub' : event.name === 'npm_search' ? 'npm' : 'saved memories'} for ${quote(args.query)}.`
+        : `Searched ${humanizeField(event.name)}.`;
+      break;
+    case 'save_memory':
+      sentence = args.memory ? `Saved the requested memory: ${quote(args.memory)}.` : 'Saved a memory.';
+      break;
+    case 'get_current_datetime':
+      sentence = `Retrieved the current date and time${args.timezone ? ` for ${args.timezone}` : ''}.`;
+      break;
+    default: {
+      const meaningful = Object.entries(args)
+        .filter(([key, value]) => !['code', 'script', 'source', 'content'].includes(key) && value !== undefined && value !== null && value !== '')
+        .slice(0, 2)
+        .map(([key, value]) => `${humanizeField(key).toLowerCase()} ${quote(formatToolArgument(value), 90)}`);
+      sentence = meaningful.length
+        ? `${humanizeField(event.name || 'Tool')} used with ${meaningful.join(' and ')}.`
+        : `${humanizeField(event.name || 'Tool')} completed.`;
+    }
   }
-  if (name === 'fetch_public_url') {
-    const url = firstText(args.url, args.uri);
-    return url ? `Fetching URL ${url.slice(0, 100)}...` : 'Fetching requested URL...';
-  }
-  if (name === 'generate_image') return 'Generating image...';
-  if (name === 'create_task_plan') return 'Registering plans...';
-  if (name === 'update_task_status') return 'Marking task progress...';
-  if (name === 'execute_python') {
-    const context = firstText(args.task_context, args.description, args.task);
-    if (context && /zip|archive/i.test(context)) return 'Preparing your files as a ZIP...';
-    if (context && /patch|edit|modify|update/i.test(context)) return 'Verifying patches...';
-    return 'Working on requested files...';
-  }
-  return `Using ${toolDisplayName(name)}...`;
+  if (event.error) sentence += ` The operation reported: ${String(event.error).replace(/\s+/g, ' ').slice(0, 180)}`;
+  return sentence;
 }
 
 function formatToolArgument(value) {
@@ -611,15 +669,6 @@ function formatToolArgument(value) {
   return String(value);
 }
 
-function describeToolCall(event) {
-  const args = event.arguments && typeof event.arguments === 'object' ? event.arguments : {};
-  const entries = Object.entries(args)
-    .filter(([key, value]) => !['code', 'script', 'source', 'content'].includes(key) && value !== undefined && value !== null && value !== '')
-    .slice(0, 3)
-    .map(([key, value]) => `${key}: ${formatToolArgument(value)}`);
-  return entries.length ? `${event.name} · ${entries.join(' · ')}` : event.name;
-}
-
 function ToolUsageInline({ events = [] }) {
   if (!events.length) return null;
   const grouped = [...events.reduce((map, event) => {
@@ -634,14 +683,14 @@ function ToolUsageInline({ events = [] }) {
       {grouped.map((group) => (
         <details className={`tool-usage-item ${group.status || ''}`} key={`${group.name}-${group.status}`}>
           <summary>
-            {group.events.length === 1 ? describeToolCall(group.events[0]) : `${group.name} · ${group.events.length} calls`}
+            {group.events.length === 1 ? toolUsageSentence(group.events[0]) : `${toolUsageSentence(group.events[0])} (${group.events.length} calls)`}
           </summary>
           <div className="tool-usage-details">
             {group.events.map((event, index) => <div className="tool-usage-detail-entry" key={`${group.name}-${index}`}>
-              <div className="tool-usage-call-title">{describeToolCall(event)}</div>
+              <div className="tool-usage-call-title">{toolUsageSentence(event)}</div>
               {event.error && <p className="tool-error">{event.error}</p>}
-              {event.arguments && <div><small>Arguments</small><pre>{JSON.stringify(event.arguments, null, 2)}</pre></div>}
-              {event.result !== undefined && <div><small>Result</small><pre>{JSON.stringify(event.result, null, 2).slice(0, 5000)}</pre></div>}
+              {event.arguments && <div className="tool-usage-fields"><small>Details</small>{Object.entries(event.arguments).filter(([key, value]) => !['code', 'script', 'source', 'content'].includes(key) && value !== undefined && value !== null && value !== '').map(([key, value]) => <div key={key}><b>{humanizeField(key)}</b><span>{formatToolArgument(value)}</span></div>)}</div>}
+              {event.result !== undefined && <div className="tool-usage-fields"><small>Result</small>{Object.entries(event.result || {}).filter(([key, value]) => !['content', 'downloadUrl', 'data', 'buffer'].includes(key) && value !== undefined && value !== null && value !== '').slice(0, 12).map(([key, value]) => <div key={key}><b>{humanizeField(key)}</b><span>{formatToolArgument(value)}</span></div>)}</div>}
             </div>)}
           </div>
         </details>
@@ -748,7 +797,7 @@ function LiveProgress({ progress, now, toolEvents = [] }) {
   return (
     <div className="live-progress" role="status" aria-live="polite">
       <span className="live-progress-orb"><i /></span>
-      <div className="live-progress-message"><Markdown content={progress.message} /></div>
+      <div className="live-progress-message">{progress.message ? <Markdown content={progress.message} /> : <span className="live-progress-awaiting" aria-label="Waiting for progress update" />}</div>
       <span className="live-progress-timing">Working {elapsed(progress.startedAt)} · Last worked {elapsed(progress.lastActivityAt)} ago</span>
       {!!toolEvents.length && <ToolUsageInline events={toolEvents} />}
     </div>
@@ -2209,7 +2258,8 @@ export default function App() {
     if (index < 1 || busy) return;
     setBusy(true);
     setStatus('Regenerating response…');
-    setLiveProgress({ message: 'Thinking through your request...', startedAt: Date.now(), lastActivityAt: Date.now() });
+    setLiveProgress({ message: '', startedAt: Date.now(), lastActivityAt: Date.now() });
+    setMessages((current) => current.map((item) => item.id === message.id ? { ...item, isStreaming: true, toolEvents: [] } : item));
     try {
       localStorage.setItem(
         'nemotron.pendingGeneration',
@@ -2244,7 +2294,9 @@ export default function App() {
       }
       const reader = res.body.getReader(),
         decoder = new TextDecoder();
-      let buffer = '';
+      let buffer = '',
+        regeneratedOutput = '',
+        regenerationToolEvents = [];
       while (true) {
         const part = await reader.read();
         buffer += decoder.decode(part.value || new Uint8Array(), {
@@ -2256,20 +2308,24 @@ export default function App() {
           const line = block.split(/\r?\n/).find((x) => x.startsWith('data:'));
           if (!line) continue;
           const event = JSON.parse(line.slice(5).trim());
-          if (event.type === 'status') {
-            setStatus(event.status || 'Regenerating…');
-            setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: event.status || 'Regenerating…', lastActivityAt: Date.now() }));
-          }
+          if (event.type === 'status') setStatus(event.status || 'Working');
           if (event.type === 'agent_event') {
             const item = event.event || {};
-            const message = item.type === 'plan_created' ? 'Registering plans...'
-              : item.type === 'task_updated' && item.task ? item.task.status === 'completed' ? `Marking task as completed: ${item.task.title}` : `Working on: ${item.task.title}`
-              : item.type === 'tool_started' ? item.progressTarget ? `${item.name === 'web_search' ? 'Searching for' : 'Fetching URL'} ${item.progressTarget}...` : item.name === 'generate_image' ? 'Generating image...' : item.name === 'fetch_public_url' ? 'Fetching requested URL...' : item.name === 'web_search' ? 'Searching the web...' : item.name === 'execute_python' ? 'Working on requested files...' : `Using ${toolDisplayName(item.name)}...`
-              : item.type === 'tool_completed' ? item.name === 'execute_python' ? 'Verifying patches...' : 'Checking results...'
-              : item.type === 'self_correction' ? 'Recovering from an issue...'
-              : item.type === 'agent_completed' ? 'Generating response...'
-              : '';
-            if (message) setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message, lastActivityAt: Date.now() }));
+            const progressMessage = item.type === 'progress_update' ? item.message : '';
+            if (progressMessage) setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: progressMessage, lastActivityAt: Date.now() }));
+          }
+          if (event.type === 'chunk') {
+            regeneratedOutput += event.content || '';
+            setMessages((current) => current.map((item) => item.id === message.id ? { ...item, content: regeneratedOutput, isStreaming: true, toolEvents: regenerationToolEvents } : item));
+          }
+          if (event.type === 'tool_start') {
+            regenerationToolEvents = [...regenerationToolEvents, { name: event.name, status: 'running', arguments: event.arguments || {} }];
+            setMessages((current) => current.map((item) => item.id === message.id ? { ...item, isStreaming: true, toolEvents: regenerationToolEvents } : item));
+          }
+          if (event.type === 'tool_result') {
+            const lastIndex = regenerationToolEvents.map((item) => item.name).lastIndexOf(event.name);
+            if (lastIndex >= 0) regenerationToolEvents = regenerationToolEvents.map((item, itemIndex) => itemIndex === lastIndex ? { ...item, status: event.status, result: event.result, error: event.error } : item);
+            setMessages((current) => current.map((item) => item.id === message.id ? { ...item, isStreaming: true, toolEvents: regenerationToolEvents } : item));
           }
           if (event.type === 'error') throw new Error(event.error || 'Regeneration failed.');
         }
@@ -2282,6 +2338,7 @@ export default function App() {
       setChats((current) => [refreshed.chat, ...current.filter((c) => c._id !== activeId)]);
       setStatus('Response regenerated');
     } catch (error) {
+      setMessages((current) => current.map((item) => item.id === message.id ? { ...message, isStreaming: false } : item));
       setStatus(error.name === 'AbortError' ? 'Stopped' : 'Regeneration failed');
       setFileError(error.message);
     } finally {
@@ -2504,7 +2561,7 @@ export default function App() {
     const controller = new AbortController();
     abortRef.current = controller;
     const started = performance.now();
-    setLiveProgress({ message: /\bzip\b|\.zip\b/i.test(raw) ? 'Preparing your requested ZIP...' : 'Thinking...', startedAt: Date.now(), lastActivityAt: Date.now() });
+    setLiveProgress({ message: '', startedAt: Date.now(), lastActivityAt: Date.now() });
     let output = '',
       events = [],
       agentPlan = continuingPlan,
@@ -2580,14 +2637,10 @@ export default function App() {
           } catch {
             continue;
           }
-          if (event.type === 'status') {
-            setStatus(event.status || 'Working…');
-            setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: event.status || 'Working…', lastActivityAt: Date.now() }));
-          }
+          if (event.type === 'status') setStatus(event.status || 'Working');
           if (event.type === 'chunk') {
             output += event.content || '';
-            setStatus('Generating…');
-            setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: 'Putting the response together...', lastActivityAt: Date.now() }));
+            setStatus('Generating');
             update();
           }
           if (event.type === 'agent_event') {
@@ -2595,12 +2648,8 @@ export default function App() {
             agentEvents = [...agentEvents, item];
             if (item.type === 'plan_created' && item.plan) agentPlan = item.plan;
             if (item.type === 'task_updated' && item.plan) agentPlan = item.plan;
-            if (item.type === 'self_correction') { setStatus('Recovering from an error…'); setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: item.summary || 'Recovering from an issue…', lastActivityAt: Date.now() })); }
-            else if (item.type === 'agent_started') { setStatus('Planning…'); setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: 'Registering plans...', lastActivityAt: Date.now() })); }
-            else if (item.type === 'plan_created') setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: 'Registering plans...', lastActivityAt: Date.now() }));
-            else if (item.type === 'task_updated' && item.task) setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: item.task.status === 'completed' ? `Completed: ${item.task.title}` : item.task.status === 'running' ? `Working on: ${item.task.title}` : `Updating: ${item.task.title}`, lastActivityAt: Date.now() }));
-            else if (item.type === 'tool_started') setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: item.progressTarget ? (item.name === 'web_search' ? `Searching for ${item.progressTarget}...` : `Fetching URL ${item.progressTarget}...`) : item.name === 'generate_image' ? 'Generating image...' : item.name === 'fetch_public_url' ? 'Fetching requested URL...' : item.name === 'web_search' ? 'Searching the web...' : item.name === 'create_task_plan' ? 'Registering plans...' : item.name === 'update_task_status' ? 'Marking task progress...' : item.name === 'execute_python' ? 'Working on requested files...' : `Using ${toolDisplayName(item.name)}...`, lastActivityAt: Date.now() }));
-            else if (item.type === 'tool_completed') setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: item.name === 'generate_image' ? 'The image is ready. I’m checking the result...' : item.name === 'execute_python' ? 'The code finished. I’m verifying the output...' : 'The tool finished. I’m checking its results...', lastActivityAt: Date.now() }));
+            const message = item.type === 'progress_update' ? item.message : '';
+            if (message) setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message, lastActivityAt: Date.now() }));
             update();
           }
           if (event.type === 'tool_start') {
@@ -2613,7 +2662,6 @@ export default function App() {
               },
             ];
             setStatus(`Using ${event.name.replaceAll('_', ' ')}…`);
-            setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: toolProgressMessage(event.name, event.arguments), lastActivityAt: Date.now() }));
             update();
           }
           if (event.type === 'tool_result') {
@@ -2645,7 +2693,6 @@ export default function App() {
                     }
                   : x
               );
-            setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: 'I’m verifying the results...', lastActivityAt: Date.now() }));
             update();
           }
           if (event.type === 'done') {

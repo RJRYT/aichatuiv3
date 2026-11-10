@@ -6,6 +6,7 @@ import {
   getImageGenerationStatus,
 } from '../src/services/imageGeneration.js';
 import { getArtifact } from '../src/services/interpreter/artifactStore.js';
+import { readFile } from 'node:fs/promises';
 
 test('task planner validates dependencies and emits plan/task events', () => {
   const agentState = {};
@@ -125,4 +126,13 @@ test('Cloudflare FLUX image generation stores verified image bytes as an artifac
     if (oldMongo === undefined) delete process.env.MONGODB_URI;
     else process.env.MONGODB_URI = oldMongo;
   }
+});
+
+
+test('progress reporting is a dedicated user-facing tool and excludes private reasoning', async () => {
+  const source = await readFile(new URL('../src/services/tools.js', import.meta.url), 'utf8');
+  assert.match(source, /name: 'report_progress'/);
+  assert.match(source, /one natural sentence in first person/i);
+  assert.match(source, /private chain-of-thought/i);
+  assert.match(source, /maxLength: 280/);
 });

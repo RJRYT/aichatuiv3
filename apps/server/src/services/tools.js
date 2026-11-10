@@ -18,6 +18,20 @@ const tools = [
   {
     type: 'function',
     function: {
+      name: 'report_progress',
+      description: 'Send a concise user-facing progress update while working. Use this at meaningful milestones, especially before a lengthy operation and after completing a significant step. Write one natural sentence in first person describing the action you are actually taking or a verified finding. This is NOT a place for private chain-of-thought, hidden reasoning, speculative plans, generic filler, or a list of internal thoughts. Examples of style: “I found the relevant files and am checking how the upload flow works.” or “The implementation is in place; I’m running the focused tests now.”',
+      parameters: {
+        type: 'object',
+        properties: {
+          message: { type: 'string', minLength: 8, maxLength: 280, description: 'One concise, user-safe sentence about the current action or verified progress.' },
+        },
+        required: ['message'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'execute_python',
       description:
         'Execute full CPython 3.14 code in an isolated Vercel Firecracker microVM. For a requested website, application, project, script, or other concrete deliverable, this is the required implementation environment: generate complete, high-quality source files (not snippets), documentation, tests or validation scripts, and any requested archive. Treat the request as a product brief; implement a polished, complete result rather than a minimal demo. Use a cohesive file structure, responsive and accessible UI where applicable, robust validation, error/empty states, and thoughtful interaction design. Run checks, fix failures, and create/inspect the requested ZIP. Never substitute instructions or code snippets in chat for actual files. Use for calculations, data analysis, automation, document creation, image processing, charts, and general Python tasks. The sandbox has a persistent private workspace for this conversation, supports pip installs and normal filesystem operations, and has public network access with private/reserved IP ranges blocked. Supported uploaded images and documents for this conversation are mounted under uploads/; video attachments are provided as sampled frames to the vision model. Write generated files into the current working directory outside uploads/; the backend automatically collects supported files into the user File Library. Common missing libraries (including matplotlib, numpy, pandas, scipy, Pillow, openpyxl, reportlab, python-docx and python-pptx) are detected and installed automatically before execution; for other packages, install them with subprocess.run([sys.executable, "-m", "pip", "install", "package"], check=True). If an OS-level dependency is unavailable, report the limitation rather than assuming privileged package installation is available. Never read host secrets or environment variables, attempt sandbox escape, or target private/internal networks. Treat uploaded files as private and do not transmit them externally unless the user explicitly requests it. Inspect stdout, stderr, exitCode, status and artifact metadata. Do not claim success unless status is completed.',

@@ -2,6 +2,14 @@
 
 A single-model, Agent Lab interface for NVIDIA Nemotron 3.5 Super VL. The frontend is a static React/Vite build; the Express backend owns model inference, OAuth, web search, plugin execution, personalization and memory. MongoDB persists user accounts, preferences, memories and chats.
 
+## v7.3.4 — Model-authored live progress
+
+- The assistant is required to request an initial progress sentence from the model before continuing. Updates are concise, natural-language, and rendered with Markdown; they are separate from private reasoning.
+- The UI does not substitute canned “Thinking...” messages. Generic placeholder updates are rejected and retried; the visible sentence comes from the model's description of its actual next action or verified finding.
+- Invalid or off-target function calls receive bounded corrective retries. Required deliverable operations are force-selected after the initial progress update, and recoverable format/selection mistakes do not immediately terminate the response stream. Progress-only turns do not consume the real-tool execution quota.
+- Tool usage is displayed as readable sentences built from actual call arguments and results. Expanded details use readable field/value rows, with raw source code and internal payloads omitted.
+- The tool-use list and live progress disappear when generation ends.
+
 ## v7.3.3 — Assistant status placement and activity details
 
 - Places the live progress status immediately below the Assistant heading and before the response body.

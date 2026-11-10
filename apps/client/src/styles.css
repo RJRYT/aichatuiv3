@@ -152,3 +152,10 @@
 .toast button{display:grid;place-items:center;border:0;background:transparent;color:inherit;opacity:.75;cursor:pointer}
 @keyframes toastIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
 @media(max-width:760px){.live-progress{width:100%;gap:6px;padding:0;margin:7px 0 10px}.live-progress-message{font-size:9px}.live-progress-timing{font-size:8px}.artifact-inline{width:100%}.agent-plan-dock>summary{padding:9px}.agent-plan-dock-body{padding:0 8px 9px}.toast{top:66px;right:10px}.plan-dock-footer{align-items:flex-start;flex-direction:column}.plan-dock-footer button{align-self:flex-end}}
+
+/* v7.3.4: model-authored progress and readable tool details */
+.live-progress-awaiting{display:inline-block;width:3px;height:12px;border-radius:2px;background:#a9c995;opacity:.75;animation:agentPulse 1.25s ease-in-out infinite;vertical-align:middle}
+.tool-usage-fields{display:grid;gap:4px;margin:7px 0 9px}
+.tool-usage-fields>div{display:grid;grid-template-columns:minmax(90px,130px) minmax(0,1fr);gap:9px;font-size:9px;line-height:1.5}
+.tool-usage-fields>div b{color:#81927f;font-weight:500}
+.tool-usage-fields>div span{color:#b0bdae;overflow-wrap:anywhere;white-space:pre-wrap}

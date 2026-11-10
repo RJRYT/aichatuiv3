@@ -8,7 +8,8 @@ import { detectDeliverableContract, inspectZipBuffer, assessWebsiteQuality } fro
 export const MODEL_ID = 'nvidia/nemotron-3.5-super-vl-120b-a12b';
 const log = logger.child({ component: 'nvidia' });
 const NVIDIA_ENDPOINT = 'https://integrate.api.nvidia.com/v1/chat/completions';
-const MAX_TOOL_ROUNDS = 24;
+const MAX_TOOL_ROUNDS = 64;
+const MAX_EXECUTION_TOOL_CALLS = 24;
 const MAX_RECOVERY_ATTEMPTS_PER_TOOL = 3;
 
 const FILE_ACTION_PROMPT = `This request requires a real file operation. Use the required execution tool, perform the requested action, save the resulting file into the current workspace, and verify the stored artifact. Do not provide a script for the user to run instead of doing the operation. Do not claim success without a real, non-empty artifact.`;
@@ -132,7 +133,7 @@ function normalizeActivePlan(plan) {
 function systemPrompt(user) {
   return buildSystemPrompt(user);
 }
-async function requestRound({ messages, tools, thinkingEnabled, signal, res, round, hasVision, requiredToolName, isDeliverable }) {
+async function requestRound({ messages, tools, thinkingEnabled, signal, res, round, hasVision, requiredToolName, forceRequiredTool = false, isDeliverable }) {
   log.debug('NVIDIA request round', { round, toolCount: tools.length, hasVision });
   const body = {
     model: MODEL_ID,
@@ -145,10 +146,10 @@ async function requestRound({ messages, tools, thinkingEnabled, signal, res, rou
     ...(tools.length
       ? {
           tools,
-          tool_choice: requiredToolName
+          tool_choice: requiredToolName && forceRequiredTool
             ? { type: 'function', function: { name: requiredToolName } }
             : 'auto',
-          parallel_tool_calls: !requiredToolName,
+          parallel_tool_calls: false,
         }
       : {}),
   };
@@ -302,8 +303,15 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
   const agentState = { plan: normalizeActivePlan(body.activePlan), deliverableContract, deliverableVerification: null, pythonArtifactRuns: 0 };
   const agentEvents = [];
   const consecutiveFailures = new Map();
+  let requiredToolCorrections = 0;
+  let executionToolCalls = 0;
+  let progressRetries = 0;
+  let progressReported = false;
+  let requiredToolBlocked = false;
   const emitAgentEvent = (eventType, data = {}) => {
-    const summary = eventType === 'plan_created'
+    const summary = eventType === 'progress_update'
+      ? String(data.message || '').slice(0, 280)
+      : eventType === 'plan_created'
       ? `Planning: ${String(data.plan?.objective || 'organizing the work').slice(0, 180)}`
       : eventType === 'task_updated'
         ? `${data.task?.status === 'completed' ? 'Completed' : data.task?.status === 'running' ? 'Working on' : 'Updating'}: ${String(data.task?.title || 'current task').slice(0, 120)}`
@@ -334,7 +342,7 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
       rounds = round + 1;
       sse(res, {
         type: 'status',
-        status: round === 0 ? 'Thinking...' : 'Reviewing results...',
+        status: 'Working',
         round,
       });
       const planTasks = agentState.plan?.tasks || [];
@@ -357,10 +365,12 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
             ? deliverableContract.executionTool
             : null
         : null;
+      const expectedToolName = progressReported ? requiredToolName : 'report_progress';
       const result = await requestRound({
         messages,
         tools,
-        requiredToolName,
+        requiredToolName: expectedToolName,
+        forceRequiredTool: Boolean(expectedToolName),
         isDeliverable: Boolean(deliverableContract),
         thinkingEnabled: body.thinkingEnabled !== false,
         signal: controller.signal,
@@ -371,27 +381,114 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
       finalUsage = result.usage || finalUsage;
       finalText += result.content;
       if (!result.toolCalls.length) {
+        if (expectedToolName === 'report_progress' && progressRetries < 2) {
+          progressRetries += 1;
+          messages.push({ role: 'assistant', content: result.content || ' ' });
+          messages.push({
+            role: 'system',
+            content: 'Before answering, call report_progress with one concise, specific sentence describing the real next action for this request. Do not provide private reasoning or a generic placeholder.',
+          });
+          continue;
+        }
+        if (expectedToolName === 'report_progress') {
+          progressReported = true;
+          continue;
+        }
+        if (requiredToolName && requiredToolCorrections < 3) {
+          requiredToolCorrections += 1;
+          messages.push({ role: 'assistant', content: result.content || ' ' });
+          messages.push({
+            role: 'system',
+            content: `The required operation has not been executed. Do not answer the user yet. Invoke the required function ${requiredToolName} now with valid arguments. Do not claim the task is complete.`,
+          });
+          continue;
+        }
         if (requiredToolName) {
-          throw new Error(`The agent did not invoke the required ${requiredToolName} operation. The requested deliverable cannot be marked complete.`);
+          requiredToolBlocked = true;
+          finalText = result.content || `I couldn't start the required ${requiredToolName} operation after several attempts. No completion is being claimed.`;
         }
         break;
       }
-      if (round === MAX_TOOL_ROUNDS) throw new Error('Plugin execution exceeded the safety limit.');
+      if (round === MAX_TOOL_ROUNDS) {
+        requiredToolBlocked = true;
+        finalText = 'I reached the safe tool-execution limit before finishing this request. The work completed so far is preserved, but I cannot mark the task as complete.';
+        break;
+      }
       const calls = result.toolCalls.map((call, index) => ({
         id: call.id || `call_${round}_${index}`,
         type: 'function',
         function: { name: call.function.name, arguments: call.function.arguments || '{}' },
       }));
       messages.push({ role: 'assistant', content: result.content || null, tool_calls: calls });
+      let requiredToolMismatch = false;
       for (const call of calls) {
         const name = call.function.name;
-        const args = parseToolArgs(call.function.arguments);
-        if (requiredToolName && name !== requiredToolName) {
-          throw new Error(`The model selected ${name} when ${requiredToolName} was required for the deliverable workflow.`);
+        let args;
+        try {
+          args = parseToolArgs(call.function.arguments);
+        } catch (parseError) {
+          requiredToolMismatch = true;
+          messages.push({
+            role: 'tool',
+            tool_call_id: call.id,
+            name: name || 'unknown_tool',
+            content: JSON.stringify({ ok: false, error: `Invalid function arguments: ${parseError.message}. Return valid JSON arguments and retry.` }),
+          });
+          continue;
         }
-        const safeArgs =
-          name === 'execute_python'
-            ? { task_context: args.task_context || '', code_bytes: Buffer.byteLength(String(args.code || ''), 'utf8') }
+        if (name === 'report_progress') {
+          const message = String(args.message || '').replace(/\s+/g, ' ').trim().slice(0, 280);
+          const genericProgress = /^(thinking|working|processing|please wait|one moment|i am thinking|i'm thinking|i will help|i'll help|i will assist|i'll assist|let me think|let me check|on it)[.!…\s]*$/i.test(message);
+          const validMessage = message.length >= 8 && !genericProgress;
+          if (validMessage) {
+            emitAgentEvent('progress_update', { message });
+            progressReported = true;
+            progressRetries = 0;
+          } else {
+            requiredToolMismatch = true;
+          }
+          messages.push({
+            role: 'tool',
+            tool_call_id: call.id,
+            name,
+            content: JSON.stringify({ ok: validMessage, displayed: validMessage, ...(validMessage ? {} : { error: 'Provide one specific, user-facing sentence about the real action or finding; generic placeholders such as “Thinking...” are not accepted.' }) }),
+          });
+          continue;
+        }
+        if (expectedToolName && name !== expectedToolName) {
+          requiredToolMismatch = true;
+          messages.push({
+            role: 'tool',
+            tool_call_id: call.id,
+            name,
+            content: JSON.stringify({
+              ok: false,
+              error: `This operation was not executed because ${expectedToolName} must be completed first.`,
+            }),
+          });
+          continue;
+        }
+        if (executionToolCalls >= MAX_EXECUTION_TOOL_CALLS) {
+          requiredToolBlocked = true;
+          finalText = 'I reached the safe execution limit before finishing the request. The work completed so far is preserved, but I cannot mark the task as complete.';
+          break;
+        }
+        executionToolCalls += 1;
+        const activeTask = agentState.plan?.tasks?.find((task) => String(task.id) === String(args.task_id));
+        const safeArgs = name === 'execute_python'
+          ? {
+              task_context: String(args.task_context || '').slice(0, 500),
+              code_bytes: Buffer.byteLength(String(args.code || ''), 'utf8'),
+              ...(agentState.plan?.objective ? { objective: agentState.plan.objective } : {}),
+              ...(activeTask?.title ? { task_title: activeTask.title } : {}),
+            }
+          : name === 'update_task_status'
+            ? {
+                ...args,
+                ...(activeTask?.title ? { task_title: activeTask.title } : {}),
+                ...(activeTask?.description ? { task_description: activeTask.description } : {}),
+                ...(agentState.plan?.objective ? { objective: agentState.plan.objective } : {}),
+              }
             : args;
         sse(res, { type: 'tool_start', name, arguments: safeArgs, round });
         const progressTarget = name === 'web_search'
@@ -399,7 +496,7 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
           : name === 'fetch_public_url'
             ? String(args.url || args.uri || '').slice(0, 120)
             : '';
-        emitAgentEvent('tool_started', { name, label: name.replaceAll('_', ' '), round, ...(progressTarget ? { progressTarget } : {}) });
+        emitAgentEvent('tool_started', { name, label: name.replaceAll('_', ' '), arguments: safeArgs, round, ...(progressTarget ? { progressTarget } : {}) });
         const previousFailures = consecutiveFailures.get(name) || 0;
         let outcome;
         if (previousFailures >= MAX_RECOVERY_ATTEMPTS_PER_TOOL) {
@@ -505,8 +602,12 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
           name,
           content: JSON.stringify(toolPayload),
         });
+        // Require a fresh, model-authored progress sentence after each real operation.
+        progressReported = false;
         if (!toolCompleted && previousFailures >= MAX_RECOVERY_ATTEMPTS_PER_TOOL) {
-          throw new Error(`Recovery limit reached for ${name}. The requested operation could not be completed safely.`);
+          requiredToolBlocked = true;
+          finalText = `I couldn't complete ${name.replaceAll('_', ' ')} after the available recovery attempts. ${String(errorText || 'The operation failed.').slice(0, 500)} No completion is being claimed.`;
+          break;
         }
         if (
           deliverableContract &&
@@ -515,24 +616,63 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
           !agentState.deliverableVerification.valid &&
           agentState.pythonArtifactRuns >= MAX_RECOVERY_ATTEMPTS_PER_TOOL
         ) {
-          throw new Error(`Deliverable validation failed after ${MAX_RECOVERY_ATTEMPTS_PER_TOOL} completed generation attempts: ${agentState.deliverableVerification.reason}`);
+          emitAgentEvent('self_correction', {
+            tool: name,
+            status: 'blocked',
+            error: String(agentState.deliverableVerification.reason || 'Artifact verification failed').slice(0, 1200),
+            message: 'The generated output did not pass verification after the available recovery attempts.',
+          });
+          requiredToolBlocked = true;
+          break;
         }
       }
+      if (requiredToolBlocked) break;
+      if (requiredToolMismatch) {
+        if (expectedToolName === 'report_progress' && progressRetries < 2) {
+          progressRetries += 1;
+          messages.push({
+            role: 'system',
+            content: 'Call report_progress again with one specific, concise sentence describing the next real action. Do not call another function yet.',
+          });
+          continue;
+        }
+        if (expectedToolName === 'report_progress') {
+          progressReported = true;
+          continue;
+        }
+        if (requiredToolCorrections < 3) {
+          requiredToolCorrections += 1;
+          messages.push({
+            role: 'system',
+            content: requiredToolName
+              ? `The previous function call did not perform the required ${requiredToolName} operation or contained invalid arguments. It was not executed. Call ${requiredToolName} now with valid arguments. Do not claim completion.`
+              : 'The previous tool call contained invalid arguments and was not executed. Correct the arguments and retry, or provide a direct answer if no tool is needed.',
+          });
+          continue;
+        }
+        requiredToolBlocked = true;
+        finalText = requiredToolName
+          ? 'I could not start the required operation after several correction attempts. No completion is being claimed.'
+          : 'I could not correct the tool call after several attempts. No action is being reported as successful.';
+        break;
+      }
     }
-    if (deliverableContract && !agentState.deliverableVerification?.valid) {
-      throw new Error(
-        `Deliverable completion blocked: ${agentState.deliverableVerification?.reason || 'the requested files have not been generated and verified'}`
-      );
+    if (deliverableContract && !agentState.deliverableVerification?.valid && !requiredToolBlocked) {
+      requiredToolBlocked = true;
+      if (!finalText.trim()) {
+        finalText = `I wasn't able to verify the requested deliverable. ${agentState.deliverableVerification?.reason || 'The required output is not available yet.'} I won't mark it as complete.`;
+      }
     }
     if (
       deliverableContract?.requiresPlan &&
       (!agentState.plan?.tasks?.length ||
         !agentState.plan.tasks.every((task) => ['completed', 'skipped'].includes(task.status)))
     ) {
-      throw new Error('Deliverable completion blocked: the execution plan still contains unfinished tasks.');
+      requiredToolBlocked = true;
+      if (!finalText.trim()) finalText = 'The task is not complete yet. Some planned steps remain unfinished, so I am not marking the deliverable as complete.';
     }
     const visible = body.messages.filter((m) => m.role !== 'system' && m.role !== 'tool');
-    if (deliverableContract && !finalText.trim()) {
+    if (deliverableContract && !finalText.trim() && agentState.deliverableVerification?.valid) {
       const names = agentState.deliverableVerification.verified.map((item) => item.name).filter(Boolean);
       finalText = `The requested deliverable was generated and verified. Available file${names.length === 1 ? '' : 's'}: ${names.join(', ')}. Use the generated-file controls in this conversation to access them.`;
     }
