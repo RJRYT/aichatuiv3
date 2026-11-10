@@ -1,5 +1,12 @@
 # Nemotron Agent Lab — MERN monorepo
 
+## v7.5.0 — Workspace color themes
+
+- Adds workspace color theme presets (Forest, Midnight, Ocean, Amethyst, Rose, Sunset, Light, Dracula, Nord, Solarized) with a theme picker in Personalization, persisted across sessions.
+- Applies the selected theme to the app shell, topbar, panels, and text via CSS variables.
+- Hardens logout to always navigate home even if the logout request fails.
+- Gates live progress updates behind the thinking toggle so idle progress isn't shown.
+
 ## v7.4.0 - Personalization and production reliability
 
 - Proactively saves durable, non-sensitive user preferences and ongoing project context to editable long-term memory, then includes the latest saved memories in future conversations.
@@ -22,7 +29,6 @@
 - A failed ZIP or website-quality validation is returned to the model as a corrective instruction and triggers another bounded execution attempt.
 - The stream now sends a canonical final-content event, ensuring generated fallback responses appear in the UI rather than an empty-response placeholder.
 - Long user prompts collapse with a Show more control. Live progress starts with “Thinking...”, uses a typing reveal, and toggles the tool activity list when clicked.
-
 
 A single-model, Agent Lab interface for NVIDIA Nemotron 3.5 Super VL. The frontend is a static React/Vite build; the Express backend owns model inference, OAuth, web search, plugin execution, personalization and memory. MongoDB persists user accounts, preferences, memories and chats.
 
@@ -126,7 +132,6 @@ The authoritative agent prompt lives in `apps/server/prompts/system-prompt.md`. 
 - Chat names are generated from conversation context. Manually renamed conversations are protected from automatic title replacement.
 - Tools include web search, public URL reading, GitHub search, npm search, calculator, date/time, memory, full Python execution, autonomous task planning/status updates, and image generation.
 - Images and video are sent as images and sampled video frames, following the model's multimodal input format.
-
 
 ## Autonomous agent and execution timeline (v7.0.0)
 
@@ -328,7 +333,6 @@ The active chat ID is stored as a small local preference. The composer draft is 
 
 The repository includes 23 Node.js unit tests covering conversation branches, interpreter input/queue limits, Vercel Sandbox provider behavior, idempotent persistent workspace creation, output caps, cancellation, persistent artifact ownership and BSON binary normalization. Run `npm test`. A successful unit-test run does not replace a live MongoDB migration rehearsal, OAuth-provider testing, frontend production build, live Vercel Sandbox credential and microVM verification, or deployment-level browser testing.
 
-
 ## v6.0.4 — Artifact integrity and in-chat previews
 
 - Normalize MongoDB BSON `Binary` values to Node.js Buffers using the logical byte length instead of passing BSON wrapper objects to `Buffer.from()`.
@@ -338,7 +342,6 @@ The repository includes 23 Node.js unit tests covering conversation branches, in
 - Replace the File Library's raw new-tab View link with an in-app preview dialog for images, PDFs and text formats.
 - Render generated artifact cards directly beneath assistant messages, with inline previews and verified download actions.
 - Added regression tests for BSON Binary logical-length handling and typed-array offsets.
-
 
 ## v6.1.0 — Upload integrity, conversation loading and responsive navigation
 
@@ -370,7 +373,6 @@ The repository includes 23 Node.js unit tests covering conversation branches, in
 ### Verification
 
 `npm test` passes 23 tests, including BSON upload normalization, SHA-256 validation, and repair of stale zero-byte sandbox upload copies. JSX syntax parsing and backend JavaScript syntax checks pass. The Vite production build could not be run in this environment because frontend dependencies are not installed (`vite: not found`); run `npm install` before building locally.
-
 
 ## v6.2.0 — Markdown system prompt and agent identity
 

@@ -416,10 +416,10 @@ export async function oauthCallback(req, res, provider) {
 
 export async function currentUser(req, res) {
   res.set('Cache-Control', 'private, no-store');
-  if (!req.user) return res.json({ user: null });
+  if (!req.user?._id) return res.json({ user: null });
   if (req.authSessionExp && req.authSessionExp - Date.now() < 7 * 24 * 60 * 60 * 1000)
     createSessionCookie(res, req.user._id);
-  const user = req.user._id.toString().startsWith('guest:')
+  const user = String(req.user._id).startsWith('guest:')
     ? req.user
     : await User.findById(req.user._id).select('-memories').lean();
   res.json({ user });

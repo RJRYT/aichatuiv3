@@ -57,6 +57,18 @@ const DEFAULT_PREFERENCES = {
   headers: true,
   lists: true,
 };
+const COLOR_THEMES = [
+  { id: 'forest', name: 'Forest', colors: ['#0b0e0c', '#a4df78'] },
+  { id: 'midnight', name: 'Midnight', colors: ['#090d18', '#8ba7ff'] },
+  { id: 'ocean', name: 'Ocean', colors: ['#07151b', '#50c6d8'] },
+  { id: 'purple', name: 'Amethyst', colors: ['#130d1b', '#bd91f5'] },
+  { id: 'rose', name: 'Rose', colors: ['#1b0e13', '#f28ca8'] },
+  { id: 'sunset', name: 'Sunset', colors: ['#1b100b', '#ffad70'] },
+  { id: 'light', name: 'Light', colors: ['#f4f6f8', '#3478d4'] },
+  { id: 'dracula', name: 'Dracula', colors: ['#282a36', '#bd93f9'] },
+  { id: 'nord', name: 'Nord', colors: ['#2e3440', '#88c0d0'] },
+  { id: 'solarized', name: 'Solarized', colors: ['#002b36', '#2aa198'] },
+];
 const SUGGESTIONS = [
   {
     icon: Search,
@@ -1381,6 +1393,8 @@ function PreferencesDialog({
   revokeShare,
   providers,
   accountResourcesLoading = false,
+  theme,
+  setTheme,
 }) {
   const [tab, setTab] = useState('profile'),
     [draft, setDraft] = useState(''),
@@ -1588,6 +1602,31 @@ function PreferencesDialog({
           </div>
         ) : tab === 'personalization' ? (
           <div className="preference-grid">
+            <div className="theme-picker-section">
+              <div className="theme-picker-heading">
+                <b>Color theme</b>
+                <small>Choose a workspace color preset</small>
+              </div>
+              <div className="theme-preset-grid">
+                {COLOR_THEMES.map((preset) => (
+                  <button
+                    type="button"
+                    key={preset.id}
+                    className={`theme-preset ${theme === preset.id ? 'selected' : ''}`}
+                    onClick={() => setTheme(preset.id)}
+                    aria-pressed={theme === preset.id}
+                    title={preset.name}
+                  >
+                    <span className="theme-swatch" style={{ background: preset.colors[0], borderColor: preset.colors[1] }}>
+                      <i style={{ background: preset.colors[1] }} />
+                      <i style={{ background: preset.colors[1], opacity: .55 }} />
+                    </span>
+                    <span>{preset.name}</span>
+                    {theme === preset.id && <Check size={13} />}
+                  </button>
+                ))}
+              </div>
+            </div>
             <label>
               Base style
               <select
@@ -1843,6 +1882,12 @@ export default function App() {
     error: '',
   });
   const [preferences, setPreferences] = useState(DEFAULT_PREFERENCES),
+    [theme, setTheme] = useState(() => {
+      try {
+        const saved = localStorage.getItem('nemotron.colorTheme');
+        return COLOR_THEMES.some((item) => item.id === saved) ? saved : 'forest';
+      } catch { return 'forest'; }
+    }),
     [memories, setMemories] = useState([]),
     [shares, setShares] = useState([]),
     [sharesLoading, setSharesLoading] = useState(false),
@@ -2001,6 +2046,11 @@ export default function App() {
     }
   }, []);
   useEffect(() => {
+    const selected = COLOR_THEMES.find((item) => item.id === theme) || COLOR_THEMES[0];
+    document.documentElement.dataset.theme = selected.id;
+    try { localStorage.setItem('nemotron.colorTheme', selected.id); } catch {}
+  }, [theme]);
+  useEffect(() => {
     if (!toast) return undefined;
     const timer = window.setTimeout(() => setToast(null), 5000);
     return () => window.clearTimeout(timer);
@@ -2079,22 +2129,6 @@ export default function App() {
     };
     return () => channel.close();
   }, []);
-  useEffect(() => {
-    const refresh = async () => {
-      if (document.visibilityState !== 'visible') return;
-      try {
-        const data = await (await request('/api/account/memories')).json();
-        setMemories(data.memories || []);
-      } catch {}
-    };
-    window.addEventListener('focus', refresh);
-    document.addEventListener('visibilitychange', refresh);
-    return () => {
-      window.removeEventListener('focus', refresh);
-      document.removeEventListener('visibilitychange', refresh);
-    };
-  }, []);
-
   const newChat = async ({ navigate = true } = {}) => {
     ++chatLoadSeqRef.current;
     setChatLoading(false);
@@ -2264,8 +2298,8 @@ export default function App() {
   }, [auth.user?._id, chatsLoaded]);
 
   const logout = async () => {
-    await request('/api/auth/logout', { method: 'POST' });
-    location.href = '/';
+    try { await request('/api/auth/logout', { method: 'POST' }); }
+    finally { location.replace('/'); }
   };
   const savePreferences = async (update) => {
     const next = typeof update === 'function' ? update(preferences) : update;
@@ -2450,7 +2484,7 @@ export default function App() {
     if (index < 1 || busy) return;
     setBusy(true);
     setStatus('Regenerating response…');
-    setLiveProgress({ message: 'Thinking...', startedAt: Date.now(), lastActivityAt: Date.now() });
+    setLiveProgress(thinking ? { message: 'Thinking...', startedAt: Date.now(), lastActivityAt: Date.now() } : null);
     setMessages((current) => current.map((item) => item.id === message.id ? { ...item, isStreaming: true, toolEvents: [] } : item));
     try {
       localStorage.setItem(
@@ -2504,7 +2538,7 @@ export default function App() {
           if (event.type === 'agent_event') {
             const item = event.event || {};
             const progressMessage = item.type === 'progress_update' ? item.message : '';
-            if (progressMessage) setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: progressMessage, lastActivityAt: Date.now() }));
+            if (progressMessage && thinking) setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: progressMessage, lastActivityAt: Date.now() }));
           }
           if (event.type === 'final_content') {
             regeneratedOutput = event.content || '';
@@ -2757,7 +2791,7 @@ export default function App() {
     const controller = new AbortController();
     abortRef.current = controller;
     const started = performance.now();
-    setLiveProgress({ message: 'Thinking...', startedAt: Date.now(), lastActivityAt: Date.now() });
+    setLiveProgress(thinking ? { message: 'Thinking...', startedAt: Date.now(), lastActivityAt: Date.now() } : null);
     let output = '',
       events = [],
       agentPlan = continuingPlan,
@@ -2849,7 +2883,7 @@ export default function App() {
             if (item.type === 'plan_created' && item.plan) agentPlan = item.plan;
             if (item.type === 'task_updated' && item.plan) agentPlan = item.plan;
             const message = item.type === 'progress_update' ? item.message : '';
-            if (message) setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message, lastActivityAt: Date.now() }));
+            if (message && thinking) setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message, lastActivityAt: Date.now() }));
             update();
           }
           if (event.type === 'tool_start') {
@@ -3019,7 +3053,7 @@ export default function App() {
   if (!auth.user) return <LoginScreen providers={auth.providers} error={auth.error} returnTo={location.pathname} />;
 
   return (
-    <div className="app agent-lab">
+    <div className="app agent-lab" data-theme={theme}>
       <header className="topbar">
         <div className="brand-area">
           <button
@@ -3272,7 +3306,7 @@ export default function App() {
                 <button
                   type="button"
                   className={`thinking-control ${thinking ? 'enabled' : ''}`}
-                  onClick={() => setThinking((v) => !v)}
+                  onClick={() => { if (thinking) setLiveProgress(null); setThinking((value) => !value); }}
                   title="Toggle model thinking"
                 >
                   <Brain size={14} />
@@ -3337,6 +3371,8 @@ export default function App() {
         loadShares={loadShares}
         sharesLoading={sharesLoading}
         accountResourcesLoading={accountResourcesLoading}
+        theme={theme}
+        setTheme={setTheme}
         revokeShare={revokeShare}
       />
     </div>

@@ -27,7 +27,7 @@ for (const provider of ['google', 'github', 'discord']) {
   });
 }
 router.get('/me', optionalAuth, (req, res, next) => {
-  log.debug('Current user requested', { userId: String(req.user._id) });
+  log.debug('Current user requested', { userId: req.user?._id ? String(req.user._id) : null });
   currentUser(req, res).catch(next);
 });
 router.post('/logout', (_req, res) => {

@@ -27,3 +27,10 @@ test('production rejects wildcard credentialed CORS origins and checks mutation 
   assert.match(source, /allowedOrigins\.includes\('\*'\)/);
   assert.match(source, /Request origin is not allowed/);
 });
+
+test('current-user endpoint safely handles a request without an authenticated user', async () => {
+  const source = await readFile(authFile, 'utf8');
+  const routes = await readFile(routesFile, 'utf8');
+  assert.match(source, /if \(!req\.user\?\._id\) return res\.json\(\{ user: null \}\)/);
+  assert.match(routes, /req\.user\?\._id \? String\(req\.user\._id\) : null/);
+});
