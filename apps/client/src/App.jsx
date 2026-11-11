@@ -318,7 +318,7 @@ async function prepareFiles(files) {
   return out;
 }
 
-const CodeBlock = React.memo(function CodeBlock({ children, className = '' }) {
+const CodeBlock = React.memo(({ children, className = '' }) => {
   const [copied, setCopied] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -355,7 +355,7 @@ const CodeBlock = React.memo(function CodeBlock({ children, className = '' }) {
         </pre>
       )}
     </div>
-  });
+  );
 });
 function Markdown({ content }) {
   const components = useMemo(
@@ -377,7 +377,7 @@ function Markdown({ content }) {
         </div>
       ),
     }),
-    [],
+    []
   );
   return (
     <div className="markdown">
