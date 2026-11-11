@@ -355,8 +355,8 @@ const CodeBlock = React.memo(function CodeBlock({ children, className = '' }) {
         </pre>
       )}
     </div>
-  );
-}
+  });
+});
 function Markdown({ content }) {
   const components = useMemo(
     () => ({
