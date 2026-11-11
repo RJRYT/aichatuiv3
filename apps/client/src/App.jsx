@@ -5,8 +5,10 @@ import {
   Bot,
   Brain,
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Code2,
   Copy,
   Download,
@@ -23,7 +25,9 @@ import {
   ListChecks,
   LoaderCircle,
   LogOut,
+  Maximize,
   MessageSquare,
+  Minimize,
   PanelLeft,
   Paperclip,
   Pencil,
@@ -316,6 +320,8 @@ async function prepareFiles(files) {
 
 function CodeBlock({ children, className = '' }) {
   const [copied, setCopied] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const code = String(children ?? '').replace(/\n$/, '');
   const language = className.match(/language-([\w-]+)/)?.[1] || 'code';
   const copy = async () => {
@@ -327,18 +333,27 @@ function CodeBlock({ children, className = '' }) {
       setCopied(false);
     }
   };
+  const toggleCollapse = () => setCollapsed((v) => !v);
+  const toggleFullscreen = () => setFullscreen((v) => !v);
   return (
-    <div className="code-shell">
+    <div className={`code-shell ${fullscreen ? 'fullscreen' : ''}`}>
       <div className="code-head">
         <span>{language}</span>
-        <button type="button" onClick={copy}>
+        <button type="button" onClick={toggleCollapse} aria-label="Collapse">
+          {collapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+        </button>
+        <button type="button" onClick={toggleFullscreen} aria-label="Full screen">
+          {fullscreen ? <Minimize size={12} /> : <Maximize size={12} />}
+        </button>
+        <button type="button" onClick={copy} aria-label="Copy code">
           <Copy size={12} />
-          {copied ? 'Copied' : 'Copy code'}
         </button>
       </div>
-      <pre className="code-block">
-        <code className={className}>{code}</code>
-      </pre>
+      {!collapsed && (
+        <pre className="code-block">
+          <code className={className}>{code}</code>
+        </pre>
+      )}
     </div>
   );
 }
