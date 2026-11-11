@@ -338,6 +338,7 @@ function CodeBlock({ children, className = '' }) {
   return (
     <div className={`code-shell ${fullscreen ? 'fullscreen' : ''}`}>
       <div className="code-head">
+        <span style={{ marginRight: 'auto' }}>{language}</span>
         <button type="button" onClick={toggleCollapse} aria-label="Collapse">
           {collapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
         </button>
