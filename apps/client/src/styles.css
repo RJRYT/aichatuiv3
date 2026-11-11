@@ -1304,8 +1304,18 @@ a {
   border: 1px solid var(--border);
   border-radius: 9px;
   overflow: hidden;
-  background: #0a100c;
+  background: var(--panel);
   max-width: 100%;
+  position: relative;
+}
+.code-shell.fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: var(--bg);
+  border: 0;
+  border-radius: 0;
+  overflow: auto;
 }
 .code-head {
   height: 34px;
@@ -1313,9 +1323,9 @@ a {
   align-items: center;
   justify-content: space-between;
   padding: 0 10px;
-  background: #141d16;
+  background: var(--panel2);
   border-bottom: 1px solid var(--border);
-  color: #9cab9d;
+  color: var(--muted);
   font:
     10px 'DM Mono',
     monospace;
@@ -1324,15 +1334,21 @@ a {
   display: flex;
   align-items: center;
   gap: 6px;
-  border: 1px solid #354437;
-  background: #1a251c;
-  color: #c4d2c5;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
   border-radius: 5px;
   padding: 4px 7px;
   font: 10px inherit;
 }
+.code-head button svg {
+  color: var(--text);
+}
 .code-head button:hover {
   border-color: var(--accent);
+  color: var(--accent2);
+}
+.code-head button:hover svg {
   color: var(--accent2);
 }
 .code-shell .code-block {
@@ -2299,7 +2315,7 @@ a {
   width: 100%;
   margin: 8px 0 12px;
   padding: 0;
-  color:  var(--text);
+  color: var(--text);
   font-size: 10px;
   box-sizing: border-box;
 }
