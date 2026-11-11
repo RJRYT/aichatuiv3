@@ -318,7 +318,7 @@ async function prepareFiles(files) {
   return out;
 }
 
-function CodeBlock({ children, className = '' }) {
+const CodeBlock = React.memo(function CodeBlock({ children, className = '' }) {
   const [copied, setCopied] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -358,29 +358,30 @@ function CodeBlock({ children, className = '' }) {
   );
 }
 function Markdown({ content }) {
+  const components = useMemo(
+    () => ({
+      a: ({ node, ...p }) => <a {...p} target="_blank" rel="noreferrer" />,
+      pre: ({ node, children }) => (
+        <CodeBlock className={children?.props?.className || ''}>
+          {children?.props?.children ?? children}
+        </CodeBlock>
+      ),
+      code: ({ node, className, children, ...p }) => (
+        <code className={className || 'inline-code'} {...p}>
+          {children}
+        </code>
+      ),
+      table: ({ node, ...p }) => (
+        <div className="table-wrap">
+          <table {...p} />
+        </div>
+      ),
+    }),
+    [],
+  );
   return (
     <div className="markdown">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          a: ({ node, ...p }) => <a {...p} target="_blank" rel="noreferrer" />,
-          pre: ({ node, children }) => (
-            <CodeBlock className={children?.props?.className || ''}>
-              {children?.props?.children ?? children}
-            </CodeBlock>
-          ),
-          code: ({ node, className, children, ...p }) => (
-            <code className={className || 'inline-code'} {...p}>
-              {children}
-            </code>
-          ),
-          table: ({ node, ...p }) => (
-            <div className="table-wrap">
-              <table {...p} />
-            </div>
-          ),
-        }}
-      >
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {content || ''}
       </ReactMarkdown>
     </div>
