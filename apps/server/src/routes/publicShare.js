@@ -23,7 +23,13 @@ router.get('/:shareId', async (req, res, next) => {
         messages: share.messages,
         createdAt: share.createdAt,
         shareType: share.shareType || 'snapshot',
-        artifacts: (share.artifacts || []).map(({ id, name, mimeType, size, sha256 }) => ({ id, name, mimeType, size, sha256 })),
+        artifacts: (share.artifacts || []).map(({ id, name, mimeType, size, sha256 }) => ({
+          id,
+          name,
+          mimeType,
+          size,
+          sha256,
+        })),
       },
     });
   } catch (error) {
@@ -36,18 +42,26 @@ router.get('/:shareId', async (req, res, next) => {
 });
 router.get('/:shareId/artifacts/:artifactId', async (req, res, next) => {
   try {
-    const share = await Share.findOne({ shareId: req.params.shareId, revokedAt: null }).select('artifacts').lean();
-    const artifact = (share?.artifacts || []).find((item) => String(item.id) === String(req.params.artifactId));
+    const share = await Share.findOne({ shareId: req.params.shareId, revokedAt: null })
+      .select('artifacts')
+      .lean();
+    const artifact = (share?.artifacts || []).find(
+      (item) => String(item.id) === String(req.params.artifactId)
+    );
     if (!artifact?.data) return res.status(404).json({ error: 'Shared file not found.' });
     const data = normalizeStoredBinary(artifact.data);
-    if (data.length !== Number(artifact.size)) return res.status(500).json({ error: 'Shared file failed its size check.' });
+    if (data.length !== Number(artifact.size))
+      return res.status(500).json({ error: 'Shared file failed its size check.' });
     if (artifact.sha256 && createHash('sha256').update(data).digest('hex') !== artifact.sha256)
       return res.status(500).json({ error: 'Shared file failed its integrity check.' });
     res.setHeader('Content-Type', artifact.mimeType || 'application/octet-stream');
     res.setHeader('Content-Length', String(data.length));
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Cache-Control', 'public, max-age=300');
-    res.setHeader('Content-Disposition', `attachment; filename="${String(artifact.name || 'shared-file').replace(/["\\\r\n]/g, '_')}"`);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${String(artifact.name || 'shared-file').replace(/["\\\r\n]/g, '_')}"`
+    );
     return res.send(data);
   } catch (error) {
     next(error);

@@ -29,7 +29,14 @@ test('client refreshes memories through explicit sync only and offers ten persis
   assert.doesNotMatch(source, /addEventListener\(['"]focus['"]/);
   assert.doesNotMatch(source, /addEventListener\(['"]visibilitychange['"]/);
   assert.match(source, /localStorage\.setItem\('nemotron\.colorTheme'/);
-  assert.equal((source.match(/\{ id: '(?:forest|midnight|ocean|purple|rose|sunset|light|dracula|nord|solarized)'/g) || []).length, 10);
+  assert.equal(
+    (
+      source.match(
+        /\{ id: '(?:forest|midnight|ocean|purple|rose|sunset|light|dracula|nord|solarized)'/g
+      ) || []
+    ).length,
+    10
+  );
   assert.match(source, /progressMessage && thinking/);
   assert.match(source, /message && thinking/);
   assert.match(styles, /:root\[data-theme="light"\]/);

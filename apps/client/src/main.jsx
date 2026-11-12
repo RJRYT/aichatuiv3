@@ -5,6 +5,8 @@ import './styles.css';
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <AppErrorBoundary><App /></AppErrorBoundary>
+    <AppErrorBoundary>
+      <App />
+    </AppErrorBoundary>
   </React.StrictMode>
 );

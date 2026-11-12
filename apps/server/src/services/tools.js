@@ -19,11 +19,18 @@ const tools = [
     type: 'function',
     function: {
       name: 'report_progress',
-      description: 'Send a concise user-facing progress update while working. Use this at meaningful milestones, especially before a lengthy operation and after completing a significant step. Write one natural sentence in first person describing the action you are actually taking or a verified finding. This is NOT a place for private chain-of-thought, hidden reasoning, speculative plans, generic filler, or a list of internal thoughts. Examples of style: “I found the relevant files and am checking how the upload flow works.” or “The implementation is in place; I’m running the focused tests now.”',
+      description:
+        'Send a concise user-facing progress update while working. Use this at meaningful milestones, especially before a lengthy operation and after completing a significant step. Write one natural sentence in first person describing the action you are actually taking or a verified finding. This is NOT a place for private chain-of-thought, hidden reasoning, speculative plans, generic filler, or a list of internal thoughts. Examples of style: “I found the relevant files and am checking how the upload flow works.” or “The implementation is in place; I’m running the focused tests now.”',
       parameters: {
         type: 'object',
         properties: {
-          message: { type: 'string', minLength: 8, maxLength: 280, description: 'One concise, user-safe sentence about the current action or verified progress.' },
+          message: {
+            type: 'string',
+            minLength: 8,
+            maxLength: 280,
+            description:
+              'One concise, user-safe sentence about the current action or verified progress.',
+          },
         },
         required: ['message'],
       },

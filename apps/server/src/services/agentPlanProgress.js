@@ -8,9 +8,15 @@ function emitPlanTask(agentState, task, status, note, emitAgentEvent) {
 
 export function startNextPlanTask(agentState, emitAgentEvent, note = 'Work is in progress.') {
   const tasks = agentState.plan?.tasks || [];
-  if (tasks.some((task) => task.status === 'running')) return tasks.find((task) => task.status === 'running');
-  const next = tasks.find((task) => task.status === 'pending' &&
-    (task.dependsOn || []).every((id) => tasks.find((candidate) => candidate.id === id)?.status === 'completed'));
+  if (tasks.some((task) => task.status === 'running'))
+    return tasks.find((task) => task.status === 'running');
+  const next = tasks.find(
+    (task) =>
+      task.status === 'pending' &&
+      (task.dependsOn || []).every(
+        (id) => tasks.find((candidate) => candidate.id === id)?.status === 'completed'
+      )
+  );
   if (!next) return null;
   emitPlanTask(agentState, next, 'running', note, emitAgentEvent);
   return next;
@@ -19,11 +25,21 @@ export function startNextPlanTask(agentState, emitAgentEvent, note = 'Work is in
 export function initializePlanProgress(agentState, emitAgentEvent) {
   const tasks = agentState.plan?.tasks || [];
   const firstTask = tasks[0];
-  const planningTask = firstTask && /plan|requirement|scope|design|architecture|specification/i.test(`${firstTask.title} ${firstTask.description}`)
-    ? firstTask
-    : null;
+  const planningTask =
+    firstTask &&
+    /plan|requirement|scope|design|architecture|specification/i.test(
+      `${firstTask.title} ${firstTask.description}`
+    )
+      ? firstTask
+      : null;
   if (planningTask?.status === 'pending') {
-    emitPlanTask(agentState, planningTask, 'completed', 'Requirements and execution plan have been established.', emitAgentEvent);
+    emitPlanTask(
+      agentState,
+      planningTask,
+      'completed',
+      'Requirements and execution plan have been established.',
+      emitAgentEvent
+    );
   }
   startNextPlanTask(agentState, emitAgentEvent, 'Ready to implement this part of the deliverable.');
 }
@@ -34,26 +50,50 @@ export function advancePlanAfterExecution(agentState, emitAgentEvent, verified) 
   if (verified) {
     for (const task of tasks) {
       if (!['completed', 'skipped'].includes(task.status)) {
-        emitPlanTask(agentState, task, 'completed', 'The generated deliverable passed backend artifact verification.', emitAgentEvent);
+        emitPlanTask(
+          agentState,
+          task,
+          'completed',
+          'The generated deliverable passed backend artifact verification.',
+          emitAgentEvent
+        );
       }
     }
     return;
   }
   const running = tasks.find((task) => task.status === 'running');
-  const nextReady = tasks.find((task) => task.status === 'pending' &&
-    (task.dependsOn || []).every((id) => {
-      const dependency = tasks.find((candidate) => candidate.id === id);
-      return dependency?.status === 'completed' || dependency?.id === running?.id;
-    }));
+  const nextReady = tasks.find(
+    (task) =>
+      task.status === 'pending' &&
+      (task.dependsOn || []).every((id) => {
+        const dependency = tasks.find((candidate) => candidate.id === id);
+        return dependency?.status === 'completed' || dependency?.id === running?.id;
+      })
+  );
   if (running && nextReady) {
-    emitPlanTask(agentState, running, 'completed', 'This execution pass completed; the next validation or packaging step is continuing.', emitAgentEvent);
-    startNextPlanTask(agentState, emitAgentEvent, 'Continuing with the next implementation, packaging, or verification step.');
+    emitPlanTask(
+      agentState,
+      running,
+      'completed',
+      'This execution pass completed; the next validation or packaging step is continuing.',
+      emitAgentEvent
+    );
+    startNextPlanTask(
+      agentState,
+      emitAgentEvent,
+      'Continuing with the next implementation, packaging, or verification step.'
+    );
     return;
   }
   // Do not show 5/5 complete when independent deliverable verification failed.
   // Keep the final task pending so a recovery pass can retry it.
   if (running) {
-    emitPlanTask(agentState, running, 'pending', 'Verification has not passed yet. This task remains open for a recovery attempt.', emitAgentEvent);
+    emitPlanTask(
+      agentState,
+      running,
+      'pending',
+      'Verification has not passed yet. This task remains open for a recovery attempt.',
+      emitAgentEvent
+    );
   }
 }
-

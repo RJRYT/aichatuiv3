@@ -61,7 +61,6 @@ test('successful execution advances to the next pending task and verified delive
   assert.ok(state.plan.tasks.every((task) => task.status === 'completed'));
 });
 
-
 test('startNextPlanTask is exported for the NVIDIA execution service', () => {
   const state = createState();
   const emit = () => {};
@@ -79,5 +78,8 @@ test('failed final verification never marks the complete plan as finished', () =
   assert.equal(state.plan.tasks[2].status, 'running');
   advancePlanAfterExecution(state, emit, false);
   assert.equal(state.plan.tasks[2].status, 'pending');
-  assert.equal(state.plan.tasks.every((task) => ['completed', 'skipped'].includes(task.status)), false);
+  assert.equal(
+    state.plan.tasks.every((task) => ['completed', 'skipped'].includes(task.status)),
+    false
+  );
 });

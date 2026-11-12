@@ -6,9 +6,13 @@ export function createTaskPlan(args, agentState = {}, onAgentEvent) {
   if (!Array.isArray(args.tasks) || !args.tasks.length || args.tasks.length > 12)
     throw new Error('A plan must contain between 1 and 12 tasks.');
   if (agentState.deliverableContract && args.tasks.length < 5)
-    throw new Error('A concrete project-delivery plan must contain at least 5 meaningful tasks covering planning, implementation, QA, and delivery/verification.');
+    throw new Error(
+      'A concrete project-delivery plan must contain at least 5 meaningful tasks covering planning, implementation, QA, and delivery/verification.'
+    );
   if (agentState.deliverableContract && args.tasks.length > 8)
-    throw new Error('A concrete project-delivery plan must contain no more than 8 focused tasks. Combine overly granular steps.');
+    throw new Error(
+      'A concrete project-delivery plan must contain no more than 8 focused tasks. Combine overly granular steps.'
+    );
   if (agentState.deliverableContract) {
     const planText = args.tasks
       .map((task) => `${String(task?.title || '')} ${String(task?.description || '')}`)

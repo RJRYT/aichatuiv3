@@ -40,4 +40,3 @@ export function sanitizeRetrievedChat(chat) {
   }
   return safe;
 }
-

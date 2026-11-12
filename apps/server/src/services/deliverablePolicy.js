@@ -15,13 +15,27 @@ function extractLatestUserText(messages = []) {
 
 export function detectDeliverableContract(messages = []) {
   const text = extractLatestUserText(messages);
-  const action = /\b(build|create|make|develop|implement|generate|produce|prepare|download|fetch|export|convert|package)\b/i.test(text);
-  const target = /\b(website|web\s?app|webpage|site|application|app|project|program|script|dashboard|game|tool|template)\b/i.test(text);
-  const imageDownload = /\b(download|fetch)\b[\s\S]{0,100}\b(image|photo|picture|logo|asset)\b/i.test(text);
-  const imageGeneration = /\b(create|generate|draw|design)\b[\s\S]{0,100}\b(image|illustration|artwork|concept art)\b/i.test(text);
-  const fileIntent = /\b(file|files|document|spreadsheet|presentation|report|pdf|zip|archive|downloadable)\b/i.test(text) || imageDownload;
+  const action =
+    /\b(build|create|make|develop|implement|generate|produce|prepare|download|fetch|export|convert|package)\b/i.test(
+      text
+    );
+  const target =
+    /\b(website|web\s?app|webpage|site|application|app|project|program|script|dashboard|game|tool|template)\b/i.test(
+      text
+    );
+  const imageDownload =
+    /\b(download|fetch)\b[\s\S]{0,100}\b(image|photo|picture|logo|asset)\b/i.test(text);
+  const imageGeneration =
+    /\b(create|generate|draw|design)\b[\s\S]{0,100}\b(image|illustration|artwork|concept art)\b/i.test(
+      text
+    );
+  const fileIntent =
+    /\b(file|files|document|spreadsheet|presentation|report|pdf|zip|archive|downloadable)\b/i.test(
+      text
+    ) || imageDownload;
   if (!(action && (target || fileIntent || imageGeneration))) return null;
-  const archiveRequired = /\b(zip|zip\s+(?:it|all|the)|archive|package\s+(?:it|the\s+project))\b/i.test(text);
+  const archiveRequired =
+    /\b(zip|zip\s+(?:it|all|the)|archive|package\s+(?:it|the\s+project))\b/i.test(text);
   const website = /\b(website|web\s?app|webpage|site|dashboard)\b/i.test(text);
   const requiresPlan = Boolean(
     archiveRequired ||
@@ -96,7 +110,8 @@ export function inspectZipBuffer(buffer) {
       const localExtraLength = buffer.readUInt16LE(localOffset + 28);
       const dataOffset = localOffset + 30 + localNameLength + localExtraLength;
       const dataEnd = dataOffset + compressedSize;
-      if (dataEnd > buffer.length) return { valid: false, reason: `ZIP data is truncated for ${name}.` };
+      if (dataEnd > buffer.length)
+        return { valid: false, reason: `ZIP data is truncated for ${name}.` };
       const compressed = buffer.subarray(dataOffset, dataEnd);
       let content;
       if (method === 0) content = Buffer.from(compressed);
@@ -117,7 +132,6 @@ export function inspectZipBuffer(buffer) {
   return { valid: true, entries: files, fileCount: files.length };
 }
 
-
 export function assessWebsiteQuality(files = []) {
   const html = files.find((entry) => /\.html?$/i.test(entry.name));
   const css = files.find((entry) => /\.css$/i.test(entry.name));
@@ -127,7 +141,13 @@ export function assessWebsiteQuality(files = []) {
   const cssText = css?.content?.toString('utf8').toLowerCase() || '';
   const jsText = js?.content?.toString('utf8').toLowerCase() || '';
   const checks = {
-    htmlDocument: Boolean(html && /<!doctype html/.test(htmlText) && /<title\b/.test(htmlText) && /name=["']viewport["']/.test(htmlText) && /<main\b/.test(htmlText)),
+    htmlDocument: Boolean(
+      html &&
+      /<!doctype html/.test(htmlText) &&
+      /<title\b/.test(htmlText) &&
+      /name=["']viewport["']/.test(htmlText) &&
+      /<main\b/.test(htmlText)
+    ),
     responsiveCss: Boolean(css && /@media\b/.test(cssText)),
     keyboardFocusStyles: Boolean(css && /:focus(?:-visible)?\b/.test(cssText)),
     interactiveJavaScript: Boolean(js && /addeventlistener\s*\(/i.test(jsText)),

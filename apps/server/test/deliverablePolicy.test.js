@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { detectDeliverableContract, inspectZipBuffer, assessWebsiteQuality } from '../src/services/deliverablePolicy.js';
+import {
+  detectDeliverableContract,
+  inspectZipBuffer,
+  assessWebsiteQuality,
+} from '../src/services/deliverablePolicy.js';
 import { createTaskPlan } from '../src/services/agentPlanning.js';
 
 test('detects a website build request with ZIP delivery', () => {
@@ -8,7 +12,11 @@ test('detects a website build request with ZIP delivery', () => {
     { role: 'user', content: 'Build a pure HTML task manager website and zip all files.' },
   ]);
   assert.deepEqual(
-    { required: contract.required, archiveRequired: contract.archiveRequired, website: contract.website },
+    {
+      required: contract.required,
+      archiveRequired: contract.archiveRequired,
+      website: contract.website,
+    },
     { required: true, archiveRequired: true, website: true }
   );
 });
@@ -27,9 +35,21 @@ test('deliverable plans require at least five meaningful tasks', () => {
         {
           objective: 'Build a website',
           tasks: [
-            { id: 'a', title: 'Build files', description: 'Create the requested website source files.' },
-            { id: 'b', title: 'Zip files', description: 'Package all source files into an archive.' },
-            { id: 'c', title: 'Verify', description: 'Inspect the archive and verify all expected files.' },
+            {
+              id: 'a',
+              title: 'Build files',
+              description: 'Create the requested website source files.',
+            },
+            {
+              id: 'b',
+              title: 'Zip files',
+              description: 'Package all source files into an archive.',
+            },
+            {
+              id: 'c',
+              title: 'Verify',
+              description: 'Inspect the archive and verify all expected files.',
+            },
           ],
         },
         { deliverableContract: { required: true } }
@@ -45,12 +65,10 @@ test('ZIP verifier decompresses entries and checks their CRC integrity', () => {
   );
   const result = inspectZipBuffer(archive);
   assert.equal(result.valid, true);
-  assert.deepEqual(result.entries.map((entry) => entry.name), [
-    'index.html',
-    'style.css',
-    'script.js',
-    'README.md',
-  ]);
+  assert.deepEqual(
+    result.entries.map((entry) => entry.name),
+    ['index.html', 'style.css', 'script.js', 'README.md']
+  );
   assert.match(result.entries[0].content.toString('utf8'), /<!doctype html>/i);
 
   const corrupted = Buffer.from(archive);
@@ -77,10 +95,32 @@ test('routes original image creation to the image tool instead of Python', () =>
 
 test('website quality gate requires semantic HTML, responsive CSS, focus styles, interactive JS, error handling, and README', () => {
   const result = assessWebsiteQuality([
-    { name: 'index.html', uncompressedSize: 300, content: Buffer.from('<!doctype html><html><head><title>App</title><meta name="viewport" content="width=device-width"></head><body><main>App</main></body></html>') },
-    { name: 'style.css', uncompressedSize: 200, content: Buffer.from('@media(max-width:600px){main{padding:1rem}}button:focus-visible{outline:2px solid}') },
-    { name: 'script.js', uncompressedSize: 200, content: Buffer.from("document.addEventListener('click',()=>{try{run()}catch(error){console.error(error)}})") },
-    { name: 'README.md', uncompressedSize: 150, content: Buffer.from('# Project\\n\\nRun it locally.') },
+    {
+      name: 'index.html',
+      uncompressedSize: 300,
+      content: Buffer.from(
+        '<!doctype html><html><head><title>App</title><meta name="viewport" content="width=device-width"></head><body><main>App</main></body></html>'
+      ),
+    },
+    {
+      name: 'style.css',
+      uncompressedSize: 200,
+      content: Buffer.from(
+        '@media(max-width:600px){main{padding:1rem}}button:focus-visible{outline:2px solid}'
+      ),
+    },
+    {
+      name: 'script.js',
+      uncompressedSize: 200,
+      content: Buffer.from(
+        "document.addEventListener('click',()=>{try{run()}catch(error){console.error(error)}})"
+      ),
+    },
+    {
+      name: 'README.md',
+      uncompressedSize: 150,
+      content: Buffer.from('# Project\\n\\nRun it locally.'),
+    },
   ]);
   assert.equal(result.passed, true);
   assert.equal(Object.values(result.checks).every(Boolean), true);
@@ -97,11 +137,31 @@ test('website quality gate rejects skeletal files', () => {
 
 test('deliverable plans must cover design, implementation, QA, packaging, and verification', () => {
   const tasks = [
-    { id: 'design', title: 'Define requirements and design', description: 'Define feature scope, requirements, architecture, and visual design.' },
-    { id: 'build', title: 'Implement the application', description: 'Build and implement the source code and all required files.' },
-    { id: 'qa', title: 'Run quality tests', description: 'Run functional tests, linting, and validation; fix any failures.' },
-    { id: 'zip', title: 'Package project ZIP', description: 'Package the completed project files and README into a ZIP archive.' },
-    { id: 'verify', title: 'Verify and deliver', description: 'Inspect the completed deliverable, verify integrity, and confirm it is ready.' },
+    {
+      id: 'design',
+      title: 'Define requirements and design',
+      description: 'Define feature scope, requirements, architecture, and visual design.',
+    },
+    {
+      id: 'build',
+      title: 'Implement the application',
+      description: 'Build and implement the source code and all required files.',
+    },
+    {
+      id: 'qa',
+      title: 'Run quality tests',
+      description: 'Run functional tests, linting, and validation; fix any failures.',
+    },
+    {
+      id: 'zip',
+      title: 'Package project ZIP',
+      description: 'Package the completed project files and README into a ZIP archive.',
+    },
+    {
+      id: 'verify',
+      title: 'Verify and deliver',
+      description: 'Inspect the completed deliverable, verify integrity, and confirm it is ready.',
+    },
   ];
   assert.doesNotThrow(() =>
     createTaskPlan(
@@ -114,7 +174,15 @@ test('deliverable plans must cover design, implementation, QA, packaging, and ve
       createTaskPlan(
         {
           objective: 'Build a website and ZIP it',
-          tasks: tasks.map((task) => task.id === 'zip' ? { ...task, title: 'Prepare handoff', description: 'Prepare the final handoff for the user.' } : task),
+          tasks: tasks.map((task) =>
+            task.id === 'zip'
+              ? {
+                  ...task,
+                  title: 'Prepare handoff',
+                  description: 'Prepare the final handoff for the user.',
+                }
+              : task
+          ),
         },
         { deliverableContract: { required: true, archiveRequired: true } }
       ),

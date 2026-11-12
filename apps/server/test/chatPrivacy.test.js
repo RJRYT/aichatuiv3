@@ -19,7 +19,9 @@ test('legacy reasoning is stripped from messages, branches, and response version
     branches: [
       {
         branchId: 'main',
-        messages: [{ role: 'assistant', content: 'Branch answer', reasoning: 'private branch thought' }],
+        messages: [
+          { role: 'assistant', content: 'Branch answer', reasoning: 'private branch thought' },
+        ],
       },
     ],
   });
@@ -30,14 +32,31 @@ test('legacy reasoning is stripped from messages, branches, and response version
   assert.equal(sanitized.messages[0].content, 'Visible answer');
 });
 
-
 test('execution plans are safely normalized for persistence and follow-up turns', () => {
   const plan = sanitizeAgentPlan({
     objective: 'Continue a website build',
     tasks: [
-      { id: 'design', title: 'Design', description: 'Plan the interface', status: 'completed', dependsOn: [] },
-      { id: 'build', title: 'Build', description: 'Implement the interface', status: 'running', dependsOn: ['design'] },
-      { id: 'bad', title: 'Invalid status', description: 'Normalize status', status: 'private-state', dependsOn: [] },
+      {
+        id: 'design',
+        title: 'Design',
+        description: 'Plan the interface',
+        status: 'completed',
+        dependsOn: [],
+      },
+      {
+        id: 'build',
+        title: 'Build',
+        description: 'Implement the interface',
+        status: 'running',
+        dependsOn: ['design'],
+      },
+      {
+        id: 'bad',
+        title: 'Invalid status',
+        description: 'Normalize status',
+        status: 'private-state',
+        dependsOn: [],
+      },
     ],
   });
   assert.equal(plan.objective, 'Continue a website build');

@@ -71,8 +71,6 @@ function cleanMessages(messages = []) {
   });
 }
 
-
-
 export async function listChats(sessionId) {
   if (mongoose.connection.readyState === 1)
     return Chat.find({ sessionId })

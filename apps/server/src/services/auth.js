@@ -11,7 +11,9 @@ const sign = (value) => crypto.createHmac('sha256', secret()).update(value).dige
 const cookieOptions = (maxAge) => {
   const production = process.env.NODE_ENV === 'production';
   const sameSite = String(process.env.SESSION_COOKIE_SAME_SITE || (production ? 'None' : 'Lax'));
-  const domain = process.env.SESSION_COOKIE_DOMAIN ? `; Domain=${process.env.SESSION_COOKIE_DOMAIN}` : '';
+  const domain = process.env.SESSION_COOKIE_DOMAIN
+    ? `; Domain=${process.env.SESSION_COOKIE_DOMAIN}`
+    : '';
   return `Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAge}${production ? '; Secure' : ''}${domain}`;
 };
 function parseCookies(header = '') {
@@ -23,7 +25,11 @@ function parseCookies(header = '') {
     if (index <= 0) continue;
     const key = item.slice(0, index);
     const raw = item.slice(index + 1);
-    try { cookies[key] = decodeURIComponent(raw); } catch { cookies[key] = raw; }
+    try {
+      cookies[key] = decodeURIComponent(raw);
+    } catch {
+      cookies[key] = raw;
+    }
   }
   return cookies;
 }
@@ -55,7 +61,12 @@ function clearCookie(res, name) {
 
 export function createSessionCookie(res, userId) {
   const payload = b64(
-    JSON.stringify({ sub: String(userId), iat: Date.now(), exp: Date.now() + 1000 * 60 * 60 * 24 * 30, aud: 'nemotron-agent-lab' })
+    JSON.stringify({
+      sub: String(userId),
+      iat: Date.now(),
+      exp: Date.now() + 1000 * 60 * 60 * 24 * 30,
+      aud: 'nemotron-agent-lab',
+    })
   );
   setCookie(res, cookieName, signed(payload), 60 * 60 * 24 * 30);
 }
@@ -168,11 +179,20 @@ export function oauthStart(req, res, provider) {
   const state = crypto.randomBytes(24).toString('hex');
   const linkUserId = req.authLinkUserId || null;
   const requestedReturnTo = String(req.query.returnTo || '/');
-  const returnTo = requestedReturnTo.startsWith('/') && !requestedReturnTo.startsWith('//') && requestedReturnTo.length < 500 ? requestedReturnTo : '/';
+  const returnTo =
+    requestedReturnTo.startsWith('/') &&
+    !requestedReturnTo.startsWith('//') &&
+    requestedReturnTo.length < 500
+      ? requestedReturnTo
+      : '/';
   setCookie(
     res,
     stateCookie,
-    signed(b64(JSON.stringify({ state, provider, linkUserId, returnTo, exp: Date.now() + 10 * 60 * 1000 }))),
+    signed(
+      b64(
+        JSON.stringify({ state, provider, linkUserId, returnTo, exp: Date.now() + 10 * 60 * 1000 })
+      )
+    ),
     600
   );
   const url = new URL(config.auth);
@@ -328,8 +348,15 @@ export async function oauthCallback(req, res, provider) {
         user.providerId = identity.providerId;
       }
       await user.save();
-      const returnTo = typeof statePayload.returnTo === 'string' && statePayload.returnTo.startsWith('/') && !statePayload.returnTo.startsWith('//') ? statePayload.returnTo : '/';
-      res.redirect(`${frontend}${returnTo}${returnTo.includes('?') ? '&' : '?'}account_linked=${encodeURIComponent(provider)}`);
+      const returnTo =
+        typeof statePayload.returnTo === 'string' &&
+        statePayload.returnTo.startsWith('/') &&
+        !statePayload.returnTo.startsWith('//')
+          ? statePayload.returnTo
+          : '/';
+      res.redirect(
+        `${frontend}${returnTo}${returnTo.includes('?') ? '&' : '?'}account_linked=${encodeURIComponent(provider)}`
+      );
       return;
     }
 
@@ -402,7 +429,12 @@ export async function oauthCallback(req, res, provider) {
       userId: String(user._id),
       linked: linkAttempt,
     });
-    const returnTo = typeof statePayload.returnTo === 'string' && statePayload.returnTo.startsWith('/') && !statePayload.returnTo.startsWith('//') ? statePayload.returnTo : '/';
+    const returnTo =
+      typeof statePayload.returnTo === 'string' &&
+      statePayload.returnTo.startsWith('/') &&
+      !statePayload.returnTo.startsWith('//')
+        ? statePayload.returnTo
+        : '/';
     res.redirect(`${frontend}${returnTo}`);
   } catch (error) {
     log.error('OAuth sign-in failed', {

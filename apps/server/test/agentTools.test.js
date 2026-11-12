@@ -128,7 +128,6 @@ test('Cloudflare FLUX image generation stores verified image bytes as an artifac
   }
 });
 
-
 test('progress reporting is a dedicated user-facing tool and excludes private reasoning', async () => {
   const source = await readFile(new URL('../src/services/tools.js', import.meta.url), 'utf8');
   assert.match(source, /name: 'report_progress'/);

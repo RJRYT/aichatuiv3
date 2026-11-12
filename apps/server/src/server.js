@@ -34,7 +34,9 @@ const allowedOrigins = String(
   .map((x) => x.trim())
   .filter(Boolean);
 if (process.env.NODE_ENV === 'production' && allowedOrigins.includes('*'))
-  throw new Error('CORS_ORIGIN must list explicit trusted origins in production; wildcard origins cannot be used with credentialed sessions.');
+  throw new Error(
+    'CORS_ORIGIN must list explicit trusted origins in production; wildcard origins cannot be used with credentialed sessions.'
+  );
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
 app.use(
