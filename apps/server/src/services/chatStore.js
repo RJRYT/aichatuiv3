@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { Chat } from '../models/Chat.js';
 import logger from '../utils/logger.js';
 import { sanitizeRetrievedChat, sanitizeAgentPlan } from './conversationPrivacy.js';
+import { ensureBranches, getBranchMessages } from './conversationBranches.js';
 
 const log = logger.child({ component: 'chatStore' });
 const memory = new Map();
@@ -98,6 +99,113 @@ export async function getChat(sessionId, chatId) {
   }
   const item = memory.get(chatId);
   return item?.sessionId === sessionId ? sanitizeRetrievedChat(item) : null;
+}
+
+function messageText(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter((part) => part?.type === 'text' && typeof part.text === 'string')
+    .map((part) => part.text)
+    .join('\n');
+}
+
+export async function searchChatContexts(sessionId, query, { excludeChatId, limit = 5 } = {}) {
+  const search = String(query || '').trim().slice(0, 120);
+  if (!sessionId || search.length < 2) return [];
+  const numericLimit = Number(limit);
+  const resultLimit = Number.isFinite(numericLimit)
+    ? Math.max(1, Math.min(5, Math.floor(numericLimit)))
+    : 5;
+  const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const matcher = new RegExp(escaped, 'i');
+  let candidates;
+
+  if (mongoose.connection.readyState === 1) {
+    candidates = await Chat.find({
+      sessionId,
+      ...(excludeChatId ? { _id: { $ne: excludeChatId } } : {}),
+      $or: [
+        { title: matcher },
+        { 'messages.content': matcher },
+        { 'messages.content.text': matcher },
+        { 'branches.messages.content': matcher },
+        { 'branches.messages.content.text': matcher },
+      ],
+    })
+      .sort({ updatedAt: -1 })
+      .limit(Math.max(1, Math.min(10, resultLimit * 2)))
+      .lean();
+  } else {
+    candidates = (await listChats(sessionId)).slice(0, 100);
+    candidates = await Promise.all(
+      candidates
+        .filter((item) => String(item._id) !== String(excludeChatId || ''))
+        .map((item) => getChat(sessionId, item._id))
+    );
+    candidates = candidates.filter(
+      (chat) =>
+        chat &&
+        (matcher.test(String(chat.title || '')) ||
+          [...(chat.messages || []), ...(chat.branches || []).flatMap((branch) => branch.messages || [])]
+            .some((message) => matcher.test(messageText(message.content))))
+    );
+  }
+
+  const results = [];
+  for (const candidate of candidates) {
+    if (results.length >= resultLimit) break;
+    const chat = sanitizeRetrievedChat(candidate);
+    if (!chat) continue;
+    ensureBranches(chat);
+    const branchIds = [
+      chat.activeBranchId,
+      ...chat.branches.map((branch) => branch.branchId),
+    ].filter((branchId, index, values) => branchId && values.indexOf(branchId) === index);
+    let matchingContext = null;
+    for (const branchId of branchIds) {
+      const messages = getBranchMessages(chat, branchId) || [];
+      const relevantMessages = messages
+        .map((message, index) => ({ message, index, text: messageText(message.content) }))
+        .filter(({ message, text }) => ['user', 'assistant'].includes(message.role) && text.trim());
+      const matchingIndices = new Set(
+        relevantMessages.filter(({ text }) => matcher.test(text)).map(({ index }) => index)
+      );
+      if (matchingIndices.size) {
+        matchingContext = { branchId, relevantMessages, matchingIndices };
+        break;
+      }
+      if (branchId === chat.activeBranchId)
+        matchingContext = { branchId, relevantMessages, matchingIndices };
+    }
+    const titleMatched = matcher.test(String(chat.title || ''));
+    if (!matchingContext?.matchingIndices.size && !titleMatched) continue;
+
+    const selected =
+      titleMatched && !matchingContext?.matchingIndices.size
+        ? matchingContext?.relevantMessages.slice(-6) || []
+        : matchingContext?.relevantMessages.filter(({ index, message }) =>
+            matchingContext.matchingIndices.has(index) ||
+            matchingContext.relevantMessages.some(
+              ({ index: matchIndex, message: matchingMessage }) =>
+                matchingContext.matchingIndices.has(matchIndex) &&
+                Math.abs(matchIndex - index) === 1 &&
+                matchingMessage.role !== message.role
+            )
+          ) || [];
+    results.push({
+      chatId: String(chat._id),
+      branchId: matchingContext?.branchId || chat.activeBranchId,
+      title: String(chat.title || 'Untitled chat').slice(0, 120),
+      updatedAt: chat.updatedAt || null,
+      messages: selected.slice(-8).map(({ message, text }) => ({
+        role: message.role,
+        content: text.slice(0, 1800),
+        createdAt: message.createdAt || null,
+      })),
+    });
+  }
+  return results;
 }
 
 export async function createChat(sessionId, title = 'New chat') {

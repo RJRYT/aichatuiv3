@@ -428,6 +428,10 @@ function toolUsageIcon(name) {
       return Brain;
     case 'get_current_datetime':
       return Clock;
+    case 'list_shared_links':
+      return Share2;
+    case 'search_previous_chats':
+      return MessageSquare;
     default:
       return Wrench;
   }
@@ -725,6 +729,14 @@ function toolUsageSentence(event = {}) {
       break;
     case 'get_current_datetime':
       sentence = `Retrieved the current date and time${args.timezone ? ` for ${args.timezone}` : ''}.`;
+      break;
+    case 'list_shared_links':
+      sentence = 'Listed your active shared links.';
+      break;
+    case 'search_previous_chats':
+      sentence = args.query
+        ? `Searched previous chats for ${quote(args.query)}.`
+        : 'Searched previous chats.';
       break;
     default: {
       const meaningful = Object.entries(args)

@@ -1,8 +1,9 @@
 import { executePython } from './interpreter/interpreter.js';
 import { getInterpreterStatus } from './interpreter/sandboxManager.js';
-import { getChat } from './chatStore.js';
+import { getChat, searchChatContexts } from './chatStore.js';
 import { Parser } from 'expr-eval';
 import { User } from '../models/User.js';
+import { Share } from '../models/Share.js';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import logger from '../utils/logger.js';
@@ -170,6 +171,39 @@ const tools = [
       parameters: {
         type: 'object',
         properties: { query: { type: 'string' } },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_shared_links',
+      description:
+        'List the signed-in user’s active public share links. Use only when the user asks to find or list their shared links. Never list or access another user’s shares.',
+      parameters: {
+        type: 'object',
+        properties: { limit: { type: 'integer', minimum: 1, maximum: 20 } },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'search_previous_chats',
+      description:
+        'Search the signed-in user’s previous conversations for relevant context. Use only when the user explicitly asks to find, recall, or continue an earlier conversation. Searches only chats owned by the current user and returns a few relevant message excerpts.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            minLength: 2,
+            maxLength: 120,
+            description: 'A distinctive topic, phrase, project, or decision to find.',
+          },
+          limit: { type: 'integer', minimum: 1, maximum: 5 },
+        },
         required: ['query'],
       },
     },
@@ -384,6 +418,37 @@ async function executeTool(name, args, user, options = {}) {
     log.debug('Memory search completed', { userId, query, foundCount: found.length });
     return { memories: found };
   }
+  if (name === 'list_shared_links') {
+    if (!user?._id || String(user._id).startsWith('guest:'))
+      throw new Error('Sign in is required to access your shared links.');
+    const limit = Math.max(1, Math.min(20, Number(args.limit) || 10));
+    const shares = await Share.find({ ownerId: userId, revokedAt: null })
+      .select('shareId title shareType createdAt')
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean();
+    const baseUrl = String(process.env.FRONTEND_URL || '').replace(/\/+$/, '');
+    return {
+      shares: shares.map((share) => ({
+        title: String(share.title || 'Shared conversation').slice(0, 120),
+        shareType: share.shareType || 'snapshot',
+        createdAt: share.createdAt || null,
+        url: `${baseUrl}/share/${encodeURIComponent(share.shareId)}`,
+      })),
+    };
+  }
+  if (name === 'search_previous_chats') {
+    if (!user?._id || String(user._id).startsWith('guest:'))
+      throw new Error('Sign in is required to search previous conversations.');
+    const query = String(args.query || '').trim().slice(0, 120);
+    if (query.length < 2) throw new Error('Enter at least two characters to search chats.');
+    const chats = await searchChatContexts(userId, query, {
+      excludeChatId: options.chatId,
+      limit: args.limit,
+    });
+    log.info('Previous chats searched', { userId, query, resultCount: chats.length });
+    return { chats };
+  }
   if (name === 'web_search') {
     log.info('Web search started', { userId, query: args.query });
     const result = await tavilySearch(args);
@@ -528,6 +593,20 @@ export function getPluginCatalog() {
       name: 'Search memory',
       description: 'Recall saved user context',
       icon: 'MemoryStick',
+      configured: true,
+    },
+    {
+      id: 'list_shared_links',
+      name: 'Shared links',
+      description: 'List the signed-in user’s active share links',
+      icon: 'Share2',
+      configured: true,
+    },
+    {
+      id: 'search_previous_chats',
+      name: 'Previous chats',
+      description: 'Find relevant context in the signed-in user’s earlier chats',
+      icon: 'MessageSquare',
       configured: true,
     },
     {

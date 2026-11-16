@@ -7,6 +7,8 @@ import {
 } from '../src/services/imageGeneration.js';
 import { getArtifact } from '../src/services/interpreter/artifactStore.js';
 import { readFile } from 'node:fs/promises';
+import { getToolDefinitions, runTool } from '../src/services/tools.js';
+import { Share } from '../src/models/Share.js';
 
 test('task planner validates dependencies and emits plan/task events', () => {
   const agentState = {};
@@ -134,4 +136,58 @@ test('progress reporting is a dedicated user-facing tool and excludes private re
   assert.match(source, /one natural sentence in first person/i);
   assert.match(source, /private chain-of-thought/i);
   assert.match(source, /maxLength: 280/);
+});
+
+test('account-history tools require sign-in and have explicit-request descriptions', async () => {
+  const definitions = getToolDefinitions();
+  const names = definitions.map((tool) => tool.function.name);
+  assert.ok(names.includes('list_shared_links'));
+  assert.ok(names.includes('search_previous_chats'));
+  assert.match(
+    definitions.find((tool) => tool.function.name === 'search_previous_chats').function
+      .description,
+    /only when the user explicitly asks/i
+  );
+  assert.equal((await runTool('list_shared_links', {}, { _id: 'guest:test' })).ok, false);
+  assert.equal((await runTool('search_previous_chats', { query: 'earlier' }, { _id: 'guest:test' })).ok, false);
+});
+
+test('shared-link lookup returns only the signed-in user’s active shares', async () => {
+  const originalFind = Share.find;
+  const originalFrontendUrl = process.env.FRONTEND_URL;
+  let filter;
+  process.env.FRONTEND_URL = 'https://example.test/';
+  Share.find = (query) => {
+    filter = query;
+    return {
+      select() {
+        return this;
+      },
+      sort() {
+        return this;
+      },
+      limit() {
+        return this;
+      },
+      lean: async () => [
+        {
+          shareId: 'public-share-id',
+          title: 'Project notes',
+          shareType: 'chat',
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        },
+      ],
+    };
+  };
+  try {
+    const outcome = await runTool('list_shared_links', {}, { _id: 'user-123' });
+    assert.equal(outcome.ok, true);
+    assert.deepEqual(filter, { ownerId: 'user-123', revokedAt: null });
+    assert.equal(outcome.result.shares[0].url, 'https://example.test/share/public-share-id');
+    assert.equal('chatId' in outcome.result.shares[0], false);
+  } finally {
+    Share.find = originalFind;
+    if (originalFrontendUrl === undefined) delete process.env.FRONTEND_URL;
+    else process.env.FRONTEND_URL = originalFrontendUrl;
+  }
 });
