@@ -2334,6 +2334,10 @@ a {
   box-shadow: 0 0 12px #a6e47a;
   animation: agentPulse 1.25s ease-in-out infinite;
 }
+.live-progress-working-icon {
+  flex: none;
+  color: var(--muted);
+}
 .live-progress-message {
   min-width: 0;
   flex: 1;
@@ -2363,6 +2367,9 @@ a {
   color: var(--muted);
   font: 9px 'DM Mono';
   white-space: nowrap;
+}
+.live-progress-timing-compact {
+  display: none;
 }
 @keyframes agentPulse {
   0%,
@@ -2404,10 +2411,18 @@ a {
 .live-progress .tool-usage-details {
   margin-top: 4px;
 }
-.tool-usage-item > summary span {
+.tool-usage-item > summary {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 5px;
+}
+.tool-usage-item > summary .tool-usage-summary-icon {
+  flex: none;
+  margin-top: 2px;
+}
+.tool-usage-item > summary .tool-usage-summary-text {
   color: var(--muted);
   font-weight: 600;
-  margin-right: 3px;
 }
 .tool-usage-call-title {
   margin: 2px 0 7px;
@@ -2416,7 +2431,6 @@ a {
   overflow-wrap: anywhere;
 }
 .tool-usage-item > summary {
-  display: inline;
   cursor: pointer;
   list-style: none;
   outline: none;
@@ -2764,6 +2778,14 @@ a {
   .live-progress-timing {
     font-size: 8px;
   }
+  .live-progress-timing-full {
+    display: none;
+  }
+  .live-progress-timing-compact {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+  }
   .artifact-inline {
     width: 100%;
   }
@@ -2867,30 +2889,48 @@ a {
   color: #d4e8c9;
 }
 .live-progress-typing {
-  display: inline-block;
+  display: block;
+  width: 100%;
   max-width: 100%;
   overflow: hidden;
   vertical-align: bottom;
-  animation: progressTypeReveal 0.72s steps(34, end) both;
+  white-space: nowrap;
+  container-type: inline-size;
 }
 .live-progress-typing .markdown {
   display: block;
-  min-width: 0;
+  width: max-content;
+  min-width: max-content;
+  animation: progressSideScroll 8s ease-in-out 0.8s infinite alternate;
 }
 .live-progress-typing .markdown p {
   display: inline;
   margin: 0;
+  white-space: nowrap;
+  color: #d4e8c9;
+  -webkit-text-fill-color: transparent;
+  background: linear-gradient(100deg, #d4e8c9 38%, #fff 50%, #d4e8c9 62%);
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: progressGlaze 2.8s linear infinite;
 }
-@keyframes progressTypeReveal {
+@keyframes progressSideScroll {
+  to {
+    transform: translateX(min(0px, calc(100cqi - 100%)));
+  }
+}
+@keyframes progressGlaze {
   from {
-    clip-path: inset(0 100% 0 0);
+    background-position: 100% 0;
   }
   to {
-    clip-path: inset(0 0 0 0);
+    background-position: -100% 0;
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .live-progress-typing {
+  .live-progress-typing .markdown,
+  .live-progress-typing .markdown p {
     animation: none;
   }
 }

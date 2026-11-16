@@ -4,11 +4,14 @@ import {
   ArrowUp,
   Bot,
   Brain,
+  Bookmark,
+  Calculator,
   Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  Clock,
   Code2,
   Copy,
   Download,
@@ -20,6 +23,7 @@ import {
   FileText,
   GitBranch,
   Github,
+  Globe,
   HardDrive,
   Image as ImageIcon,
   ListChecks,
@@ -400,6 +404,34 @@ function PluginIcon({ name, size = 15 }) {
             : Wrench;
   return <Icon size={size} />;
 }
+function toolUsageIcon(name) {
+  switch (name) {
+    case 'execute_python':
+      return Code2;
+    case 'create_task_plan':
+    case 'update_task_status':
+      return ListChecks;
+    case 'web_search':
+      return Search;
+    case 'fetch_public_url':
+      return Globe;
+    case 'generate_image':
+      return ImageIcon;
+    case 'calculator':
+      return Calculator;
+    case 'github_search':
+      return Github;
+    case 'npm_search':
+      return Search;
+    case 'search_memories':
+    case 'save_memory':
+      return Brain;
+    case 'get_current_datetime':
+      return Clock;
+    default:
+      return Wrench;
+  }
+}
 function artifactPreviewKind(file) {
   const mime = String(file?.mimeType || '').toLowerCase();
   if (mime.startsWith('image/') && mime !== 'image/svg+xml') return 'image';
@@ -752,65 +784,71 @@ function ToolUsageInline({ events = [] }) {
   ];
   return (
     <div className="tool-usage-inline" aria-label="Tool activity">
-      {grouped.map((group) => (
-        <details
-          className={`tool-usage-item ${group.status || ''}`}
-          key={`${group.name}-${group.status}`}
-        >
-          <summary>
-            {group.events.length === 1
-              ? toolUsageSentence(group.events[0])
-              : `${toolUsageSentence(group.events[0])} (${group.events.length} calls)`}
-          </summary>
-          <div className="tool-usage-details">
-            {group.events.map((event, index) => (
-              <div className="tool-usage-detail-entry" key={`${group.name}-${index}`}>
-                <div className="tool-usage-call-title">{toolUsageSentence(event)}</div>
-                {event.error && <p className="tool-error">{event.error}</p>}
-                {event.arguments && (
-                  <div className="tool-usage-fields">
-                    <small>Details</small>
-                    {Object.entries(event.arguments)
-                      .filter(
-                        ([key, value]) =>
-                          !['code', 'script', 'source', 'content'].includes(key) &&
-                          value !== undefined &&
-                          value !== null &&
-                          value !== ''
-                      )
-                      .map(([key, value]) => (
-                        <div key={key}>
-                          <b>{humanizeField(key)}</b>
-                          <span>{formatToolArgument(value)}</span>
-                        </div>
-                      ))}
-                  </div>
-                )}
-                {event.result !== undefined && (
-                  <div className="tool-usage-fields">
-                    <small>Result</small>
-                    {Object.entries(event.result || {})
-                      .filter(
-                        ([key, value]) =>
-                          !['content', 'downloadUrl', 'data', 'buffer'].includes(key) &&
-                          value !== undefined &&
-                          value !== null &&
-                          value !== ''
-                      )
-                      .slice(0, 12)
-                      .map(([key, value]) => (
-                        <div key={key}>
-                          <b>{humanizeField(key)}</b>
-                          <span>{formatToolArgument(value)}</span>
-                        </div>
-                      ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </details>
-      ))}
+      {grouped.map((group) => {
+        const Icon = toolUsageIcon(group.name);
+        const label =
+          group.events.length === 1
+            ? toolUsageSentence(group.events[0])
+            : `${toolUsageSentence(group.events[0])} (${group.events.length} calls)`;
+        return (
+          <details
+            className={`tool-usage-item ${group.status || ''}`}
+            key={`${group.name}-${group.status}`}
+          >
+            <summary>
+              <Icon className="tool-usage-summary-icon" size={12} aria-hidden="true" />
+              <span className="tool-usage-summary-text">{label}</span>
+            </summary>
+            <div className="tool-usage-details">
+              {group.events.map((event, index) => (
+                <div className="tool-usage-detail-entry" key={`${group.name}-${index}`}>
+                  <div className="tool-usage-call-title">{toolUsageSentence(event)}</div>
+                  {event.error && <p className="tool-error">{event.error}</p>}
+                  {event.arguments && (
+                    <div className="tool-usage-fields">
+                      <small>Details</small>
+                      {Object.entries(event.arguments)
+                        .filter(
+                          ([key, value]) =>
+                            !['code', 'script', 'source', 'content'].includes(key) &&
+                            value !== undefined &&
+                            value !== null &&
+                            value !== ''
+                        )
+                        .map(([key, value]) => (
+                          <div key={key}>
+                            <b>{humanizeField(key)}</b>
+                            <span>{formatToolArgument(value)}</span>
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                  {event.result !== undefined && (
+                    <div className="tool-usage-fields">
+                      <small>Result</small>
+                      {Object.entries(event.result || {})
+                        .filter(
+                          ([key, value]) =>
+                            !['content', 'downloadUrl', 'data', 'buffer'].includes(key) &&
+                            value !== undefined &&
+                            value !== null &&
+                            value !== ''
+                        )
+                        .slice(0, 12)
+                        .map(([key, value]) => (
+                          <div key={key}>
+                            <b>{humanizeField(key)}</b>
+                            <span>{formatToolArgument(value)}</span>
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </details>
+        );
+      })}
     </div>
   );
 }
@@ -944,12 +982,21 @@ function LiveProgress({ progress, now, toolEvents = [] }) {
     const seconds = Math.max(0, Math.floor((now - (timestamp || now)) / 1000));
     return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
   };
+  const isWorking = progress.type === 'working';
   const message = String(progress.message || 'Thinking...');
   return (
-    <div className="live-progress" role="status" aria-live="polite">
-      <span className="live-progress-orb">
-        <i />
-      </span>
+    <div
+      className={`live-progress${isWorking ? ' live-progress-working' : ''}`}
+      role="status"
+      aria-live="polite"
+    >
+      {isWorking ? (
+        <LoaderCircle className="live-progress-working-icon spin" size={13} aria-hidden="true" />
+      ) : (
+        <span className="live-progress-orb">
+          <i />
+        </span>
+      )}
       <div
         className="live-progress-message"
         role={toolEvents.length ? 'button' : undefined}
@@ -969,13 +1016,28 @@ function LiveProgress({ progress, now, toolEvents = [] }) {
         }
         title={toolEvents.length ? 'Click to show or hide tool activity' : undefined}
       >
-        <span className="live-progress-typing" key={message}>
-          <Markdown content={message} />
-        </span>
+        {isWorking ? (
+          <span>Working...</span>
+        ) : (
+          <span className="live-progress-typing" key={message}>
+            <Markdown content={message} />
+          </span>
+        )}
       </div>
-      <span className="live-progress-timing">
-        Working {elapsed(progress.startedAt)} · Last worked {elapsed(progress.lastActivityAt)} ago
-      </span>
+      {!isWorking && (
+        <span
+          className="live-progress-timing"
+          aria-label={`Working ${elapsed(progress.startedAt)} · Last worked ${elapsed(progress.lastActivityAt)} ago`}
+        >
+          <span className="live-progress-timing-full">
+            Working {elapsed(progress.startedAt)} · Last worked {elapsed(progress.lastActivityAt)} ago
+          </span>
+          <span className="live-progress-timing-compact">
+            <Clock size={10} aria-hidden="true" />
+            {elapsed(progress.startedAt)}
+          </span>
+        </span>
+      )}
       {!!toolEvents.length && toolsExpanded && <ToolUsageInline events={toolEvents} />}
     </div>
   );
@@ -1007,6 +1069,7 @@ function Message({
   onVersion,
   liveProgress,
   progressClock,
+  thinking,
 }) {
   const [editing, setEditing] = useState(false),
     [promptExpanded, setPromptExpanded] = useState(false),
@@ -1035,7 +1098,7 @@ function Message({
           <LiveProgress
             progress={liveProgress}
             now={progressClock}
-            toolEvents={message.toolEvents || []}
+            toolEvents={thinking ? message.toolEvents || [] : []}
           />
         )}
         {message.attachments?.length > 0 && (
@@ -2897,7 +2960,7 @@ export default function App() {
     setLiveProgress(
       thinking
         ? { message: 'Thinking...', startedAt: Date.now(), lastActivityAt: Date.now() }
-        : null
+        : { type: 'working' }
     );
     setMessages((current) =>
       current.map((item) =>
@@ -2966,6 +3029,7 @@ export default function App() {
               }));
           }
           if (event.type === 'final_content') {
+            if (!thinking) setLiveProgress(null);
             regeneratedOutput = event.content || '';
             setMessages((current) =>
               current.map((item) =>
@@ -2981,6 +3045,7 @@ export default function App() {
             );
           }
           if (event.type === 'chunk') {
+            if (!thinking) setLiveProgress(null);
             regeneratedOutput += event.content || '';
             setMessages((current) =>
               current.map((item) =>
@@ -3266,7 +3331,7 @@ export default function App() {
     setLiveProgress(
       thinking
         ? { message: 'Thinking...', startedAt: Date.now(), lastActivityAt: Date.now() }
-        : null
+        : { type: 'working' }
     );
     let output = '',
       events = [],
@@ -3345,10 +3410,12 @@ export default function App() {
           }
           if (event.type === 'status') setStatus(event.status || 'Working');
           if (event.type === 'final_content') {
+            if (!thinking) setLiveProgress(null);
             output = event.content || '';
             update();
           }
           if (event.type === 'chunk') {
+            if (!thinking) setLiveProgress(null);
             output += event.content || '';
             setStatus('Generating');
             update();
@@ -3735,6 +3802,7 @@ export default function App() {
                     onVersion={changeVersion}
                     liveProgress={liveProgress}
                     progressClock={progressClock}
+                    thinking={thinking}
                   />
                 </React.Fragment>
               ))
