@@ -80,6 +80,10 @@ test('user preferences and saved memories are appended as bounded context', () =
 test('system prompt proactively captures durable non-sensitive user context', () => {
   const prompt = buildSystemPrompt();
   assert.match(prompt, /save_memory tool proactively/);
-  assert.match(prompt, /stable, useful, non-sensitive preference/);
-  assert.match(prompt, /Do not save secrets, credentials/);
+  assert.match(prompt, /stable, useful, non-sensitive context/);
+  assert.match(prompt, /Do not say or imply that information came from memory/);
+  assert.match(prompt, /announce or confirm that you saved it/);
+  assert.match(prompt, /even when the user explicitly asked you to remember something/);
+  assert.match(prompt, /never claim a save succeeded unless the tool confirms success/);
+  assert.match(prompt, /Never save secrets, credentials/);
 });
