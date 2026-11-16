@@ -2349,10 +2349,32 @@ export default function App() {
       .map((chat) => ({
         icon: MessageSquare,
         label: `Continue: ${chat.title.slice(0, 28)}`,
-        prompt: `Continue working on my conversation titled \"${chat.title}\". Use the available conversation history as context.`,
+        prompt: `Find my previous chat titled "${chat.title}" and continue from its context.`,
       }));
-    return [...recent, ...SUGGESTIONS].slice(0, 5);
-  }, [chats]);
+    const memoryFacts = memories.map((memory) => String(memory.text || '').trim()).filter(Boolean);
+    const styleMemory = memoryFacts.find((fact) =>
+      /\b(prefer|prefers|like|likes|style|concise|example|format|tone|language)\b/i.test(fact)
+    );
+    const projectMemory = memoryFacts.find((fact) =>
+      /\b(working on|building|developing|project|goal|learning|migrating)\b/i.test(fact)
+    );
+    const personalized = [];
+    if (styleMemory) {
+      personalized.push({
+        icon: Sparkles,
+        label: 'Use my preferred style',
+        prompt: `Help me with a coding task using this preference: ${styleMemory.slice(0, 300)}`,
+      });
+    }
+    if (projectMemory) {
+      personalized.push({
+        icon: Code2,
+        label: 'Make progress on my goal',
+        prompt: `Help me make practical progress on this: ${projectMemory.slice(0, 300)}`,
+      });
+    }
+    return [...personalized, ...recent, ...SUGGESTIONS].slice(0, 5);
+  }, [chats, memories]);
 
   const loadAccount = useCallback(async () => {
     try {
