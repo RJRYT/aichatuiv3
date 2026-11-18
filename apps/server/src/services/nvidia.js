@@ -8,7 +8,10 @@ import {
 import {
   assessWebsiteQuality,
   detectDeliverableContract,
+  formatVerifiedArchiveResponse,
+  hasArchiveCandidate,
   inspectZipBuffer,
+  shouldAttemptDeliverableVerification,
 } from './deliverablePolicy.js';
 import { getArtifact, listArtifacts } from './interpreter/artifactStore.js';
 import { buildSystemPrompt } from './systemPrompt.js';
@@ -21,8 +24,7 @@ const MAX_TOOL_ROUNDS = 64;
 const MAX_EXECUTION_TOOL_CALLS = 24;
 const MAX_RECOVERY_ATTEMPTS_PER_TOOL = 3;
 const MODEL_STREAM_IDLE_TIMEOUT_MS = 90_000;
-const MODEL_FIRST_VISIBLE_OUTPUT_TIMEOUT_MS = 90_000;
-const MODEL_ROUND_TIMEOUT_MS = 5 * 60_000;
+const MODEL_ROUND_TIMEOUT_MS = 10 * 60_000;
 const CHAT_TURN_TIMEOUT_MS = 15 * 60_000;
 const MODEL_HEARTBEAT_INTERVAL_MS = 20_000;
 
@@ -54,8 +56,15 @@ final ZIP as the single chat deliverable, not separate source-file attachments o
 claim browser testing unless a browser test actually ran. Do not claim production readiness without
 evidence. The backend independently checks the requested artifact before accepting completion.`;
 
-async function verifyDeliverableArtifacts(result, userId, contract, chatId = '') {
+async function verifyDeliverableArtifacts(
+  result,
+  userId,
+  contract,
+  chatId = '',
+  executionStartedAt = ''
+) {
   const returnedArtifacts = Array.isArray(result?.artifacts) ? result.artifacts : [];
+  const executionStartedAtMs = new Date(executionStartedAt).getTime();
   // The sandbox response is the primary source. Query the per-chat library as a
   // recovery path in case a provider response omitted artifact metadata after save.
   let storedArtifacts = [];
@@ -67,7 +76,10 @@ async function verifyDeliverableArtifacts(result, userId, contract, chatId = '')
         if (result?.executionId && String(item.executionId || '') === String(result.executionId))
           return true;
         const updatedAt = new Date(item.createdAt || 0).getTime();
-        return Number.isFinite(updatedAt) && updatedAt >= recentCutoff;
+        const cutoff = Number.isFinite(executionStartedAtMs)
+          ? Math.max(recentCutoff, executionStartedAtMs)
+          : recentCutoff;
+        return Number.isFinite(updatedAt) && updatedAt >= cutoff;
       });
     } catch (error) {
       log.warn('Could not query chat artifacts during verification', {
@@ -81,6 +93,17 @@ async function verifyDeliverableArtifacts(result, userId, contract, chatId = '')
     if (item?.id) byId.set(String(item.id), item);
   }
   const artifacts = [...byId.values()];
+  const archiveCandidateFound = hasArchiveCandidate(artifacts);
+  if (contract.archiveRequired && !archiveCandidateFound) {
+    return {
+      valid: false,
+      verified: [],
+      archive: null,
+      archiveCandidateFound: false,
+      qualityChecks: {},
+      reason: 'A valid, non-empty ZIP archive has not been generated and verified.',
+    };
+  }
   const verified = [];
   const fileContents = new Map();
   const zipContents = new Map();
@@ -136,6 +159,7 @@ async function verifyDeliverableArtifacts(result, userId, contract, chatId = '')
     valid,
     verified,
     archive: archive || null,
+    archiveCandidateFound,
     qualityChecks,
     reason: !valid
       ? contract.archiveRequired
@@ -221,7 +245,6 @@ export async function requestRound({
   forceRequiredTool = false,
   isDeliverable,
   idleTimeoutMs = MODEL_STREAM_IDLE_TIMEOUT_MS,
-  firstVisibleOutputTimeoutMs = MODEL_FIRST_VISIBLE_OUTPUT_TIMEOUT_MS,
   roundTimeoutMs = MODEL_ROUND_TIMEOUT_MS,
   heartbeatIntervalMs = MODEL_HEARTBEAT_INTERVAL_MS,
 }) {
@@ -247,7 +270,7 @@ export async function requestRound({
   const requestController = new AbortController();
   let reader;
   let timeoutError = null;
-  let idleTimer, firstVisibleOutputTimer;
+  let idleTimer;
   const failRequest = (error) => {
     if (timeoutError) return;
     timeoutError = error;
@@ -272,16 +295,6 @@ export async function requestRound({
       );
     }, idleTimeoutMs);
   };
-  firstVisibleOutputTimer = setTimeout(() => {
-    failRequest(
-      Object.assign(
-        new Error(
-          `The model did not produce any visible response within ${Math.ceil(firstVisibleOutputTimeoutMs / 1000)} seconds. Please retry.`
-        ),
-        { code: 'MODEL_FIRST_VISIBLE_OUTPUT_TIMEOUT', status: 504 }
-      )
-    );
-  }, firstVisibleOutputTimeoutMs);
   if (signal?.aborted) abortRequest();
   else signal?.addEventListener('abort', abortRequest, { once: true });
   resetIdleTimer();
@@ -296,8 +309,9 @@ export async function requestRound({
   const heartbeatTimer = setInterval(() => {
     sse(res, {
       type: 'heartbeat',
+      phase: 'model',
       round,
-      message: 'The model is still working; waiting for its response.',
+      message: 'The model is still working and may be reasoning before replying.',
     });
   }, heartbeatIntervalMs);
   try {
@@ -339,8 +353,6 @@ export async function requestRound({
       const choice = data.choices?.[0],
         delta = choice?.delta || {};
       if (typeof delta.content === 'string' && delta.content) {
-        clearTimeout(firstVisibleOutputTimer);
-        firstVisibleOutputTimer = undefined;
         content += delta.content;
         sse(res, { type: 'chunk', round, content: delta.content });
       }
@@ -385,7 +397,6 @@ export async function requestRound({
   } finally {
     if (reader) reader.releaseLock();
     clearTimeout(idleTimer);
-    clearTimeout(firstVisibleOutputTimer);
     clearTimeout(roundTimer);
     clearInterval(heartbeatTimer);
     signal?.removeEventListener('abort', abortRequest);
@@ -468,7 +479,7 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
     plan: normalizeActivePlan(body.activePlan),
     deliverableContract,
     deliverableVerification: null,
-    pythonArtifactRuns: 0,
+    deliverableVerificationAttempts: 0,
   };
   const agentEvents = [];
   const consecutiveFailures = new Map();
@@ -752,34 +763,46 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
         if (name === 'create_task_plan' && toolCompleted) {
           initializePlanProgress(agentState, emitAgentEvent);
         }
+        let deliverableVerificationAttempted = false;
         if (
           deliverableContract &&
           name === deliverableContract.executionTool &&
           outcome.ok &&
           outcome.result?.status === 'completed'
         ) {
-          agentState.pythonArtifactRuns += 1;
           try {
-            agentState.deliverableVerification = await verifyDeliverableArtifacts(
+            const verification = await verifyDeliverableArtifacts(
               outcome.result,
               userId,
               deliverableContract,
-              body.chatId
+              body.chatId,
+              toolStartedAt
             );
+            deliverableVerificationAttempted = shouldAttemptDeliverableVerification(
+              deliverableContract,
+              verification
+            );
+            if (deliverableVerificationAttempted) {
+              agentState.deliverableVerification = verification;
+            }
           } catch (verificationError) {
+            deliverableVerificationAttempted = true;
             agentState.deliverableVerification = {
               valid: false,
               verified: [],
               reason: `Artifact verification failed: ${verificationError.message}`,
             };
           }
-          emitAgentEvent('deliverable_validation', {
-            status: agentState.deliverableVerification.valid ? 'verified' : 'incomplete',
-            verifiedCount: agentState.deliverableVerification.verified.length,
-            message: agentState.deliverableVerification.valid
-              ? 'Requested deliverable was found in storage and independently verified.'
-              : agentState.deliverableVerification.reason,
-          });
+          if (deliverableVerificationAttempted) {
+            agentState.deliverableVerificationAttempts += 1;
+            emitAgentEvent('deliverable_validation', {
+              status: agentState.deliverableVerification.valid ? 'verified' : 'incomplete',
+              verifiedCount: agentState.deliverableVerification.verified.length,
+              message: agentState.deliverableVerification.valid
+                ? 'Requested deliverable was found in storage and independently verified.'
+                : agentState.deliverableVerification.reason,
+            });
+          }
         }
         if (
           deliverableContract?.requiresPlan &&
@@ -842,7 +865,9 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
         sse(res, { type: 'tool_result', ...event, round });
         const toolPayload = {
           ...safeOutcome,
-          ...(deliverableContract && name === deliverableContract.executionTool
+          ...(deliverableContract &&
+          name === deliverableContract.executionTool &&
+          deliverableVerificationAttempted
             ? { deliverableValidation: agentState.deliverableVerification }
             : {}),
           ...(!toolCompleted
@@ -865,6 +890,7 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
           name === deliverableContract.executionTool &&
           outcome.ok &&
           outcome.result?.status === 'completed' &&
+          deliverableVerificationAttempted &&
           agentState.deliverableVerification &&
           !agentState.deliverableVerification.valid
         ) {
@@ -883,9 +909,10 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
         if (
           deliverableContract &&
           name === deliverableContract.executionTool &&
+          deliverableVerificationAttempted &&
           agentState.deliverableVerification &&
           !agentState.deliverableVerification.valid &&
-          agentState.pythonArtifactRuns >= MAX_RECOVERY_ATTEMPTS_PER_TOOL
+          agentState.deliverableVerificationAttempts >= MAX_RECOVERY_ATTEMPTS_PER_TOOL
         ) {
           emitAgentEvent('self_correction', {
             tool: name,
@@ -948,10 +975,10 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
     const visible = body.messages.filter((m) => m.role !== 'system' && m.role !== 'tool');
     if (deliverableContract && agentState.deliverableVerification?.valid && !requiredToolBlocked) {
       if (deliverableContract.archiveRequired) {
-        const archive = agentState.deliverableVerification.archive;
-        finalText = archive
-          ? `The project ZIP was generated and independently verified: ${archive.name}. Use the ZIP attachment in this conversation to download it.`
-          : 'The requested project was verified, but its final ZIP could not be identified for delivery.';
+        finalText = formatVerifiedArchiveResponse(
+          agentState.deliverableVerification,
+          agentState.plan?.objective || deliverableContract.userRequest
+        );
       } else {
         const names = agentState.deliverableVerification.verified
           .map((item) => item.name)

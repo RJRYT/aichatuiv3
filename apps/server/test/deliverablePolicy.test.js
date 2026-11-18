@@ -2,8 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   detectDeliverableContract,
+  formatVerifiedArchiveResponse,
+  hasArchiveCandidate,
   inspectZipBuffer,
   assessWebsiteQuality,
+  shouldAttemptDeliverableVerification,
 } from '../src/services/deliverablePolicy.js';
 import { createTaskPlan } from '../src/services/agentPlanning.js';
 
@@ -44,6 +47,56 @@ test('does not classify ordinary explanations as project deliverables', () => {
     detectDeliverableContract([{ role: 'user', content: 'Explain how localStorage works.' }]),
     null
   );
+});
+
+test('only treats ZIP artifacts as archive verification candidates', () => {
+  assert.equal(hasArchiveCandidate([{ name: 'budget-tracker.zip' }]), true);
+  assert.equal(hasArchiveCandidate([{ name: 'project', mimeType: 'application/zip' }]), true);
+  assert.equal(hasArchiveCandidate([{ name: 'index.html', mimeType: 'text/html' }]), false);
+  assert.equal(hasArchiveCandidate([]), false);
+});
+
+test('defers archive verification until the execution produces a ZIP candidate', () => {
+  const projectContract = { archiveRequired: true };
+  assert.equal(
+    shouldAttemptDeliverableVerification(projectContract, { archiveCandidateFound: false }),
+    false
+  );
+  assert.equal(
+    shouldAttemptDeliverableVerification(projectContract, { archiveCandidateFound: true }),
+    true
+  );
+  assert.equal(
+    shouldAttemptDeliverableVerification(
+      { archiveRequired: false },
+      { archiveCandidateFound: false }
+    ),
+    true
+  );
+});
+
+test('formats a successful ZIP response with the verified manifest and quality checks', () => {
+  const response = formatVerifiedArchiveResponse(
+    {
+      archive: {
+        name: 'budget-tracker.zip',
+        zip: {
+          fileCount: 2,
+          entries: [{ name: 'budget-tracker/index.html' }, { name: 'budget-tracker/app.js' }],
+        },
+      },
+      qualityChecks: { htmlDocument: true, responsiveCss: true, readme: true },
+    },
+    'Build a polished budget tracker'
+  );
+  assert.match(response, /Completed: Build a polished budget tracker/);
+  assert.match(response, /budget-tracker\.zip` \(2 files\)/);
+  assert.match(response, /budget-tracker\/index\.html.*budget-tracker\/app\.js/);
+  assert.match(
+    response,
+    /ZIP integrity passed; HTML structure, responsive CSS, README checks passed/
+  );
+  assert.match(response, /Download the ZIP attachment/);
 });
 
 test('deliverable plans require at least five meaningful tasks', () => {

@@ -74,7 +74,7 @@ test('model stream activity resets the idle timeout', async () => {
   }
 });
 
-test('model hidden reasoning cannot keep the client waiting without visible output', async () => {
+test('model can stream reasoning before returning visible answer text', async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (_url, { signal }) => {
     const body = new ReadableStream({
@@ -86,10 +86,20 @@ test('model hidden reasoning cannot keep the client waiting without visible outp
             )
           );
         const timer = setInterval(emitReasoning, 5);
+        const responseTimer = setTimeout(() => {
+          clearInterval(timer);
+          controller.enqueue(
+            new TextEncoder().encode(
+              'data: {"choices":[{"delta":{"content":"Here is the result."},"finish_reason":"stop"}]}\n\n'
+            )
+          );
+          controller.close();
+        }, 60);
         signal.addEventListener(
           'abort',
           () => {
             clearInterval(timer);
+            clearTimeout(responseTimer);
             controller.error(signal.reason);
           },
           { once: true }
@@ -100,26 +110,19 @@ test('model hidden reasoning cannot keep the client waiting without visible outp
     return new Response(body, { status: 200 });
   };
   try {
-    await assert.rejects(
-      requestRound({
-        messages: [{ role: 'user', content: 'Build something' }],
-        tools: [],
-        thinkingEnabled: true,
-        signal: new AbortController().signal,
-        res: { writableEnded: false, write() {} },
-        round: 0,
-        hasVision: false,
-        idleTimeoutMs: 100,
-        firstVisibleOutputTimeoutMs: 30,
-        roundTimeoutMs: 1000,
-        heartbeatIntervalMs: 1000,
-      }),
-      (error) => {
-        assert.equal(error.code, 'MODEL_FIRST_VISIBLE_OUTPUT_TIMEOUT');
-        assert.match(error.message, /did not produce any visible response/);
-        return true;
-      }
-    );
+    const result = await requestRound({
+      messages: [{ role: 'user', content: 'Build something' }],
+      tools: [],
+      thinkingEnabled: true,
+      signal: new AbortController().signal,
+      res: { writableEnded: false, write() {} },
+      round: 0,
+      hasVision: false,
+      idleTimeoutMs: 100,
+      roundTimeoutMs: 1000,
+      heartbeatIntervalMs: 1000,
+    });
+    assert.equal(result.content, 'Here is the result.');
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -58,6 +58,51 @@ export function detectDeliverableContract(messages = []) {
   };
 }
 
+export function hasArchiveCandidate(artifacts = []) {
+  return artifacts.some(
+    (artifact) =>
+      /\.zip$/i.test(String(artifact?.name || '')) || artifact?.mimeType === 'application/zip'
+  );
+}
+
+export function shouldAttemptDeliverableVerification(contract, verification) {
+  return !contract?.archiveRequired || Boolean(verification?.archiveCandidateFound);
+}
+
+export function formatVerifiedArchiveResponse(verification, objective = '') {
+  const archive = verification?.archive;
+  if (!archive) {
+    return 'The requested project was verified, but its final ZIP could not be identified for delivery.';
+  }
+
+  const entries = archive.zip?.entries || [];
+  const fileList = entries.length
+    ? entries.map((entry) => `\`${entry.name}\``).join(', ')
+    : `${archive.zip?.fileCount || 0} project files`;
+  const checkLabels = {
+    htmlDocument: 'HTML structure',
+    responsiveCss: 'responsive CSS',
+    keyboardFocusStyles: 'keyboard focus styles',
+    interactiveJavaScript: 'interactive JavaScript',
+    errorHandling: 'JavaScript error handling',
+    readme: 'README',
+  };
+  const passedChecks = Object.entries(verification.qualityChecks || {})
+    .filter(([, passed]) => passed)
+    .map(([name]) => checkLabels[name] || name);
+  const summary = String(objective || '').trim();
+
+  return [
+    summary ? `Completed: ${summary}` : 'The requested project is complete.',
+    `**ZIP:** \`${archive.name}\` (${archive.zip?.fileCount || entries.length} files).`,
+    `**Included:** ${fileList}.`,
+    `**Verification:** ZIP integrity passed${
+      passedChecks.length ? `; ${passedChecks.join(', ')} checks passed` : ''
+    }.`,
+    'Download the ZIP attachment in this conversation.',
+  ].join('\n\n');
+}
+
 function crc32(buffer) {
   let crc = 0xffffffff;
   for (const byte of buffer) {

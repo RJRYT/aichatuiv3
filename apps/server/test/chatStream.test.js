@@ -34,43 +34,41 @@ test('chat event stream parses complete events and requires a terminal event', a
   );
 });
 
-test('hidden reasoning traffic times out until a visible event arrives', async () => {
+test('model heartbeats keep a long reasoning turn alive until visible output arrives', async () => {
   let interval;
+  let responseTimer;
   const response = new Response(
     new ReadableStream({
       start(controller) {
+        const encoder = new TextEncoder();
         interval = setInterval(
           () =>
-            controller.enqueue(
-              new TextEncoder().encode(
-                'data: {"choices":[{"delta":{"reasoning_content":"hidden"}}]}\n\n'
-              )
-            ),
-          2
+            controller.enqueue(encoder.encode('data: {"type":"heartbeat","phase":"model"}\n\n')),
+          10
         );
+        responseTimer = setTimeout(() => {
+          clearInterval(interval);
+          controller.enqueue(encoder.encode('data: {"type":"chunk","content":"Ready"}\n\n'));
+          controller.enqueue(encoder.encode('data: {"type":"done"}\n\n'));
+          controller.close();
+        }, 70);
       },
       cancel() {
         clearInterval(interval);
+        clearTimeout(responseTimer);
       },
     }),
     { status: 200 }
   );
-  await assert.rejects(
-    async () => {
-      for await (const _event of readChatEventStream(response, {
-        firstEventTimeoutMs: 30,
-        idleTimeoutMs: 100,
-        turnTimeoutMs: 500,
-      })) {
-        // Hidden reasoning is not a user-visible SSE event.
-      }
-    },
-    (error) => {
-      assert.equal(error.code, 'CHAT_FIRST_EVENT_TIMEOUT');
-      assert.match(error.message, /did not start responding/);
-      return true;
-    }
-  );
+  const events = [];
+  for await (const event of readChatEventStream(response, {
+    idleTimeoutMs: 100,
+    turnTimeoutMs: 500,
+  }))
+    events.push(event);
+  assert.ok(events.some((event) => event.type === 'heartbeat'));
+  assert.ok(events.some((event) => event.type === 'chunk' && event.content === 'Ready'));
+  assert.ok(events.some((event) => event.type === 'done'));
 });
 
 test('chat event stream reports an incomplete server response', async () => {

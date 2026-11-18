@@ -1,4 +1,3 @@
-const ACTIONABLE_EVENT_TYPES = new Set(['chunk', 'final_content', 'tool_start', 'agent_event']);
 const TERMINAL_EVENT_TYPES = new Set(['done', 'error', 'stopped']);
 
 export class ChatStreamError extends Error {
@@ -14,8 +13,6 @@ export function chatErrorMessage(error, fallback = 'The server could not complet
   if (error?.name === 'AbortError') return 'Generation stopped.';
   if (error?.code === 'CHAT_STREAM_IDLE_TIMEOUT')
     return 'The server stopped sending updates. Please retry.';
-  if (error?.code === 'CHAT_FIRST_EVENT_TIMEOUT')
-    return 'The server did not start responding in time. Please retry.';
   if (error?.code === 'CHAT_CONNECT_TIMEOUT')
     return 'The server did not start the response in time. Check your connection and retry.';
   if (error?.code === 'CHAT_STREAM_INCOMPLETE')
@@ -46,13 +43,7 @@ export async function fetchChatStream(url, options, controller, timeoutMs = 110_
 
 export async function* readChatEventStream(
   response,
-  {
-    firstEventTimeoutMs = 110_000,
-    idleTimeoutMs = 100_000,
-    turnTimeoutMs = 16 * 60_000,
-    now = Date.now,
-    signal,
-  } = {}
+  { idleTimeoutMs = 100_000, turnTimeoutMs = 16 * 60_000, now = Date.now, signal } = {}
 ) {
   if (!response?.body?.getReader)
     throw new ChatStreamError('The server returned an empty response stream.', {
@@ -63,7 +54,6 @@ export async function* readChatEventStream(
   const decoder = new TextDecoder();
   const startedAt = now();
   let lastDataAt = startedAt;
-  let hasActionableEvent = false;
   let isTerminal = false;
   let buffer = '';
 
@@ -89,22 +79,14 @@ export async function* readChatEventStream(
       const currentTime = now();
       const elapsedMs = currentTime - startedAt;
       const idleRemainingMs = idleTimeoutMs - (currentTime - lastDataAt);
-      const firstEventRemainingMs = hasActionableEvent ? Infinity : firstEventTimeoutMs - elapsedMs;
       const turnRemainingMs = turnTimeoutMs - elapsedMs;
-      const timeoutMs = Math.min(idleRemainingMs, firstEventRemainingMs, turnRemainingMs);
+      const timeoutMs = Math.min(idleRemainingMs, turnRemainingMs);
       if (timeoutMs <= 0) {
-        const code =
-          turnRemainingMs <= 0
-            ? 'CHAT_STREAM_TURN_TIMEOUT'
-            : idleRemainingMs <= 0
-              ? 'CHAT_STREAM_IDLE_TIMEOUT'
-              : 'CHAT_FIRST_EVENT_TIMEOUT';
+        const code = turnRemainingMs <= 0 ? 'CHAT_STREAM_TURN_TIMEOUT' : 'CHAT_STREAM_IDLE_TIMEOUT';
         const message =
           code === 'CHAT_STREAM_TURN_TIMEOUT'
             ? 'The response exceeded the client time limit. Please retry.'
-            : code === 'CHAT_STREAM_IDLE_TIMEOUT'
-              ? 'The server stopped sending updates. Please retry.'
-              : 'The server did not start responding in time. Please retry.';
+            : 'The server stopped sending updates. Please retry.';
         throw new ChatStreamError(message, { code });
       }
 
@@ -112,17 +94,13 @@ export async function* readChatEventStream(
       const timeout = new Promise((_, reject) => {
         timeoutId = setTimeout(() => {
           const code =
-            turnRemainingMs <= idleRemainingMs && turnRemainingMs <= firstEventRemainingMs
+            turnRemainingMs <= idleRemainingMs
               ? 'CHAT_STREAM_TURN_TIMEOUT'
-              : idleRemainingMs <= firstEventRemainingMs
-                ? 'CHAT_STREAM_IDLE_TIMEOUT'
-                : 'CHAT_FIRST_EVENT_TIMEOUT';
+              : 'CHAT_STREAM_IDLE_TIMEOUT';
           const message =
             code === 'CHAT_STREAM_TURN_TIMEOUT'
               ? 'The response exceeded the client time limit. Please retry.'
-              : code === 'CHAT_STREAM_IDLE_TIMEOUT'
-                ? 'The server stopped sending updates. Please retry.'
-                : 'The server did not start responding in time. Please retry.';
+              : 'The server stopped sending updates. Please retry.';
           reject(new ChatStreamError(message, { code }));
         }, timeoutMs);
       });
@@ -152,7 +130,6 @@ export async function* readChatEventStream(
       for (const block of blocks) {
         const event = parseBlock(block);
         if (!event) continue;
-        if (ACTIONABLE_EVENT_TYPES.has(event.type)) hasActionableEvent = true;
         if (TERMINAL_EVENT_TYPES.has(event.type)) isTerminal = true;
         yield event;
       }
@@ -160,7 +137,6 @@ export async function* readChatEventStream(
         if (buffer.trim()) {
           const event = parseBlock(buffer);
           if (event) {
-            if (ACTIONABLE_EVENT_TYPES.has(event.type)) hasActionableEvent = true;
             if (TERMINAL_EVENT_TYPES.has(event.type)) isTerminal = true;
             yield event;
           }
