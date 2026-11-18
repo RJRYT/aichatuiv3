@@ -16,7 +16,7 @@ function extractLatestUserText(messages = []) {
 export function detectDeliverableContract(messages = []) {
   const text = extractLatestUserText(messages);
   const action =
-    /\b(build|create|make|develop|implement|generate|produce|prepare|download|fetch|export|convert|package)\b/i.test(
+    /\b(build|create|make|develop|implement|generate|produce|prepare|download|fetch|export|convert|package|give|provide|send|attach|deliver)\b/i.test(
       text
     );
   const target =
@@ -101,6 +101,28 @@ export function formatVerifiedArchiveResponse(verification, objective = '') {
     }.`,
     'Download the ZIP attachment in this conversation.',
   ].join('\n\n');
+}
+
+export function findArchiveDuplicateArtifactIds(artifacts = [], archiveEntries = []) {
+  const archivePaths = new Set(
+    archiveEntries.map((entry) => String(entry?.name || '').replaceAll('\\', '/'))
+  );
+  return artifacts
+    .filter(
+      (artifact) =>
+        artifact?.id &&
+        artifact?.relativePath &&
+        !/\.zip$/i.test(String(artifact.name || '')) &&
+        archivePaths.has(String(artifact.relativePath).replaceAll('\\', '/'))
+    )
+    .map((artifact) => String(artifact.id));
+}
+
+export function stripAttachmentMarkers(text = '') {
+  return String(text)
+    .replace(/<attachment>\s*[^<]*?\s*<\/attachment>/gi, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function crc32(buffer) {

@@ -657,27 +657,23 @@ function toolUsageSentence(event = {}) {
   const running = event.status === 'running';
   let sentence = '';
   switch (event.name) {
-    case 'execute_python':
-      sentence = context
-        ? `${running ? 'Running' : 'Ran'} Python to ${String(context).replace(/[.!?]+$/, '')}.`
-        : `${running ? 'Running' : 'Ran'} a Python operation.`;
-      if (args.task_id || args.task_title)
-        sentence += ` ${args.task_id ? `Task ${args.task_id}` : 'Task'}${args.task_title ? ` — ${quote(args.task_title, 100)}` : ''}.`;
-      if (args.task_description) sentence += ` Scope: ${quote(args.task_description, 150)}.`;
-      if (args.task_note) sentence += ` Progress: ${quote(args.task_note, 120)}.`;
-      if (args.objective) sentence += ` Project objective: ${quote(args.objective, 130)}.`;
+    case 'execute_python': {
+      const target = args.task_title || context || 'the requested step';
+      sentence = `${running ? 'Running' : 'Ran'} Python for ${quote(target, 110)}.`;
+      if (args.task_id) sentence += ` Task ${args.task_id}.`;
       if (Number(args.code_bytes) > 0)
-        sentence += ` Executed ${Number(args.code_bytes).toLocaleString()} bytes of Python code.`;
+        sentence += ` ${Number(args.code_bytes).toLocaleString()} bytes.`;
       if (Array.isArray(result.artifacts) && result.artifacts.length) {
         const archives = result.artifacts.filter((file) => /\.zip$/i.test(String(file.name || '')));
         const delivered = archives.length ? archives : result.artifacts;
-        sentence += ` Created ${delivered.length} file${delivered.length === 1 ? '' : 's'}: ${delivered
+        sentence += ` Created ${delivered.length === 1 ? '' : `${delivered.length} `}file${delivered.length === 1 ? '' : 's'}: ${delivered
           .map((file) => file.name)
           .filter(Boolean)
-          .slice(0, 4)
+          .slice(0, 2)
           .join(', ')}.`;
       } else if (result.status) sentence += ` Execution status: ${result.status}.`;
       break;
+    }
     case 'create_task_plan': {
       const objective = args.objective || result.plan?.objective;
       const count = Array.isArray(args.tasks)

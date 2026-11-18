@@ -2,10 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   detectDeliverableContract,
+  findArchiveDuplicateArtifactIds,
   formatVerifiedArchiveResponse,
   hasArchiveCandidate,
   inspectZipBuffer,
   assessWebsiteQuality,
+  stripAttachmentMarkers,
   shouldAttemptDeliverableVerification,
 } from '../src/services/deliverablePolicy.js';
 import { createTaskPlan } from '../src/services/agentPlanning.js';
@@ -40,6 +42,15 @@ test('requires a single ZIP deliverable for multi-file project requests without 
     { role: 'user', content: 'Create a single Python script to rename my photos.' },
   ]);
   assert.equal(singleScript.archiveRequired, false);
+});
+
+test('recognizes requests to provide an existing ZIP as deliverable requests', () => {
+  const contract = detectDeliverableContract([
+    { role: 'user', content: 'hyy, give me the zip man.' },
+  ]);
+  assert.equal(contract.archiveRequired, true);
+  assert.equal(contract.requiresPlan, true);
+  assert.equal(contract.executionTool, 'execute_python');
 });
 
 test('does not classify ordinary explanations as project deliverables', () => {
@@ -97,6 +108,28 @@ test('formats a successful ZIP response with the verified manifest and quality c
     /ZIP integrity passed; HTML structure, responsive CSS, README checks passed/
   );
   assert.match(response, /Download the ZIP attachment/);
+});
+
+test('matches only source artifacts whose exact relative paths are present in the ZIP', () => {
+  assert.deepEqual(
+    findArchiveDuplicateArtifactIds(
+      [
+        { id: 'same-path', name: 'styles.css', relativePath: 'budget-tracker/styles.css' },
+        { id: 'other-chat', name: 'styles.css', relativePath: 'other-project/styles.css' },
+        { id: 'archive', name: 'budget-tracker.zip', relativePath: 'budget-tracker.zip' },
+        { name: 'missing-id', relativePath: 'budget-tracker/index.html' },
+      ],
+      [{ name: 'budget-tracker/styles.css' }, { name: 'budget-tracker/index.html' }]
+    ),
+    ['same-path']
+  );
+});
+
+test('removes model-authored attachment markup from user-facing text', () => {
+  assert.equal(
+    stripAttachmentMarkers('The ZIP is ready.\n\n<attachment>budget-tracker.zip</attachment>'),
+    'The ZIP is ready.'
+  );
 });
 
 test('deliverable plans require at least five meaningful tasks', () => {

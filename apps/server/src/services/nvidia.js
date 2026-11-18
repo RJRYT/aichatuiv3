@@ -8,12 +8,14 @@ import {
 import {
   assessWebsiteQuality,
   detectDeliverableContract,
+  findArchiveDuplicateArtifactIds,
   formatVerifiedArchiveResponse,
   hasArchiveCandidate,
   inspectZipBuffer,
+  stripAttachmentMarkers,
   shouldAttemptDeliverableVerification,
 } from './deliverablePolicy.js';
-import { getArtifact, listArtifacts } from './interpreter/artifactStore.js';
+import { deleteArtifacts, getArtifact, listArtifacts } from './interpreter/artifactStore.js';
 import { buildSystemPrompt } from './systemPrompt.js';
 import { getToolDefinitions, runTool } from './tools.js';
 
@@ -53,8 +55,10 @@ project and README into one ZIP even if the user did not explicitly say "zip". R
 inspect its entries, and verify it is readable and non-empty. Report a concise file manifest and check
 results in stdout so the assistant can accurately communicate the result. The user should receive the
 final ZIP as the single chat deliverable, not separate source-file attachments or code blocks. Do not
-claim browser testing unless a browser test actually ran. Do not claim production readiness without
-evidence. The backend independently checks the requested artifact before accepting completion.`;
+write literal <attachment> tags in your response; the application attaches verified archives
+automatically. Do not claim browser testing unless a browser test actually ran. Do not claim
+production readiness without evidence. The backend independently checks the requested artifact before
+accepting completion.`;
 
 async function verifyDeliverableArtifacts(
   result,
@@ -155,6 +159,23 @@ async function verifyDeliverableArtifacts(
     : contract.website
       ? qualityPassed
       : verified.length > 0;
+  if (valid && contract.archiveRequired && archive && chatId) {
+    try {
+      const library = await listArtifacts(userId, { chatId, limit: 100 });
+      const duplicateIds = findArchiveDuplicateArtifactIds(
+        library.files || [],
+        archive.zip.entries
+      );
+      if (duplicateIds.length) {
+        await deleteArtifacts(duplicateIds, userId);
+      }
+    } catch (error) {
+      log.warn('Could not remove source files already included in the verified ZIP', {
+        chatId,
+        error: error.message,
+      });
+    }
+  }
   return {
     valid,
     verified,
@@ -986,7 +1007,7 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
         finalText = `The requested deliverable was generated and verified. Available file${names.length === 1 ? '' : 's'}: ${names.join(', ')}. Use the generated-file controls in this conversation to access them.`;
       }
     }
-    finalText = finalText.replace(
+    finalText = stripAttachmentMarkers(finalText).replace(
       /\/?api\/interpreter\/artifacts\/[a-zA-Z0-9_-]+/g,
       '[use the generated-file controls in this conversation]'
     );
