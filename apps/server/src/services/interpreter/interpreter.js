@@ -22,6 +22,7 @@ export async function executePython(input, userId, options = {}) {
       executionId,
       chatId: options.chatId || chatId,
       signal: options.signal,
+      archiveOnly: options.archiveOnly,
     });
   } finally {
     release();

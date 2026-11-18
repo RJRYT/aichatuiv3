@@ -53,8 +53,12 @@ function cleanMessages(messages = []) {
         return attachment;
       });
     if (message.usage) safe.usage = message.usage;
-    if (message.durationMs != null) safe.durationMs = Number(message.durationMs);
+    if (message.durationMs != null && Number.isFinite(Number(message.durationMs)))
+      safe.durationMs = Math.max(0, Number(message.durationMs));
     if (message.toolEvents) safe.toolEvents = message.toolEvents;
+    if (Array.isArray(message.agentEvents)) safe.agentEvents = message.agentEvents;
+    if (message.startedAt) safe.startedAt = message.startedAt;
+    if (message.completedAt) safe.completedAt = message.completedAt;
     const agentPlan = sanitizeAgentPlan(message.agentPlan);
     if (agentPlan) safe.agentPlan = agentPlan;
     if (message.error) safe.error = String(message.error).slice(0, 2000);
@@ -62,9 +66,16 @@ function cleanMessages(messages = []) {
       safe.versions = message.versions.slice(0, 20).map((v) => ({
         content: String(v.content || '').slice(0, 120000),
         toolEvents: Array.isArray(v.toolEvents) ? v.toolEvents : [],
+        agentEvents: Array.isArray(v.agentEvents) ? v.agentEvents : [],
         ...(sanitizeAgentPlan(v.agentPlan) ? { agentPlan: sanitizeAgentPlan(v.agentPlan) } : {}),
         usage: v.usage,
+        startedAt: v.startedAt,
         createdAt: v.createdAt,
+        completedAt: v.completedAt,
+        durationMs:
+          v.durationMs != null && Number.isFinite(Number(v.durationMs))
+            ? Math.max(0, Number(v.durationMs))
+            : undefined,
       }));
     if (Number.isInteger(message.activeVersion)) safe.activeVersion = message.activeVersion;
     if (message.createdAt) safe.createdAt = message.createdAt;
@@ -111,7 +122,9 @@ function messageText(content) {
 }
 
 export async function searchChatContexts(sessionId, query, { excludeChatId, limit = 5 } = {}) {
-  const search = String(query || '').trim().slice(0, 120);
+  const search = String(query || '')
+    .trim()
+    .slice(0, 120);
   if (!sessionId || search.length < 2) return [];
   const numericLimit = Number(limit);
   const resultLimit = Number.isFinite(numericLimit)
@@ -147,8 +160,10 @@ export async function searchChatContexts(sessionId, query, { excludeChatId, limi
       (chat) =>
         chat &&
         (matcher.test(String(chat.title || '')) ||
-          [...(chat.messages || []), ...(chat.branches || []).flatMap((branch) => branch.messages || [])]
-            .some((message) => matcher.test(messageText(message.content))))
+          [
+            ...(chat.messages || []),
+            ...(chat.branches || []).flatMap((branch) => branch.messages || []),
+          ].some((message) => matcher.test(messageText(message.content))))
     );
   }
 
@@ -184,14 +199,15 @@ export async function searchChatContexts(sessionId, query, { excludeChatId, limi
     const selected =
       titleMatched && !matchingContext?.matchingIndices.size
         ? matchingContext?.relevantMessages.slice(-6) || []
-        : matchingContext?.relevantMessages.filter(({ index, message }) =>
-            matchingContext.matchingIndices.has(index) ||
-            matchingContext.relevantMessages.some(
-              ({ index: matchIndex, message: matchingMessage }) =>
-                matchingContext.matchingIndices.has(matchIndex) &&
-                Math.abs(matchIndex - index) === 1 &&
-                matchingMessage.role !== message.role
-            )
+        : matchingContext?.relevantMessages.filter(
+            ({ index, message }) =>
+              matchingContext.matchingIndices.has(index) ||
+              matchingContext.relevantMessages.some(
+                ({ index: matchIndex, message: matchingMessage }) =>
+                  matchingContext.matchingIndices.has(matchIndex) &&
+                  Math.abs(matchIndex - index) === 1 &&
+                  matchingMessage.role !== message.role
+              )
           ) || [];
     results.push({
       chatId: String(chat._id),

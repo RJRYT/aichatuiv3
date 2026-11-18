@@ -21,6 +21,24 @@ test('detects a website build request with ZIP delivery', () => {
   );
 });
 
+test('requires a single ZIP deliverable for multi-file project requests without an explicit ZIP request', () => {
+  const project = detectDeliverableContract([
+    { role: 'user', content: 'Build a task manager app for me.' },
+  ]);
+  assert.equal(project.archiveRequired, true);
+  assert.equal(project.requiresPlan, true);
+
+  const multiFile = detectDeliverableContract([
+    { role: 'user', content: 'Create a multi-file Python utility.' },
+  ]);
+  assert.equal(multiFile.archiveRequired, true);
+
+  const singleScript = detectDeliverableContract([
+    { role: 'user', content: 'Create a single Python script to rename my photos.' },
+  ]);
+  assert.equal(singleScript.archiveRequired, false);
+});
+
 test('does not classify ordinary explanations as project deliverables', () => {
   assert.equal(
     detectDeliverableContract([{ role: 'user', content: 'Explain how localStorage works.' }]),

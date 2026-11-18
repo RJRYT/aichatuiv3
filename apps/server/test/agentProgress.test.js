@@ -5,6 +5,7 @@ import {
   advancePlanAfterExecution,
   startNextPlanTask,
 } from '../src/services/agentPlanProgress.js';
+import { countsTowardExecutionLimit, normalizeActivePlan } from '../src/services/nvidia.js';
 
 function createState() {
   return {
@@ -82,4 +83,24 @@ test('failed final verification never marks the complete plan as finished', () =
     state.plan.tasks.every((task) => ['completed', 'skipped'].includes(task.status)),
     false
   );
+});
+
+test('completed plans are not normalized as active plans for later chat turns', () => {
+  const completed = createState().plan;
+  completed.tasks.forEach((task) => {
+    task.status = 'completed';
+  });
+  assert.equal(normalizeActivePlan(completed), null);
+
+  const active = createState().plan;
+  active.tasks[0].status = 'completed';
+  assert.equal(normalizeActivePlan(active).objective, active.objective);
+});
+
+test('plan creation, plan status, and progress updates do not consume execution-call budget', () => {
+  assert.equal(countsTowardExecutionLimit('create_task_plan'), false);
+  assert.equal(countsTowardExecutionLimit('update_task_status'), false);
+  assert.equal(countsTowardExecutionLimit('report_progress'), false);
+  assert.equal(countsTowardExecutionLimit('execute_python'), true);
+  assert.equal(countsTowardExecutionLimit('web_search'), true);
 });

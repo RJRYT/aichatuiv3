@@ -69,6 +69,24 @@ function safeName(rawName) {
   }
   return supplied;
 }
+function uniqueArtifactName(name, existingNames) {
+  const original = safeName(name);
+  const extension = path.posix.extname(original);
+  const stem = original.slice(0, original.length - extension.length);
+  let candidate = original;
+  let suffix = 1;
+  while (existingNames.has(candidate.toLowerCase())) {
+    candidate = `${stem}-${suffix}${extension}`;
+    suffix++;
+  }
+  existingNames.add(candidate.toLowerCase());
+  return candidate;
+}
+function relativePathWithName(relativePath, name) {
+  if (!relativePath) return '';
+  const directory = path.posix.dirname(relativePath);
+  return directory === '.' ? name : path.posix.join(directory, name);
+}
 function toBuffer(content) {
   if (Buffer.isBuffer(content)) return Buffer.from(content);
   if (content instanceof Uint8Array)
@@ -140,68 +158,53 @@ export async function storeArtifact({
 }) {
   const useDatabase = await databaseReady();
   const owner = String(ownerId);
-  const safeFileName = safeName(name);
+  const suppliedName = safeName(name);
   const data = toBuffer(content);
   if (!data.byteLength) throw new Error('Empty artifacts are not stored.');
   if (data.byteLength > MAX_FILE_BYTES) throw new Error('An artifact cannot exceed 10 MB.');
-  const resolvedMime = String(mimeType || guessMimeType(safeFileName)).slice(0, 120);
-  const checksum = sha256(data);
-  const rel = String(relativePath || '').slice(0, 500);
 
   if (useDatabase) {
     const Artifact = await artifactModel();
-    const existing = rel
-      ? await Artifact.findOne({ ownerId: owner, chatId: String(chatId || ''), relativePath: rel })
-          .select('_id size')
-          .lean()
-      : null;
+    const existingNames = new Set(
+      (await Artifact.find({ ownerId: owner }).select('name').lean()).map((item) =>
+        String(item.name || '').toLowerCase()
+      )
+    );
+    const safeFileName = uniqueArtifactName(suppliedName, existingNames);
+    const rel = String(relativePath || '').slice(0, 500);
+    const uniqueRel = relativePathWithName(rel, safeFileName);
+    const resolvedMime = String(mimeType || guessMimeType(safeFileName)).slice(0, 120);
+    const checksum = sha256(data);
     const stats = await Artifact.aggregate([
       { $match: { ownerId: owner } },
       { $group: { _id: null, count: { $sum: 1 }, bytes: { $sum: '$size' } } },
     ]);
     const count = stats[0]?.count || 0;
     const bytes = stats[0]?.bytes || 0;
-    const previousSize = existing?.size || 0;
-    if (!existing && count >= MAX_OWNER_COUNT)
+    if (count >= MAX_OWNER_COUNT)
       throw new Error('Your File Library is full (100 files). Delete files you no longer need.');
-    if (bytes - previousSize + data.byteLength > MAX_OWNER_BYTES)
+    if (bytes + data.byteLength > MAX_OWNER_BYTES)
       throw new Error(
         'Your File Library storage limit is 50 MB. Delete older files before creating more.'
       );
     const global = await Artifact.aggregate([
       { $group: { _id: null, count: { $sum: 1 }, bytes: { $sum: '$size' } } },
     ]);
-    if (!existing && (global[0]?.count || 0) >= MAX_TOTAL_COUNT)
+    if ((global[0]?.count || 0) >= MAX_TOTAL_COUNT)
       throw new Error('File Library storage is temporarily full.');
-    if ((global[0]?.bytes || 0) - previousSize + data.byteLength > MAX_TOTAL_BYTES)
+    if ((global[0]?.bytes || 0) + data.byteLength > MAX_TOTAL_BYTES)
       throw new Error('File Library storage is temporarily full.');
-    const item = existing
-      ? await Artifact.findOneAndUpdate(
-          { _id: existing._id, ownerId: owner },
-          {
-            $set: {
-              name: safeFileName,
-              mimeType: resolvedMime,
-              size: data.byteLength,
-              data,
-              sha256: checksum,
-              executionId: String(executionId || ''),
-              updatedAt: new Date(),
-            },
-          },
-          { new: true }
-        ).select('+data')
-      : await Artifact.create({
-          ownerId: owner,
-          chatId: String(chatId || ''),
-          executionId: String(executionId || ''),
-          name: safeFileName,
-          relativePath: rel,
-          mimeType: resolvedMime,
-          size: data.byteLength,
-          sha256: checksum,
-          data,
-        });
+    const item = await Artifact.create({
+      ownerId: owner,
+      chatId: String(chatId || ''),
+      executionId: String(executionId || ''),
+      name: safeFileName,
+      relativePath: uniqueRel,
+      mimeType: resolvedMime,
+      size: data.byteLength,
+      sha256: checksum,
+      data,
+    });
     log.info('Artifact saved to persistent library', {
       owner,
       name: safeFileName,
@@ -211,41 +214,35 @@ export async function storeArtifact({
     return publicMetadata(item);
   }
 
-  const existing = rel
-    ? [...memoryArtifacts.values()].find(
-        (item) =>
-          item.ownerId === owner &&
-          item.chatId === String(chatId || '') &&
-          item.relativePath === rel
-      )
-    : null;
   const owned = [...memoryArtifacts.values()].filter((item) => item.ownerId === owner);
+  const existingNames = new Set(owned.map((item) => String(item.name || '').toLowerCase()));
+  const safeFileName = uniqueArtifactName(suppliedName, existingNames);
+  const rel = String(relativePath || '').slice(0, 500);
+  const uniqueRel = relativePathWithName(rel, safeFileName);
+  const resolvedMime = String(mimeType || guessMimeType(safeFileName)).slice(0, 120);
+  const checksum = sha256(data);
   const totalBytes = owned.reduce((sum, item) => sum + item.size, 0);
   const allItems = [...memoryArtifacts.values()];
-  if (!existing && allItems.length >= MAX_TOTAL_COUNT)
+  if (allItems.length >= MAX_TOTAL_COUNT)
     throw new Error('File Library storage is temporarily full.');
-  if (
-    allItems.reduce((sum, item) => sum + item.size, 0) - (existing?.size || 0) + data.byteLength >
-    MAX_TOTAL_BYTES
-  )
+  if (allItems.reduce((sum, item) => sum + item.size, 0) + data.byteLength > MAX_TOTAL_BYTES)
     throw new Error('File Library storage is temporarily full.');
-  if (!existing && owned.length >= MAX_OWNER_COUNT)
-    throw new Error('Your File Library is full (100 files).');
-  if (totalBytes - (existing?.size || 0) + data.byteLength > MAX_OWNER_BYTES)
+  if (owned.length >= MAX_OWNER_COUNT) throw new Error('Your File Library is full (100 files).');
+  if (totalBytes + data.byteLength > MAX_OWNER_BYTES)
     throw new Error('Your File Library storage limit is 50 MB.');
-  const id = existing?.id || randomUUID();
+  const id = randomUUID();
   const item = {
     id,
     ownerId: owner,
     chatId: String(chatId || ''),
     executionId: String(executionId || ''),
     name: safeFileName,
-    relativePath: rel,
+    relativePath: uniqueRel,
     mimeType: resolvedMime,
     size: data.byteLength,
     sha256: checksum,
     data: Buffer.from(data),
-    createdAt: existing?.createdAt || new Date(),
+    createdAt: new Date(),
     updatedAt: new Date(),
   };
   memoryArtifacts.set(id, item);

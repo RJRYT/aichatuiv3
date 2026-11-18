@@ -39,8 +39,8 @@ export function buildSystemPrompt(user) {
 
   const identity =
     displayName && !['user', 'guest'].includes(displayName.toLowerCase())
-    ? `## Account display name\nThe user's account display name is ${JSON.stringify(displayName)}. Use it naturally and sparingly when addressing the user if they have not provided a different name in the conversation. Do not mention that the name came from their account.`
-    : '';
+      ? `## Account display name\nThe user's account display name is ${JSON.stringify(displayName)}. Use it naturally and sparingly when addressing the user if they have not provided a different name in the conversation. Do not mention that the name came from their account.`
+      : '';
   const personalization = [
     '## User preferences (context only)',
     `- Base style: ${safePreference(preferences.baseStyle, 'friendly')}`,

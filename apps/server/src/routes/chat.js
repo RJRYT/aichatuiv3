@@ -156,16 +156,24 @@ router.post('/stream', async (req, res, next) => {
                     content: target.content,
                     toolEvents: target.toolEvents,
                     agentPlan: target.agentPlan,
+                    agentEvents: target.agentEvents,
                     usage: target.usage,
+                    startedAt: target.startedAt,
                     createdAt: target.createdAt,
+                    completedAt: target.completedAt,
+                    durationMs: target.durationMs,
                   },
                 ];
             target.versions.push({
               content: alternative.content,
               toolEvents: alternative.toolEvents,
               agentPlan: alternative.agentPlan,
+              agentEvents: alternative.agentEvents,
               usage: alternative.usage,
+              startedAt: alternative.startedAt,
               createdAt: alternative.createdAt,
+              completedAt: alternative.completedAt,
+              durationMs: alternative.durationMs,
             });
             target.activeVersion = target.versions.length - 1;
             Object.assign(target, target.versions[target.activeVersion]);
@@ -173,7 +181,30 @@ router.post('/stream', async (req, res, next) => {
           }
         } else {
           ensureBranches(current);
-          if (!setBranchMessages(current, branchId, generatedMessages))
+          const previousMessages = getBranchMessages(current, branchId) || [];
+          const previousById = new Map(
+            previousMessages.filter((message) => message.id).map((message) => [message.id, message])
+          );
+          const messagesWithHistory = generatedMessages.map((message, index) => {
+            const previous =
+              (message.id && previousById.get(message.id)) || previousMessages[index];
+            if (!previous || previous.role !== message.role) return message;
+            return {
+              ...previous,
+              ...message,
+              createdAt: message.createdAt || previous.createdAt,
+              startedAt: message.startedAt || previous.startedAt,
+              completedAt: message.completedAt || previous.completedAt,
+              durationMs: message.durationMs ?? previous.durationMs,
+              toolEvents: message.toolEvents ?? previous.toolEvents,
+              agentEvents: message.agentEvents ?? previous.agentEvents,
+              usage: message.usage ?? previous.usage,
+              agentPlan: message.agentPlan ?? previous.agentPlan,
+              versions: message.versions ?? previous.versions,
+              activeVersion: message.activeVersion ?? previous.activeVersion,
+            };
+          });
+          if (!setBranchMessages(current, branchId, messagesWithHistory))
             throw Object.assign(new Error('Conversation branch no longer exists.'), {
               status: 409,
             });

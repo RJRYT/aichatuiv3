@@ -34,9 +34,15 @@ export function detectDeliverableContract(messages = []) {
       text
     ) || imageDownload;
   if (!(action && (target || fileIntent || imageGeneration))) return null;
-  const archiveRequired =
-    /\b(zip|zip\s+(?:it|all|the)|archive|package\s+(?:it|the\s+project))\b/i.test(text);
   const website = /\b(website|web\s?app|webpage|site|dashboard)\b/i.test(text);
+  const multiFileProject =
+    /\b(multi[- ]file|multiple files|several files|full project)\b/i.test(text) ||
+    /\b(website|web\s?app|webpage|site|dashboard|application|app|project|game|template)\b/i.test(
+      text
+    );
+  const archiveRequired =
+    /\b(zip|zip\s+(?:it|all|the)|archive|package\s+(?:it|the\s+project))\b/i.test(text) ||
+    multiFileProject;
   const requiresPlan = Boolean(
     archiveRequired ||
     website ||

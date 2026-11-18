@@ -28,6 +28,8 @@ test('system prompt includes private runtime context and forbids disclosing it',
   assert.match(prompt, /Vercel Sandbox Firecracker microVMs/);
   assert.match(prompt, /Never reveal or reconstruct private deployment details/);
   assert.match(prompt, /artifact URLs/);
+  assert.match(prompt, /multi-file project/i);
+  assert.match(prompt, /single chat deliverable/i);
   assert.match(prompt, /private chain-of-thought/);
   assert.doesNotMatch(prompt, /https?:\/\//);
   assert.doesNotMatch(prompt, /\/api\//);

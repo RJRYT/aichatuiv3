@@ -53,6 +53,7 @@ import {
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { buildChatExport, chatExportFilename } from './chatExport.js';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
 const DEFAULT_PREFERENCES = {
@@ -158,6 +159,11 @@ function dateLabel(value) {
 function titleFallback(text) {
   const value = text.replace(/\s+/g, ' ').trim();
   return value.length > 58 ? `${value.slice(0, 58)}…` : value || 'New chat';
+}
+function latestActivePlan(messages = []) {
+  const plan = [...messages].reverse().find((message) => message.agentPlan)?.agentPlan;
+  if (!plan?.tasks?.length) return null;
+  return plan.tasks.every((task) => ['completed', 'skipped'].includes(task.status)) ? null : plan;
 }
 function readFile(file) {
   return new Promise((resolve, reject) => {
@@ -656,7 +662,9 @@ function toolUsageSentence(event = {}) {
       if (Number(args.code_bytes) > 0)
         sentence += ` Executed ${Number(args.code_bytes).toLocaleString()} bytes of Python code.`;
       if (Array.isArray(result.artifacts) && result.artifacts.length) {
-        sentence += ` Created ${result.artifacts.length} file${result.artifacts.length === 1 ? '' : 's'}: ${result.artifacts
+        const archives = result.artifacts.filter((file) => /\.zip$/i.test(String(file.name || '')));
+        const delivered = archives.length ? archives : result.artifacts;
+        sentence += ` Created ${delivered.length} file${delivered.length === 1 ? '' : 's'}: ${delivered
           .map((file) => file.name)
           .filter(Boolean)
           .slice(0, 4)
@@ -924,7 +932,7 @@ function AgentPlanDock({ plan, onSave, disabled = false }) {
     }
   };
   return (
-    <details className="agent-plan-dock">
+    <details className="agent-plan-dock" open>
       <summary>
         <ListChecks size={14} />
         <span>Execution plan</span>
@@ -1042,7 +1050,8 @@ function LiveProgress({ progress, now, toolEvents = [] }) {
           aria-label={`Working ${elapsed(progress.startedAt)} · Last worked ${elapsed(progress.lastActivityAt)} ago`}
         >
           <span className="live-progress-timing-full">
-            Working {elapsed(progress.startedAt)} · Last worked {elapsed(progress.lastActivityAt)} ago
+            Working {elapsed(progress.startedAt)} · Last worked {elapsed(progress.lastActivityAt)}{' '}
+            ago
           </span>
           <span className="live-progress-timing-compact">
             <Clock size={10} aria-hidden="true" />
@@ -1190,9 +1199,11 @@ function Message({
                   .map((file) => [file.id, file])
               ).values(),
             ];
-            return generated.length ? (
+            const archives = generated.filter((file) => /\.zip$/i.test(String(file.name || '')));
+            const delivered = archives.length ? archives : generated;
+            return delivered.length ? (
               <div className="message-inline-artifacts">
-                {generated.map((file) => (
+                {delivered.map((file) => (
                   <InlineArtifact key={file.id} file={file} />
                 ))}
               </div>
@@ -2336,10 +2347,7 @@ export default function App() {
     loadStartedRef = useRef(false),
     authFeedbackRef = useRef(null);
   const activeChat = useMemo(() => chats.find((c) => c._id === activeId), [chats, activeId]);
-  const activePlan = useMemo(
-    () => [...messages].reverse().find((message) => message.agentPlan)?.agentPlan || null,
-    [messages]
-  );
+  const activePlan = useMemo(() => latestActivePlan(messages), [messages]);
   const setFileError = (message) =>
     setToast(message ? { id: Date.now(), message: String(message), type: 'error' } : null);
   const starterSuggestions = useMemo(() => {
@@ -3021,12 +3029,12 @@ export default function App() {
           expectedRevision: activeChat?.revision || 0,
           preserveExistingMessageId: message.id,
           thinkingEnabled: thinking,
-          activePlan:
-            [...messages.slice(0, index)].reverse().find((item) => item.agentPlan)?.agentPlan ||
-            null,
+          activePlan: latestActivePlan(messages.slice(0, index)),
           messages: messages.slice(0, index).map((m) => ({
+            ...(m.id ? { id: m.id } : {}),
             role: m.role,
             content: m.apiContent || m.content,
+            ...(m.createdAt ? { createdAt: m.createdAt } : {}),
             ...(m.attachments?.length ? { attachments: m.attachments } : {}),
           })),
         }),
@@ -3052,6 +3060,11 @@ export default function App() {
           if (!line) continue;
           const event = JSON.parse(line.slice(5).trim());
           if (event.type === 'status') setStatus(event.status || 'Working');
+          if (event.type === 'heartbeat' && thinking)
+            setLiveProgress((current) => ({
+              ...(current || { startedAt: Date.now(), lastActivityAt: Date.now() }),
+              message: event.message || 'The model is still working; waiting for its response.',
+            }));
           if (event.type === 'agent_event') {
             const item = event.event || {};
             const progressMessage = item.type === 'progress_update' ? item.message : '';
@@ -3097,7 +3110,12 @@ export default function App() {
           if (event.type === 'tool_start') {
             regenerationToolEvents = [
               ...regenerationToolEvents,
-              { name: event.name, status: 'running', arguments: event.arguments || {} },
+              {
+                name: event.name,
+                status: 'running',
+                arguments: event.arguments || {},
+                startedAt: event.startedAt,
+              },
             ];
             setMessages((current) =>
               current.map((item) =>
@@ -3114,7 +3132,15 @@ export default function App() {
             if (lastIndex >= 0)
               regenerationToolEvents = regenerationToolEvents.map((item, itemIndex) =>
                 itemIndex === lastIndex
-                  ? { ...item, status: event.status, result: event.result, error: event.error }
+                  ? {
+                      ...item,
+                      status: event.status,
+                      result: event.result,
+                      error: event.error,
+                      startedAt: event.startedAt || item.startedAt,
+                      completedAt: event.completedAt,
+                      durationMs: event.durationMs,
+                    }
                   : item
               );
             setMessages((current) =>
@@ -3194,17 +3220,17 @@ export default function App() {
     }
   };
   const exportChat = () => {
+    const exportedAt = new Date().toISOString();
     const blob = new Blob(
       [
         JSON.stringify(
-          {
+          buildChatExport({
             title: activeChat?.title || 'New chat',
-            messages: messages.map((m) => ({
-              role: m.role,
-              content: textOf(m.content),
-              toolEvents: m.toolEvents,
-            })),
-          },
+            createdAt: activeChat?.createdAt || messages[0]?.createdAt || null,
+            updatedAt: activeChat?.updatedAt || messages.at(-1)?.completedAt || null,
+            messages,
+            exportedAt,
+          }),
           null,
           2
         ),
@@ -3214,7 +3240,7 @@ export default function App() {
     const url = URL.createObjectURL(blob),
       a = document.createElement('a');
     a.href = url;
-    a.download = 'agent-lab-chat.json';
+    a.download = chatExportFilename(activeChat?.title);
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -3342,13 +3368,13 @@ export default function App() {
     const nextMessages =
         options.messages || (options.reuseLastUser ? messages : [...messages, userMessage]),
       titleBefore = chat.title || 'New chat';
-    const continuingPlan =
-      [...nextMessages].reverse().find((message) => message.agentPlan)?.agentPlan || null;
+    const continuingPlan = latestActivePlan(nextMessages);
     if (activeIdRef.current === chat._id) setMessages(nextMessages);
     setInput('');
     setFiles([]);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     const assistantId = crypto.randomUUID(),
+      startedAt = new Date().toISOString(),
       assistant = {
         id: assistantId,
         role: 'assistant',
@@ -3356,7 +3382,8 @@ export default function App() {
         toolEvents: [],
         agentPlan: continuingPlan,
         isStreaming: true,
-        createdAt: new Date().toISOString(),
+        startedAt,
+        createdAt: startedAt,
       };
     if (activeIdRef.current === chat._id) setMessages([...nextMessages, assistant]);
     const controller = new AbortController();
@@ -3407,8 +3434,10 @@ export default function App() {
           thinkingEnabled: thinking,
           activePlan: continuingPlan,
           messages: nextMessages.map((m) => ({
+            ...(m.id ? { id: m.id } : {}),
             role: m.role,
             content: m.apiContent || m.content,
+            ...(m.createdAt ? { createdAt: m.createdAt } : {}),
             ...(m.attachments?.length ? { attachments: m.attachments } : {}),
             ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
           })),
@@ -3443,6 +3472,11 @@ export default function App() {
             continue;
           }
           if (event.type === 'status') setStatus(event.status || 'Working');
+          if (event.type === 'heartbeat' && thinking)
+            setLiveProgress((current) => ({
+              ...(current || { startedAt: Date.now(), lastActivityAt: Date.now() }),
+              message: event.message || 'The model is still working; waiting for its response.',
+            }));
           if (event.type === 'final_content') {
             if (!thinking) setLiveProgress(null);
             output = event.content || '';
@@ -3475,6 +3509,7 @@ export default function App() {
                 name: event.name,
                 status: 'running',
                 arguments: event.arguments,
+                startedAt: event.startedAt,
               },
             ];
             setStatus(`Using ${event.name.replaceAll('_', ' ')}…`);
@@ -3506,6 +3541,9 @@ export default function App() {
                       status: event.status,
                       error: event.error,
                       result: event.result,
+                      startedAt: event.startedAt || x.startedAt,
+                      completedAt: event.completedAt,
+                      durationMs: event.durationMs,
                     }
                   : x
               );
@@ -3525,6 +3563,7 @@ export default function App() {
         ...assistant,
         content: output || '(No text was returned.)',
         isStreaming: false,
+        completedAt: new Date().toISOString(),
         toolEvents: events,
         agentPlan,
         agentEvents,
@@ -3566,6 +3605,7 @@ export default function App() {
       liveAssistant = {
         ...assistant,
         content: output,
+        completedAt: new Date().toISOString(),
         isStreaming: false,
         toolEvents: events,
         agentPlan,

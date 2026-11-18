@@ -64,19 +64,15 @@ router.post('/', async (req, res, next) => {
       let totalArtifactBytes = 0;
       for (const metadata of library.files || []) {
         if (sharedArtifacts.length >= 20)
-          return res
-            .status(413)
-            .json({
-              error:
-                'This conversation has more than 20 generated files. Remove files from this chat before creating a full share.',
-            });
+          return res.status(413).json({
+            error:
+              'This conversation has more than 20 generated files. Remove files from this chat before creating a full share.',
+          });
         if (totalArtifactBytes + Number(metadata.size || 0) > 8 * 1024 * 1024)
-          return res
-            .status(413)
-            .json({
-              error:
-                'Generated files exceed the 8 MB public-share limit. Share a smaller set of files or use individual response snapshots.',
-            });
+          return res.status(413).json({
+            error:
+              'Generated files exceed the 8 MB public-share limit. Share a smaller set of files or use individual response snapshots.',
+          });
         const artifact = await getArtifact(metadata.id, owner(req));
         if (
           !artifact?.data ||

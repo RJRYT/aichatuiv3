@@ -265,14 +265,25 @@ router.post('/:id/messages/:messageId/versions', async (req, res, next) => {
             toolEvents: message.toolEvents,
             agentPlan: message.agentPlan,
             usage: message.usage,
+            startedAt: message.startedAt,
             createdAt: message.createdAt,
+            completedAt: message.completedAt,
+            durationMs: message.durationMs,
+            agentEvents: message.agentEvents,
           },
         ];
     message.versions.push({
       content: String(req.body?.content || '').slice(0, 120000),
       toolEvents: Array.isArray(req.body?.toolEvents) ? req.body.toolEvents : [],
       agentPlan: req.body?.agentPlan,
-      createdAt: new Date(),
+      agentEvents: Array.isArray(req.body?.agentEvents) ? req.body.agentEvents : [],
+      startedAt: req.body?.startedAt,
+      createdAt: req.body?.startedAt || new Date(),
+      completedAt: new Date(),
+      durationMs:
+        req.body?.durationMs != null && Number.isFinite(Number(req.body.durationMs))
+          ? Math.max(0, Number(req.body.durationMs))
+          : undefined,
     });
     message.activeVersion = message.versions.length - 1;
     setBranchMessages(chat, branchId, messages);

@@ -14,6 +14,7 @@ const INPUT_MANIFEST_NAME = '.nemotron-inputs.json';
 const FILE_INDEX_PREFIX = '__NEMOTRON_FILE_INDEX__:';
 const DEPENDENCY_INDEX_PREFIX = '__NEMOTRON_DEPENDENCIES__:';
 const DEFAULT_PACKAGE_INSTALL_TIMEOUT_MS = 180_000;
+const SANDBOX_STOP_TIMEOUT_MS = 15_000;
 
 // Only known, commonly used Python import names are mapped to PyPI projects.
 // Unknown imports are never blindly sent to PyPI (which could install a typo-squatted package).
@@ -163,36 +164,69 @@ async function getSandbox({ userId, chatId, executionId, signal }) {
     resume: true,
     ...(config.region ? { region: config.region } : {}),
   };
-  const sandbox = await Sandbox.getOrCreate(options);
+  const sandbox = await Sandbox.getOrCreate({ ...options, signal });
   if (signal?.aborted) {
     try {
-      await sandbox.stop();
+      await sandbox.stop({ signal: AbortSignal.timeout(SANDBOX_STOP_TIMEOUT_MS) });
     } catch {}
     throw Object.assign(new Error('Sandbox startup was cancelled.'), { name: 'AbortError' });
   }
   try {
-    await sandbox.update({
-      networkPolicy: networkPolicy(config),
-      resources: { vcpus: config.vcpus },
-      timeout: Math.min(
-        config.timeoutMs +
-          (config.packageInstallTimeoutMs || DEFAULT_PACKAGE_INSTALL_TIMEOUT_MS) +
-          60_000,
-        45 * 60 * 1000
-      ),
-    });
+    await sandbox.update(
+      {
+        networkPolicy: networkPolicy(config),
+        resources: { vcpus: config.vcpus },
+        timeout: Math.min(
+          config.timeoutMs +
+            (config.packageInstallTimeoutMs || DEFAULT_PACKAGE_INSTALL_TIMEOUT_MS) +
+            60_000,
+          45 * 60 * 1000
+        ),
+      },
+      { signal }
+    );
     if (signal?.aborted)
       throw Object.assign(new Error('Sandbox startup was cancelled.'), { name: 'AbortError' });
   } catch (error) {
     try {
-      await sandbox.stop();
+      await sandbox.stop({ signal: AbortSignal.timeout(SANDBOX_STOP_TIMEOUT_MS) });
     } catch {}
     throw error;
   }
   return { sandbox, name, config };
 }
 
-async function withSandboxLock(name, callback) {
+function abortError(signal) {
+  return (
+    signal?.reason ||
+    Object.assign(new Error('The operation was cancelled.'), { name: 'AbortError' })
+  );
+}
+
+function waitForSignal(promise, signal) {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(abortError(signal));
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener('abort', onAbort);
+    const onAbort = () => {
+      cleanup();
+      reject(abortError(signal));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    Promise.resolve(promise).then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      }
+    );
+  });
+}
+
+async function withSandboxLock(name, callback, signal) {
   const previous = sandboxLocks.get(name) || Promise.resolve();
   let unlock;
   const gate = new Promise((resolve) => {
@@ -200,12 +234,19 @@ async function withSandboxLock(name, callback) {
   });
   const tail = previous.then(() => gate);
   sandboxLocks.set(name, tail);
-  await previous;
   try {
+    await waitForSignal(previous, signal);
+    if (signal?.aborted) throw abortError(signal);
     return await callback();
   } finally {
     unlock();
-    if (sandboxLocks.get(name) === tail) sandboxLocks.delete(name);
+    if (sandboxLocks.get(name) === tail) {
+      if (signal?.aborted) {
+        void tail.then(() => {
+          if (sandboxLocks.get(name) === tail) sandboxLocks.delete(name);
+        });
+      } else sandboxLocks.delete(name);
+    }
   }
 }
 
@@ -445,6 +486,7 @@ async function collectWorkspaceArtifacts({
   chatId,
   executionId,
   signal,
+  archiveOnly = false,
 }) {
   const indexResult = await sandbox.runCommand({
     cmd: 'python3',
@@ -463,6 +505,10 @@ async function collectWorkspaceArtifacts({
   let totalBytes = 0;
   for (const entry of index.files || []) {
     const relativePath = safeRelativePath(entry.path);
+    if (archiveOnly && relativePath && !/\.zip$/i.test(relativePath)) {
+      known[relativePath] = String(entry.sha256 || '');
+      continue;
+    }
     const size = Number(entry.size);
     if (
       !relativePath ||
@@ -653,6 +699,7 @@ export async function executeWithVercelSandbox({
   chatId = '',
   executionId,
   signal,
+  archiveOnly = false,
   getSandbox: getSandboxOverride = getSandbox,
 }) {
   const id = executionId || randomUUID();
@@ -702,7 +749,7 @@ export async function executeWithVercelSandbox({
   const job = { userId: uid, sandboxName, controller, cancelled: false, command: null };
   const abortFromCaller = () => {
     job.cancelled = true;
-    controller.abort();
+    controller.abort(abortError(signal));
   };
   signal?.addEventListener('abort', abortFromCaller, { once: true });
   active.set(jobKey, job);
@@ -719,118 +766,123 @@ export async function executeWithVercelSandbox({
   let fileWarnings = 0;
   let installedPackages = [];
   try {
-    const result = await withSandboxLock(sandboxName, async () => {
-      if (job.cancelled)
-        throw Object.assign(new Error('Execution cancelled before sandbox startup.'), {
-          name: 'AbortError',
+    const result = await withSandboxLock(
+      sandboxName,
+      async () => {
+        if (job.cancelled)
+          throw Object.assign(new Error('Execution cancelled before sandbox startup.'), {
+            name: 'AbortError',
+          });
+        const created = await getSandboxOverride({
+          userId: uid,
+          chatId: resolvedChatId,
+          executionId: id,
+          signal: controller.signal,
         });
-      const created = await getSandboxOverride({
-        userId: uid,
-        chatId: resolvedChatId,
-        executionId: id,
-        signal: controller.signal,
-      });
-      sandbox = created.sandbox;
-      if (job.cancelled || controller.signal.aborted)
-        throw Object.assign(new Error('Execution cancelled during sandbox startup.'), {
-          name: 'AbortError',
-        });
-      const runtimeConfig = created.config || config;
-      workspacePath = path.posix.join(sandbox.cwd || '/vercel/sandbox', WORKSPACE_NAME);
-      await ensureSandboxDirectory(sandbox, workspacePath, controller.signal);
-      inputFiles = await syncConversationUploads({
-        sandbox,
-        workspacePath,
-        userId: uid,
-        chatId: resolvedChatId,
-        signal: controller.signal,
-      });
-      const pythonPath = await ensurePythonEnvironment(sandbox, workspacePath, controller.signal);
-      const scriptPath = `/tmp/nemotron-${id.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80)}.py`;
-      await sandbox.writeFiles(
-        [{ path: scriptPath, content: Buffer.from(code, 'utf8'), mode: 0o600 }],
-        { signal: controller.signal }
-      );
-      if (job.cancelled)
-        throw Object.assign(new Error('Execution cancelled before Python started.'), {
-          name: 'AbortError',
-        });
-
-      const dependencySetup = await installMissingPythonDependencies({
-        sandbox,
-        pythonPath,
-        scriptPath,
-        workspacePath,
-        timeoutMs: runtimeConfig.packageInstallTimeoutMs || DEFAULT_PACKAGE_INSTALL_TIMEOUT_MS,
-        signal: controller.signal,
-      });
-      installedPackages = dependencySetup.installedPackages;
-      if (job.cancelled)
-        throw Object.assign(
-          new Error('Execution cancelled during Python dependency installation.'),
-          { name: 'AbortError' }
-        );
-
-      log.info('Starting Python in Vercel Sandbox', {
-        userId: uid,
-        chatId: resolvedChatId,
-        executionId: id,
-        sandboxName,
-        vcpus: runtimeConfig.vcpus,
-        timeoutMs: runtimeConfig.timeoutMs,
-        installedPackages,
-      });
-      job.command = await sandbox.runCommand({
-        cmd: pythonPath,
-        args: ['-u', scriptPath],
-        cwd: workspacePath,
-        timeoutMs: runtimeConfig.timeoutMs,
-        signal: controller.signal,
-      });
-      exitCode = job.command.exitCode;
-      const [rawStdout, rawStderr] = await Promise.all([
-        readCommandOutput(job.command, 'stdout'),
-        readCommandOutput(job.command, 'stderr'),
-      ]);
-      const stdoutBudget = EXECUTION_LIMITS.maxOutputBytes;
-      const out = truncateOutput(rawStdout, stdoutBudget);
-      const err = truncateOutput(rawStderr, Math.max(0, stdoutBudget - out.bytes));
-      stdout = out.text;
-      stderr = err.text;
-      if (out.truncated || err.truncated) stderr += '\n[Combined output was truncated.]';
-      if (job.cancelled || controller.signal.aborted) status = 'cancelled';
-      else if (
-        (exitCode === 124 || exitCode === 137) &&
-        Number(job.command.durationMs || 0) >= runtimeConfig.timeoutMs - 1500
-      )
-        status = 'timeout';
-      else status = exitCode === 0 ? 'completed' : 'failed';
-
-      try {
-        const collected = await collectWorkspaceArtifacts({
+        sandbox = created.sandbox;
+        if (job.cancelled || controller.signal.aborted)
+          throw Object.assign(new Error('Execution cancelled during sandbox startup.'), {
+            name: 'AbortError',
+          });
+        const runtimeConfig = created.config || config;
+        workspacePath = path.posix.join(sandbox.cwd || '/vercel/sandbox', WORKSPACE_NAME);
+        await ensureSandboxDirectory(sandbox, workspacePath, controller.signal);
+        inputFiles = await syncConversationUploads({
           sandbox,
           workspacePath,
           userId: uid,
           chatId: resolvedChatId,
-          executionId: id,
+          signal: controller.signal,
         });
-        artifacts = collected.artifacts;
-        fileWarnings = collected.skipped;
-        artifactsCollected = true;
-        if (collected.warnings.length)
-          stderr += `${stderr ? '\n' : ''}File Library save warnings: ${collected.warnings.slice(0, 4).join(' | ')}`;
-      } catch (error) {
-        log.warn('Workspace artifact collection failed', {
+        const pythonPath = await ensurePythonEnvironment(sandbox, workspacePath, controller.signal);
+        const scriptPath = `/tmp/nemotron-${id.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80)}.py`;
+        await sandbox.writeFiles(
+          [{ path: scriptPath, content: Buffer.from(code, 'utf8'), mode: 0o600 }],
+          { signal: controller.signal }
+        );
+        if (job.cancelled)
+          throw Object.assign(new Error('Execution cancelled before Python started.'), {
+            name: 'AbortError',
+          });
+
+        const dependencySetup = await installMissingPythonDependencies({
+          sandbox,
+          pythonPath,
+          scriptPath,
+          workspacePath,
+          timeoutMs: runtimeConfig.packageInstallTimeoutMs || DEFAULT_PACKAGE_INSTALL_TIMEOUT_MS,
+          signal: controller.signal,
+        });
+        installedPackages = dependencySetup.installedPackages;
+        if (job.cancelled)
+          throw Object.assign(
+            new Error('Execution cancelled during Python dependency installation.'),
+            { name: 'AbortError' }
+          );
+
+        log.info('Starting Python in Vercel Sandbox', {
           userId: uid,
+          chatId: resolvedChatId,
           executionId: id,
-          error: error instanceof Error ? error.message : String(error),
+          sandboxName,
+          vcpus: runtimeConfig.vcpus,
+          timeoutMs: runtimeConfig.timeoutMs,
+          installedPackages,
         });
-        stderr += `${stderr ? '\n' : ''}Generated files could not be collected: ${error instanceof Error ? error.message : String(error)}`;
-      }
-      if (fileWarnings)
-        stderr += `${stderr ? '\n' : ''}${fileWarnings} additional file(s) were skipped because the File Library has per-execution limits.`;
-      return { status };
-    });
+        job.command = await sandbox.runCommand({
+          cmd: pythonPath,
+          args: ['-u', scriptPath],
+          cwd: workspacePath,
+          timeoutMs: runtimeConfig.timeoutMs,
+          signal: controller.signal,
+        });
+        exitCode = job.command.exitCode;
+        const [rawStdout, rawStderr] = await Promise.all([
+          readCommandOutput(job.command, 'stdout'),
+          readCommandOutput(job.command, 'stderr'),
+        ]);
+        const stdoutBudget = EXECUTION_LIMITS.maxOutputBytes;
+        const out = truncateOutput(rawStdout, stdoutBudget);
+        const err = truncateOutput(rawStderr, Math.max(0, stdoutBudget - out.bytes));
+        stdout = out.text;
+        stderr = err.text;
+        if (out.truncated || err.truncated) stderr += '\n[Combined output was truncated.]';
+        if (job.cancelled || controller.signal.aborted) status = 'cancelled';
+        else if (
+          (exitCode === 124 || exitCode === 137) &&
+          Number(job.command.durationMs || 0) >= runtimeConfig.timeoutMs - 1500
+        )
+          status = 'timeout';
+        else status = exitCode === 0 ? 'completed' : 'failed';
+
+        try {
+          const collected = await collectWorkspaceArtifacts({
+            sandbox,
+            workspacePath,
+            userId: uid,
+            chatId: resolvedChatId,
+            executionId: id,
+            archiveOnly,
+          });
+          artifacts = collected.artifacts;
+          fileWarnings = collected.skipped;
+          artifactsCollected = true;
+          if (collected.warnings.length)
+            stderr += `${stderr ? '\n' : ''}File Library save warnings: ${collected.warnings.slice(0, 4).join(' | ')}`;
+        } catch (error) {
+          log.warn('Workspace artifact collection failed', {
+            userId: uid,
+            executionId: id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          stderr += `${stderr ? '\n' : ''}Generated files could not be collected: ${error instanceof Error ? error.message : String(error)}`;
+        }
+        if (fileWarnings)
+          stderr += `${stderr ? '\n' : ''}${fileWarnings} additional file(s) were skipped because the File Library has per-execution limits.`;
+        return { status };
+      },
+      controller.signal
+    );
     status = result.status;
   } catch (error) {
     const cancelled = job.cancelled || controller.signal.aborted || error?.name === 'AbortError';
@@ -850,6 +902,7 @@ export async function executeWithVercelSandbox({
           userId: uid,
           chatId: resolvedChatId,
           executionId: id,
+          archiveOnly,
         });
         artifacts = collected.artifacts;
         fileWarnings = collected.skipped;
@@ -878,7 +931,7 @@ export async function executeWithVercelSandbox({
       try {
         // Stop (do not delete) so Vercel snapshots the conversation workspace.
         // The next tool call resumes it, while the VM is not left running idle.
-        await sandbox.stop();
+        await sandbox.stop({ signal: AbortSignal.timeout(SANDBOX_STOP_TIMEOUT_MS) });
       } catch (error) {
         log.warn('Vercel Sandbox stop/snapshot failed', {
           userId: uid,

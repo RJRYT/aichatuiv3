@@ -5,7 +5,11 @@ import {
   generateImageArtifact,
   getImageGenerationStatus,
 } from '../src/services/imageGeneration.js';
-import { getArtifact } from '../src/services/interpreter/artifactStore.js';
+import {
+  deleteArtifacts,
+  getArtifact,
+  storeArtifact,
+} from '../src/services/interpreter/artifactStore.js';
 import { readFile } from 'node:fs/promises';
 import { getToolDefinitions, runTool } from '../src/services/tools.js';
 import { Share } from '../src/models/Share.js';
@@ -77,6 +81,54 @@ test('task planner rejects dependency cycles and duplicate task IDs', () => {
   );
 });
 
+test('saving an edited artifact preserves the previous version and adds a numeric filename suffix', async () => {
+  const previousMongo = process.env.MONGODB_URI;
+  delete process.env.MONGODB_URI;
+  const ownerId = 'artifact-version-test-user';
+  const savedIds = [];
+  try {
+    const first = await storeArtifact({
+      ownerId,
+      chatId: 'version-chat',
+      executionId: 'version-1',
+      name: 'App.jsx',
+      relativePath: 'src/App.jsx',
+      content: 'first version',
+    });
+    savedIds.push(first.id);
+    const second = await storeArtifact({
+      ownerId,
+      chatId: 'version-chat',
+      executionId: 'version-2',
+      name: 'App.jsx',
+      relativePath: 'src/App.jsx',
+      content: 'second version',
+    });
+    savedIds.push(second.id);
+    const third = await storeArtifact({
+      ownerId,
+      chatId: 'another-chat',
+      executionId: 'version-3',
+      name: 'App.jsx',
+      relativePath: 'src/App.jsx',
+      content: 'third version',
+    });
+    savedIds.push(third.id);
+
+    assert.deepEqual([first.name, second.name, third.name], ['App.jsx', 'App-1.jsx', 'App-2.jsx']);
+    assert.deepEqual(
+      [first.relativePath, second.relativePath, third.relativePath],
+      ['src/App.jsx', 'src/App-1.jsx', 'src/App-2.jsx']
+    );
+    assert.equal((await getArtifact(first.id, ownerId)).data.toString(), 'first version');
+    assert.equal((await getArtifact(second.id, ownerId)).data.toString(), 'second version');
+  } finally {
+    await deleteArtifacts(savedIds, ownerId);
+    if (previousMongo === undefined) delete process.env.MONGODB_URI;
+    else process.env.MONGODB_URI = previousMongo;
+  }
+});
+
 test('Cloudflare FLUX image generation stores verified image bytes as an artifact', async () => {
   const oldFetch = globalThis.fetch;
   const oldAccount = process.env.CLOUDFLARE_ACCOUNT_ID;
@@ -144,12 +196,14 @@ test('account-history tools require sign-in and have explicit-request descriptio
   assert.ok(names.includes('list_shared_links'));
   assert.ok(names.includes('search_previous_chats'));
   assert.match(
-    definitions.find((tool) => tool.function.name === 'search_previous_chats').function
-      .description,
+    definitions.find((tool) => tool.function.name === 'search_previous_chats').function.description,
     /only when the user explicitly asks/i
   );
   assert.equal((await runTool('list_shared_links', {}, { _id: 'guest:test' })).ok, false);
-  assert.equal((await runTool('search_previous_chats', { query: 'earlier' }, { _id: 'guest:test' })).ok, false);
+  assert.equal(
+    (await runTool('search_previous_chats', { query: 'earlier' }, { _id: 'guest:test' })).ok,
+    false
+  );
 });
 
 test('shared-link lookup returns only the signed-in user’s active shares', async () => {

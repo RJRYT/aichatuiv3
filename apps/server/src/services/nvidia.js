@@ -20,6 +20,11 @@ const NVIDIA_ENDPOINT = 'https://integrate.api.nvidia.com/v1/chat/completions';
 const MAX_TOOL_ROUNDS = 64;
 const MAX_EXECUTION_TOOL_CALLS = 24;
 const MAX_RECOVERY_ATTEMPTS_PER_TOOL = 3;
+const MODEL_STREAM_IDLE_TIMEOUT_MS = 90_000;
+const MODEL_FIRST_VISIBLE_OUTPUT_TIMEOUT_MS = 90_000;
+const MODEL_ROUND_TIMEOUT_MS = 5 * 60_000;
+const CHAT_TURN_TIMEOUT_MS = 15 * 60_000;
+const MODEL_HEARTBEAT_INTERVAL_MS = 20_000;
 
 const FILE_ACTION_PROMPT = `This request requires a real file operation. Use the required execution tool, perform the requested action, save the resulting file into the current workspace, and verify the stored artifact. Do not provide a script for the user to run instead of doing the operation. Do not claim success without a real, non-empty artifact.`;
 const IMAGE_DELIVERABLE_PROMPT = `The user requested an original image. Use the required image-generation tool, inspect its actual result, and only report success if the image artifact is stored and verified. Do not provide a prompt or instructions as a substitute for generating the image.`;
@@ -38,12 +43,16 @@ feedback, and robust edge-case handling. Use the same implementation depth you w
 high-quality direct code answer. Do not replace implementation with snippets, pseudocode, TODOs,
 placeholders, or instructions for the user to finish.
 
-Use execute_python to create the actual files in the workspace. Write all requested source files and
-documentation. Run appropriate static/functional checks and fix failures. If an archive is requested,
-create it only after the project files and checks are complete. Reopen the archive, inspect its entries,
-and verify it is readable and non-empty. Return concise execution evidence in stdout. Do not claim
-browser testing unless a browser test actually ran. Do not claim production readiness without evidence.
-The backend independently checks the requested artifact before accepting completion.`;
+Use execute_python as the file-writing and verification bridge: create the actual, complete source
+files in the workspace, run appropriate static/functional checks, and fix failures. Do not substitute
+Python-generated toy or abbreviated application content for the requested implementation; keep the
+project source complete and thoughtfully designed. For multi-file projects, package the finished
+project and README into one ZIP even if the user did not explicitly say "zip". Reopen the archive,
+inspect its entries, and verify it is readable and non-empty. Report a concise file manifest and check
+results in stdout so the assistant can accurately communicate the result. The user should receive the
+final ZIP as the single chat deliverable, not separate source-file attachments or code blocks. Do not
+claim browser testing unless a browser test actually ran. Do not claim production readiness without
+evidence. The backend independently checks the requested artifact before accepting completion.`;
 
 async function verifyDeliverableArtifacts(result, userId, contract, chatId = '') {
   const returnedArtifacts = Array.isArray(result?.artifacts) ? result.artifacts : [];
@@ -173,7 +182,10 @@ function parseToolArgs(raw) {
     throw new Error(`Invalid tool arguments: ${error.message}`);
   }
 }
-function normalizeActivePlan(plan) {
+export function countsTowardExecutionLimit(toolName) {
+  return !['create_task_plan', 'update_task_status', 'report_progress'].includes(toolName);
+}
+export function normalizeActivePlan(plan) {
   if (!plan || typeof plan !== 'object' || !Array.isArray(plan.tasks)) return null;
   const allowed = new Set(['pending', 'running', 'completed', 'failed', 'skipped']);
   const tasks = plan.tasks.slice(0, 12).map((task, index) => ({
@@ -186,6 +198,7 @@ function normalizeActivePlan(plan) {
     ...(task?.updatedAt ? { updatedAt: task.updatedAt } : {}),
   }));
   if (!tasks.length) return null;
+  if (tasks.every((task) => ['completed', 'skipped'].includes(task.status))) return null;
   return {
     objective: String(plan.objective || 'Continue the existing task plan').slice(0, 500),
     tasks,
@@ -196,7 +209,7 @@ function normalizeActivePlan(plan) {
 function systemPrompt(user) {
   return buildSystemPrompt(user);
 }
-async function requestRound({
+export async function requestRound({
   messages,
   tools,
   thinkingEnabled,
@@ -207,6 +220,10 @@ async function requestRound({
   requiredToolName,
   forceRequiredTool = false,
   isDeliverable,
+  idleTimeoutMs = MODEL_STREAM_IDLE_TIMEOUT_MS,
+  firstVisibleOutputTimeoutMs = MODEL_FIRST_VISIBLE_OUTPUT_TIMEOUT_MS,
+  roundTimeoutMs = MODEL_ROUND_TIMEOUT_MS,
+  heartbeatIntervalMs = MODEL_HEARTBEAT_INTERVAL_MS,
 }) {
   log.debug('NVIDIA request round', { round, toolCount: tools.length, hasVision });
   const body = {
@@ -228,69 +245,128 @@ async function requestRound({
         }
       : {}),
   };
-  const response = await fetch(NVIDIA_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${process.env.NVIDIA_API_KEY}`,
-      'Content-Type': 'application/json',
-      Accept: 'text/event-stream',
-    },
-    body: JSON.stringify(body),
-    signal,
-  });
-  if (!response.ok) {
-    const detail = (await response.text()).slice(0, 9000);
-    throw Object.assign(new Error(`NVIDIA NIM returned HTTP ${response.status}: ${detail}`), {
-      status: response.status,
-    });
-  }
-  if (!response.body) throw new Error('NVIDIA returned an empty streaming response body.');
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '',
-    content = '',
-    finishReason = null,
-    usage = null;
-  const calls = new Map();
-  const handleLine = (line) => {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith('data:')) return;
-    const raw = trimmed.slice(5).trim();
-    if (!raw || raw === '[DONE]') return;
-    let data;
-    try {
-      data = JSON.parse(raw);
-    } catch {
-      return;
-    }
-    const choice = data.choices?.[0],
-      delta = choice?.delta || {};
-    if (typeof delta.content === 'string' && delta.content) {
-      content += delta.content;
-      sse(res, { type: 'chunk', round, content: delta.content });
-    }
-    if (Array.isArray(delta.tool_calls))
-      for (const item of delta.tool_calls) {
-        const index = Number(item.index ?? 0),
-          current = calls.get(index) || {
-            index,
-            id: '',
-            type: 'function',
-            function: { name: '', arguments: '' },
-          };
-        if (item.id && !current.id) current.id = item.id;
-        if (item.function?.name) current.function.name += item.function.name;
-        if (item.function?.arguments) current.function.arguments += item.function.arguments;
-        calls.set(index, current);
-        sse(res, { type: 'tool_call_delta', round, index, name: current.function.name });
-      }
-    if (choice?.finish_reason) finishReason = choice.finish_reason;
-    if (data.usage) usage = data.usage;
+  const requestController = new AbortController();
+  let reader;
+  let timeoutError = null;
+  let idleTimer, firstVisibleOutputTimer;
+  const failRequest = (error) => {
+    if (timeoutError) return;
+    timeoutError = error;
+    requestController.abort(error);
   };
+  const abortRequest = () => {
+    failRequest(
+      signal.reason ||
+        Object.assign(new Error('The chat request was cancelled.'), { name: 'AbortError' })
+    );
+  };
+  const resetIdleTimer = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      failRequest(
+        Object.assign(
+          new Error(
+            `The AI model did not send a response for ${Math.ceil(idleTimeoutMs / 1000)} seconds. Please retry.`
+          ),
+          { code: 'MODEL_STREAM_IDLE_TIMEOUT', status: 504 }
+        )
+      );
+    }, idleTimeoutMs);
+  };
+  firstVisibleOutputTimer = setTimeout(() => {
+    failRequest(
+      Object.assign(
+        new Error(
+          `The model did not produce any visible response within ${Math.ceil(firstVisibleOutputTimeoutMs / 1000)} seconds. Please retry.`
+        ),
+        { code: 'MODEL_FIRST_VISIBLE_OUTPUT_TIMEOUT', status: 504 }
+      )
+    );
+  }, firstVisibleOutputTimeoutMs);
+  if (signal?.aborted) abortRequest();
+  else signal?.addEventListener('abort', abortRequest, { once: true });
+  resetIdleTimer();
+  const roundTimer = setTimeout(() => {
+    failRequest(
+      Object.assign(new Error('The AI model response exceeded its time limit. Please retry.'), {
+        code: 'MODEL_ROUND_TIMEOUT',
+        status: 504,
+      })
+    );
+  }, roundTimeoutMs);
+  const heartbeatTimer = setInterval(() => {
+    sse(res, {
+      type: 'heartbeat',
+      round,
+      message: 'The model is still working; waiting for its response.',
+    });
+  }, heartbeatIntervalMs);
   try {
+    const response = await fetch(NVIDIA_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.NVIDIA_API_KEY}`,
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+      },
+      body: JSON.stringify(body),
+      signal: requestController.signal,
+    });
+    if (!response.ok) {
+      const detail = (await response.text()).slice(0, 9000);
+      throw Object.assign(new Error(`NVIDIA NIM returned HTTP ${response.status}: ${detail}`), {
+        status: response.status,
+      });
+    }
+    if (!response.body) throw new Error('NVIDIA returned an empty streaming response body.');
+    reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '',
+      content = '',
+      finishReason = null,
+      usage = null;
+    const calls = new Map();
+    const handleLine = (line) => {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data:')) return;
+      const raw = trimmed.slice(5).trim();
+      if (!raw || raw === '[DONE]') return;
+      let data;
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        return;
+      }
+      const choice = data.choices?.[0],
+        delta = choice?.delta || {};
+      if (typeof delta.content === 'string' && delta.content) {
+        clearTimeout(firstVisibleOutputTimer);
+        firstVisibleOutputTimer = undefined;
+        content += delta.content;
+        sse(res, { type: 'chunk', round, content: delta.content });
+      }
+      if (Array.isArray(delta.tool_calls))
+        for (const item of delta.tool_calls) {
+          const index = Number(item.index ?? 0),
+            current = calls.get(index) || {
+              index,
+              id: '',
+              type: 'function',
+              function: { name: '', arguments: '' },
+            };
+          if (item.id && !current.id) current.id = item.id;
+          if (item.function?.name) current.function.name += item.function.name;
+          if (item.function?.arguments) current.function.arguments += item.function.arguments;
+          calls.set(index, current);
+          sse(res, { type: 'tool_call_delta', round, index, name: current.function.name });
+        }
+      if (choice?.finish_reason) finishReason = choice.finish_reason;
+      if (data.usage) usage = data.usage;
+    };
     let done = false;
     while (!done) {
       const part = await reader.read();
+      if (part.value?.byteLength) resetIdleTimer();
       done = part.done;
       buffer += decoder.decode(part.value || new Uint8Array(), { stream: !done });
       const lines = buffer.split(/\r?\n/);
@@ -298,15 +374,23 @@ async function requestRound({
       lines.forEach(handleLine);
     }
     if (buffer.trim()) handleLine(buffer);
+    return {
+      content,
+      finishReason,
+      usage,
+      toolCalls: [...calls.values()].sort((a, b) => a.index - b.index),
+    };
+  } catch (error) {
+    if (timeoutError) throw timeoutError;
+    throw error;
   } finally {
-    reader.releaseLock();
+    if (reader) reader.releaseLock();
+    clearTimeout(idleTimer);
+    clearTimeout(firstVisibleOutputTimer);
+    clearTimeout(roundTimer);
+    clearInterval(heartbeatTimer);
+    signal?.removeEventListener('abort', abortRequest);
   }
-  return {
-    content,
-    finishReason,
-    usage,
-    toolCalls: [...calls.values()].sort((a, b) => a.index - b.index),
-  };
 }
 export async function runNemotronChat({ body, req, res, persist, user }) {
   if (!process.env.NVIDIA_API_KEY) {
@@ -370,6 +454,14 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
     (m) => Array.isArray(m.content) && m.content.some((p) => p.type === 'image_url')
   );
   const controller = new AbortController();
+  const turnTimer = setTimeout(() => {
+    controller.abort(
+      Object.assign(new Error('This chat turn exceeded its 15-minute time limit. Please retry.'), {
+        code: 'CHAT_TURN_TIMEOUT',
+        status: 504,
+      })
+    );
+  }, CHAT_TURN_TIMEOUT_MS);
   const onClose = () => {
     if (!res.writableEnded) controller.abort();
   };
@@ -566,13 +658,15 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
           });
           continue;
         }
-        if (executionToolCalls >= MAX_EXECUTION_TOOL_CALLS) {
-          requiredToolBlocked = true;
-          finalText =
-            'I reached the safe execution limit before finishing the request. The work completed so far is preserved, but I cannot mark the task as complete.';
-          break;
+        if (countsTowardExecutionLimit(name)) {
+          if (executionToolCalls >= MAX_EXECUTION_TOOL_CALLS) {
+            requiredToolBlocked = true;
+            finalText =
+              'I reached the safe execution limit before finishing the request. The work completed so far is preserved, but I cannot mark the task as complete.';
+            break;
+          }
+          executionToolCalls += 1;
         }
-        executionToolCalls += 1;
         if (name === deliverableContract?.executionTool && deliverableContract?.requiresPlan) {
           startNextPlanTask(
             agentState,
@@ -602,7 +696,14 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
                   ...(agentState.plan?.objective ? { objective: agentState.plan.objective } : {}),
                 }
               : args;
-        sse(res, { type: 'tool_start', name, arguments: safeArgs, round });
+        const toolStartedAt = new Date().toISOString();
+        sse(res, {
+          type: 'tool_start',
+          name,
+          arguments: safeArgs,
+          round,
+          startedAt: toolStartedAt,
+        });
         const progressTarget =
           name === 'web_search'
             ? String(args.query || args.search_query || args.q || args.search_terms || '').slice(
@@ -620,6 +721,7 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
           ...(progressTarget ? { progressTarget } : {}),
         });
         const previousFailures = consecutiveFailures.get(name) || 0;
+        const toolStartedMs = Date.now();
         let outcome;
         if (previousFailures >= MAX_RECOVERY_ATTEMPTS_PER_TOOL) {
           outcome = {
@@ -631,6 +733,7 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
             signal: controller.signal,
             chatId: body.chatId,
             agentState,
+            archiveOnly: Boolean(deliverableContract?.archiveRequired),
             onAgentEvent: (eventType, data) => {
               if (eventType === 'plan_created' && data.plan) agentState.plan = data.plan;
               emitAgentEvent(eventType, data);
@@ -694,6 +797,11 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
               : undefined
           : outcome.error;
         const safeOutcome = stripInternalArtifactUrls(outcome);
+        if (deliverableContract?.archiveRequired && safeOutcome?.result?.artifacts) {
+          safeOutcome.result.artifacts = safeOutcome.result.artifacts.filter((artifact) =>
+            /\.zip$/i.test(String(artifact.name || ''))
+          );
+        }
         const event = {
           name,
           arguments: safeArgs,
@@ -701,6 +809,9 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
           result: safeOutcome.ok ? safeOutcome.result : undefined,
           error: errorText,
           attempt: previousFailures + 1,
+          startedAt: toolStartedAt,
+          completedAt: new Date().toISOString(),
+          durationMs: Date.now() - toolStartedMs,
         };
         toolEvents.push(event);
         if (!toolCompleted) {
@@ -830,11 +941,18 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
         'The deliverable is not complete yet because some execution steps remain unfinished. Any generated files are preserved, but I will not mark the request as complete.';
     }
     const visible = body.messages.filter((m) => m.role !== 'system' && m.role !== 'tool');
-    if (deliverableContract && !finalText.trim() && agentState.deliverableVerification?.valid) {
-      const names = agentState.deliverableVerification.verified
-        .map((item) => item.name)
-        .filter(Boolean);
-      finalText = `The requested deliverable was generated and verified. Available file${names.length === 1 ? '' : 's'}: ${names.join(', ')}. Use the generated-file controls in this conversation to access them.`;
+    if (deliverableContract && agentState.deliverableVerification?.valid && !requiredToolBlocked) {
+      if (deliverableContract.archiveRequired) {
+        const archive = agentState.deliverableVerification.archive;
+        finalText = archive
+          ? `The project ZIP was generated and independently verified: ${archive.name}. Use the ZIP attachment in this conversation to download it.`
+          : 'The requested project was verified, but its final ZIP could not be identified for delivery.';
+      } else {
+        const names = agentState.deliverableVerification.verified
+          .map((item) => item.name)
+          .filter(Boolean);
+        finalText = `The requested deliverable was generated and verified. Available file${names.length === 1 ? '' : 's'}: ${names.join(', ')}. Use the generated-file controls in this conversation to access them.`;
+      }
     }
     finalText = finalText.replace(
       /\/?api\/interpreter\/artifacts\/[a-zA-Z0-9_-]+/g,
@@ -877,7 +995,10 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
         toolEvents,
         agentPlan: agentState.plan,
         agentEvents,
-        createdAt: new Date().toISOString(),
+        startedAt: new Date(startedAt).toISOString(),
+        createdAt: new Date(startedAt).toISOString(),
+        completedAt: new Date().toISOString(),
+        durationMs: Date.now() - startedAt,
       },
     ]);
     log.info('Chat generation completed', {
@@ -897,7 +1018,7 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
       deliverableVerification: agentState.deliverableVerification,
     });
   } catch (error) {
-    if (error.name === 'AbortError') {
+    if (error.name === 'AbortError' && controller.signal.reason?.code !== 'CHAT_TURN_TIMEOUT') {
       log.warn('Chat generation aborted by client', { userId });
       sse(res, { type: 'stopped' });
     } else {
@@ -915,6 +1036,7 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
       });
     }
   } finally {
+    clearTimeout(turnTimer);
     res.off('close', onClose);
     if (!res.writableEnded) res.end();
   }

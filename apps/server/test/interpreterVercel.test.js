@@ -117,6 +117,68 @@ test('conversation sandbox names are deterministic but isolated by owner and cha
   assert.notEqual(first, getSandboxNameForContext('owner-a', 'chat-b', 'ignored'));
 });
 
+test('cancelled executions waiting for a conversation sandbox lock return immediately', async () => {
+  configureVercel();
+  const firstController = new AbortController();
+  let firstStartedResolve;
+  const firstStarted = new Promise((resolve) => {
+    firstStartedResolve = resolve;
+  });
+  let first;
+  let secondController;
+  try {
+    first = executeWithVercelSandbox({
+      code: 'print("first")',
+      userId: 'lock-cancel-owner',
+      chatId: 'lock-cancel-chat',
+      executionId: 'lock-cancel-first',
+      signal: firstController.signal,
+      getSandbox: async ({ signal }) => {
+        firstStartedResolve();
+        await new Promise((resolve, reject) => {
+          if (signal.aborted) return reject(signal.reason);
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        });
+      },
+    });
+    await firstStarted;
+
+    secondController = new AbortController();
+    const second = executeWithVercelSandbox({
+      code: 'print("second")',
+      userId: 'lock-cancel-owner',
+      chatId: 'lock-cancel-chat',
+      executionId: 'lock-cancel-second',
+      signal: secondController.signal,
+      getSandbox: async () => {
+        throw new Error('The cancelled execution should not enter the sandbox lock.');
+      },
+    });
+    secondController.abort();
+
+    let timeoutId;
+    const secondResult = await Promise.race([
+      second,
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error('Cancelled lock wait did not return promptly.')),
+          1000
+        );
+      }),
+    ]).finally(() => clearTimeout(timeoutId));
+    assert.equal(secondResult.status, 'cancelled');
+
+    firstController.abort();
+    const firstResult = await first;
+    assert.equal(firstResult.status, 'cancelled');
+  } finally {
+    firstController.abort();
+    secondController?.abort();
+    if (first) await first;
+    restoreVercel();
+  }
+});
+
 test('persistent conversation workspace directory creation is idempotent across sandbox resumes', async () => {
   configureVercel();
   try {
@@ -244,6 +306,40 @@ test('Vercel provider captures Python output and persists generated files in the
     assert.equal((await listArtifacts('other-user')).total, 0);
     assert.equal(fake.stopped(), 1);
     await deleteArtifact(result.artifacts[0].id, 'vercel-test-user');
+  } finally {
+    restoreVercel();
+  }
+});
+
+test('ZIP deliverable executions save archives but do not add their packaged source files separately', async () => {
+  configureVercel();
+  try {
+    const fake = fakeSandbox({
+      files: [
+        { path: 'project/index.html', content: '<main>App</main>' },
+        { path: 'project/styles.css', content: 'main { color: green; }' },
+        { path: 'project.zip', content: 'PK\x03\x04fake archive bytes' },
+      ],
+    });
+    const result = await executeWithVercelSandbox({
+      code: 'print("packaged")',
+      userId: 'zip-only-test-user',
+      chatId: 'zip-only-chat',
+      executionId: 'zip-only-execution',
+      archiveOnly: true,
+      getSandbox: async () => ({ sandbox: fake.sandbox, config: { timeoutMs: 300000, vcpus: 1 } }),
+    });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(
+      result.artifacts.map((artifact) => artifact.name),
+      ['project.zip']
+    );
+    const library = await listArtifacts('zip-only-test-user');
+    assert.deepEqual(
+      library.files.map((artifact) => artifact.name),
+      ['project.zip']
+    );
+    await deleteArtifact(result.artifacts[0].id, 'zip-only-test-user');
   } finally {
     restoreVercel();
   }

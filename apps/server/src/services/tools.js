@@ -373,7 +373,11 @@ async function executeTool(name, args, user, options = {}) {
     const result = await executePython(
       { code: args.code, chatId: options.chatId },
       String(user._id),
-      { signal: options.signal, chatId: options.chatId }
+      {
+        signal: options.signal,
+        chatId: options.chatId,
+        archiveOnly: Boolean(options.archiveOnly),
+      }
     );
     log.debug('Python execution completed', {
       userId,
@@ -440,7 +444,9 @@ async function executeTool(name, args, user, options = {}) {
   if (name === 'search_previous_chats') {
     if (!user?._id || String(user._id).startsWith('guest:'))
       throw new Error('Sign in is required to search previous conversations.');
-    const query = String(args.query || '').trim().slice(0, 120);
+    const query = String(args.query || '')
+      .trim()
+      .slice(0, 120);
     if (query.length < 2) throw new Error('Enter at least two characters to search chats.');
     const chats = await searchChatContexts(userId, query, {
       excludeChatId: options.chatId,
