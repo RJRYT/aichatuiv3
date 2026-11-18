@@ -401,13 +401,6 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
     throw Object.assign(new Error('A non-empty messages array is required.'), { status: 400 });
   }
   const userId = user?._id ? String(user._id) : 'unknown';
-  log.info('Chat generation started', {
-    userId,
-    messageCount: body.messages.length,
-    hasVision: body.messages.some(
-      (m) => Array.isArray(m.content) && m.content.some((p) => p.type === 'image_url')
-    ),
-  });
   const tools = getToolDefinitions();
   const input = body.messages.map((m) => {
     const files = Array.isArray(m.attachments)
@@ -1018,7 +1011,6 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
     });
   } catch (error) {
     if (error.name === 'AbortError' && controller.signal.reason?.code !== 'CHAT_TURN_TIMEOUT') {
-      log.warn('Chat generation aborted by client', { userId });
       sse(res, { type: 'stopped' });
     } else {
       log.error('Chat generation failed', {

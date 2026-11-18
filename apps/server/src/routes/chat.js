@@ -14,9 +14,7 @@ router.post('/stream', async (req, res, next) => {
   try {
     const ownerId = String(req.user?._id || '');
     const chatId = String(req.body?.chatId || '');
-    log.info('Chat stream started', { userId: ownerId, chatId });
     if (!ownerId || !chatId) {
-      log.warn('Chat ID missing', { userId: ownerId });
       return res.status(400).json({ error: 'Chat ID is required.' });
     }
     if (
@@ -82,18 +80,11 @@ router.post('/stream', async (req, res, next) => {
     }
     const existing = await getChat(ownerId, chatId);
     if (!existing) {
-      log.warn('Chat not found for stream', { userId: ownerId, chatId });
       return res.status(404).json({ error: 'Chat not found.' });
     }
-    log.debug('Chat found for stream', { userId: ownerId, chatId });
     ensureBranches(existing);
     const requestedBranchId = String(req.body?.branchId || existing.activeBranchId || 'main');
     if (!getBranchMessages(existing, requestedBranchId)) {
-      log.warn('Conversation branch not found', {
-        userId: ownerId,
-        chatId,
-        branchId: requestedBranchId,
-      });
       return res.status(404).json({ error: 'Conversation branch not found.' });
     }
     if (
@@ -102,11 +93,6 @@ router.post('/stream', async (req, res, next) => {
         (message) => message.id === req.body.preserveExistingMessageId
       )
     ) {
-      log.warn('Response to regenerate not found', {
-        userId: ownerId,
-        chatId,
-        messageId: req.body.preserveExistingMessageId,
-      });
       return res
         .status(404)
         .json({ error: 'Response to regenerate was not found in this branch.' });
@@ -115,7 +101,6 @@ router.post('/stream', async (req, res, next) => {
       Number.isInteger(req.body?.expectedRevision) &&
       req.body.expectedRevision !== (existing.revision || 0)
     ) {
-      log.warn('Revision conflict on stream', { userId: ownerId, chatId });
       return res
         .status(409)
         .json({ error: 'This conversation changed elsewhere. Refresh before generating.' });
@@ -217,7 +202,6 @@ router.post('/stream', async (req, res, next) => {
           expectedRevision: req.body.expectedRevision ?? (existing.revision || 0),
         });
         if (!saved) {
-          log.warn('Conversation changed during generation', { userId: ownerId, chatId });
           throw Object.assign(
             new Error(
               'Conversation changed while this response was generating. Refresh and retry.'
@@ -225,11 +209,6 @@ router.post('/stream', async (req, res, next) => {
             { status: 409 }
           );
         }
-        log.info('Chat response persisted', {
-          userId: ownerId,
-          chatId,
-          messageCount: generatedMessages.length,
-        });
         return saved;
       },
     });

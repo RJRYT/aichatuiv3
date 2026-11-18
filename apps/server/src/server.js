@@ -132,12 +132,8 @@ if (
   throw new Error('Set a unique SESSION_SECRET of at least 32 characters in production.');
 }
 await connectDatabase();
-log.info('Nemotron Agent Lab API starting', { port, model: MODEL_ID, database: getDatabaseMode() });
 const httpServer = app.listen(port, () =>
-  log.info(`Nemotron Agent Lab API listening on http://localhost:${port}`, {
-    model: MODEL_ID,
-    database: getDatabaseMode(),
-  })
+  log.info(`Nemotron Agent Lab API listening on http://localhost:${port}`)
 );
 let shuttingDown = false;
 async function shutdown(signal) {

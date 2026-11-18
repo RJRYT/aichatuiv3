@@ -20,7 +20,6 @@ router.get('/', async (req, res, next) => {
   try {
     res.set('Cache-Control', 'private, no-store');
     const chats = await listChats(owner(req));
-    log.debug('Listed chats', { userId: owner(req), count: chats.length });
     res.json({ chats });
   } catch (error) {
     next(error);
@@ -28,9 +27,7 @@ router.get('/', async (req, res, next) => {
 });
 router.post('/', async (req, res, next) => {
   try {
-    log.info('Creating chat', { userId: owner(req), title: req.body?.title });
     const chat = await createChat(owner(req), req.body?.title);
-    log.info('Chat created', { userId: owner(req), chatId: chat._id });
     res.status(201).json({ chat });
   } catch (error) {
     next(error);
@@ -45,12 +42,6 @@ router.post('/:id/uploads', async (req, res, next) => {
       req.params.id,
       req.body?.files || []
     );
-    log.info('Conversation files uploaded', {
-      userId: owner(req),
-      chatId: req.params.id,
-      count: uploads.length,
-      bytes: uploads.reduce((sum, file) => sum + file.size, 0),
-    });
     return res.status(201).json({ uploads });
   } catch (error) {
     next(error);
@@ -61,10 +52,8 @@ router.get('/:id', async (req, res, next) => {
     res.set('Cache-Control', 'private, no-store');
     const chat = await getChat(owner(req), req.params.id);
     if (!chat) {
-      log.warn('Chat not found', { userId: owner(req), chatId: req.params.id });
       return res.status(404).json({ error: 'Chat not found.' });
     }
-    log.debug('Retrieved chat', { userId: owner(req), chatId: req.params.id });
     ensureBranches(chat);
     const branchId = req.query.branchId || chat.activeBranchId || 'main';
     const messages = getBranchMessages(chat, branchId);
@@ -91,15 +80,8 @@ router.patch('/:id', async (req, res, next) => {
   try {
     const current = await getChat(owner(req), req.params.id);
     if (!current) {
-      log.warn('Chat not found for update', { userId: owner(req), chatId: req.params.id });
       return res.status(404).json({ error: 'Chat not found.' });
     }
-    log.debug('Updating chat', {
-      userId: owner(req),
-      chatId: req.params.id,
-      hasTitle: typeof req.body?.title === 'string',
-      hasMessages: Array.isArray(req.body?.messages),
-    });
     const patch = {};
     if (
       typeof req.body?.title === 'string' &&
@@ -145,7 +127,6 @@ router.patch('/:id', async (req, res, next) => {
       return res
         .status(409)
         .json({ error: 'This conversation changed elsewhere. Refresh before saving.' });
-    log.info('Chat updated', { userId: owner(req), chatId: req.params.id });
     res.json({ chat });
   } catch (error) {
     next(error);
@@ -170,12 +151,6 @@ router.post('/:id/branches', async (req, res, next) => {
       return res
         .status(400)
         .json({ error: 'Branch messages must contain at most 300 user or assistant entries.' });
-    log.info('Creating branch', {
-      userId: owner(req),
-      chatId: req.params.id,
-      fromBranchId: req.body?.fromBranchId || chat.activeBranchId || 'main',
-      messageCount: branchMessages.length,
-    });
     const created = createBranch(chat, {
       fromBranchId: String(req.body?.fromBranchId || chat.activeBranchId || 'main'),
       forkedFromMessageId: req.body?.forkedFromMessageId
@@ -193,11 +168,6 @@ router.post('/:id/branches', async (req, res, next) => {
       return res
         .status(409)
         .json({ error: 'This conversation changed elsewhere. Refresh before branching.' });
-    log.info('Branch created via route', {
-      userId: owner(req),
-      chatId: req.params.id,
-      branchId: created.branch.branchId,
-    });
     res.status(201).json({ chat: updated, branch: created.branch, messages: created.messages });
   } catch (error) {
     next(error);
@@ -216,11 +186,6 @@ router.patch('/:id/branches/:branchId/activate', async (req, res, next) => {
       return res
         .status(409)
         .json({ error: 'This conversation changed elsewhere. Refresh before switching branches.' });
-    log.info('Activating branch', {
-      userId: owner(req),
-      chatId: req.params.id,
-      branchId: req.params.branchId,
-    });
     const updated = await updateChat(owner(req), req.params.id, {
       activeBranchId: req.params.branchId,
       revision: (chat.revision || 0) + 1,
@@ -252,11 +217,6 @@ router.post('/:id/messages/:messageId/versions', async (req, res, next) => {
     const message = messages?.find((m) => m.id === req.params.messageId);
     if (!message || message.role !== 'assistant')
       return res.status(404).json({ error: 'Assistant response not found.' });
-    log.info('Adding response version', {
-      userId: owner(req),
-      chatId: req.params.id,
-      messageId: req.params.messageId,
-    });
     message.versions = Array.isArray(message.versions)
       ? message.versions
       : [
@@ -325,12 +285,7 @@ router.patch('/:id/messages/:messageId/version', async (req, res, next) => {
       index >= message.versions.length
     )
       return res.status(400).json({ error: 'Invalid response version.' });
-    log.info('Switching response version', {
-      userId: owner(req),
-      chatId: req.params.id,
-      messageId: req.params.messageId,
-      versionIndex: index,
-    });
+
     const version = message.versions[index];
     Object.assign(message, version, { versions: message.versions, activeVersion: index });
     setBranchMessages(chat, branchId, messages);

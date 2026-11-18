@@ -205,12 +205,6 @@ export async function storeArtifact({
       sha256: checksum,
       data,
     });
-    log.info('Artifact saved to persistent library', {
-      owner,
-      name: safeFileName,
-      size: data.byteLength,
-      artifactId: String(item._id),
-    });
     return publicMetadata(item);
   }
 

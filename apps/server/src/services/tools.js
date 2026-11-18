@@ -345,7 +345,6 @@ async function tavilySearch(args) {
 }
 async function executeTool(name, args, user, options = {}) {
   const userId = user?._id ? String(user._id) : 'unknown';
-  log.debug('Executing tool', { name, userId });
   if (name === 'create_task_plan')
     return createTaskPlan(args, options.agentState, options.onAgentEvent);
   if (name === 'update_task_status')
@@ -366,10 +365,6 @@ async function executeTool(name, args, user, options = {}) {
       throw new Error(
         'This conversation no longer exists. Start a new conversation before running Python.'
       );
-    log.debug('Python execution started', {
-      userId,
-      codeBytes: Buffer.byteLength(String(args.code || ''), 'utf8'),
-    });
     const result = await executePython(
       { code: args.code, chatId: options.chatId },
       String(user._id),
@@ -379,11 +374,6 @@ async function executeTool(name, args, user, options = {}) {
         archiveOnly: Boolean(options.archiveOnly),
       }
     );
-    log.debug('Python execution completed', {
-      userId,
-      status: result.status,
-      durationMs: result.durationMs,
-    });
     return { ...result, taskContext: String(args.task_context || '').slice(0, 500) };
   }
   if (name === 'save_memory') {
@@ -403,7 +393,6 @@ async function executeTool(name, args, user, options = {}) {
       .select('memories')
       .lean();
     if (!updated) updated = await User.findById(user._id).select('memories').lean();
-    log.info('Memory saved', { userId, duplicate: existed, memory });
     return {
       saved: true,
       duplicate: existed,
@@ -419,7 +408,6 @@ async function executeTool(name, args, user, options = {}) {
       .filter((m) => !query || m.text.toLowerCase().includes(query))
       .slice(0, 15)
       .map((m) => ({ id: m._id, text: m.text }));
-    log.debug('Memory search completed', { userId, query, foundCount: found.length });
     return { memories: found };
   }
   if (name === 'list_shared_links') {
@@ -452,17 +440,10 @@ async function executeTool(name, args, user, options = {}) {
       excludeChatId: options.chatId,
       limit: args.limit,
     });
-    log.info('Previous chats searched', { userId, query, resultCount: chats.length });
     return { chats };
   }
   if (name === 'web_search') {
-    log.info('Web search started', { userId, query: args.query });
     const result = await tavilySearch(args);
-    log.info('Web search completed', {
-      userId,
-      query: args.query,
-      resultCount: result.results?.length || 0,
-    });
     return result;
   }
   if (name === 'calculator') {
@@ -488,7 +469,6 @@ async function executeTool(name, args, user, options = {}) {
   if (name === 'npm_search') {
     const query = String(args.query || '').trim();
     if (!query) throw new Error('A search query is required.');
-    log.info('npm search started', { userId, query });
     const limit = Math.max(1, Math.min(10, Number(args.limit) || 5));
     const response = await fetch(
       `https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(query)}&size=${limit}`,
@@ -496,7 +476,6 @@ async function executeTool(name, args, user, options = {}) {
     );
     if (!response.ok) throw new Error(`npm registry returned HTTP ${response.status}`);
     const data = await response.json();
-    log.info('npm search completed', { userId, query, packageCount: (data.objects || []).length });
     return {
       packages: (data.objects || []).map(({ package: p }) => ({
         name: p.name,
@@ -509,7 +488,6 @@ async function executeTool(name, args, user, options = {}) {
   if (name === 'github_search') {
     const query = String(args.query || '').trim();
     if (!query) throw new Error('A search query is required.');
-    log.info('GitHub search started', { userId, query });
     const limit = Math.max(1, Math.min(10, Number(args.limit) || 5));
     const response = await fetch(
       `https://api.github.com/search/repositories?q=${encodeURIComponent(query)}&per_page=${limit}`,
@@ -520,11 +498,6 @@ async function executeTool(name, args, user, options = {}) {
     );
     if (!response.ok) throw new Error(`GitHub API returned HTTP ${response.status}`);
     const data = await response.json();
-    log.info('GitHub search completed', {
-      userId,
-      query,
-      repositoryCount: (data.items || []).length,
-    });
     return {
       repositories: (data.items || []).map((repo) => ({
         full_name: repo.full_name,
@@ -537,7 +510,6 @@ async function executeTool(name, args, user, options = {}) {
   }
   if (name === 'fetch_public_url') {
     const url = await safeUrl(String(args.url || ''));
-    log.info('URL fetch started', { userId, url: url.toString() });
     const response = await fetch(url, {
       headers: {
         'User-Agent': 'Nemotron-Agent-Lab/1.0',
@@ -551,12 +523,6 @@ async function executeTool(name, args, user, options = {}) {
     if (!/text\//i.test(type) && !/json/i.test(type))
       throw new Error('Only text, HTML and JSON responses can be fetched.');
     const content = (await response.text()).slice(0, 30000);
-    log.info('URL fetch completed', {
-      userId,
-      url: url.toString(),
-      contentType: type,
-      contentBytes: content.length,
-    });
     return { url: url.toString(), contentType: type, content };
   }
   throw new Error(`Unknown tool: ${name}`);

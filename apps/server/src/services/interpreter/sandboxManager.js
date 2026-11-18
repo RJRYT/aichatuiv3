@@ -661,10 +661,6 @@ async function installMissingPythonDependencies({
       unmappedImports: Array.isArray(index.unmapped) ? index.unmapped : [],
     };
 
-  log.info('Installing missing Python dependencies in conversation sandbox', {
-    packages,
-    workspacePath,
-  });
   const install = await sandbox.runCommand({
     cmd: pythonPath,
     args: [
@@ -820,15 +816,6 @@ export async function executeWithVercelSandbox({
             { name: 'AbortError' }
           );
 
-        log.info('Starting Python in Vercel Sandbox', {
-          userId: uid,
-          chatId: resolvedChatId,
-          executionId: id,
-          sandboxName,
-          vcpus: runtimeConfig.vcpus,
-          timeoutMs: runtimeConfig.timeoutMs,
-          installedPackages,
-        });
         job.command = await sandbox.runCommand({
           cmd: pythonPath,
           args: ['-u', scriptPath],
@@ -944,15 +931,6 @@ export async function executeWithVercelSandbox({
     active.delete(jobKey);
   }
 
-  log.info('Python execution finished', {
-    userId: uid,
-    chatId: resolvedChatId,
-    executionId: id,
-    status,
-    durationMs: Date.now() - startedAt,
-    artifactCount: artifacts.length,
-    exitCode,
-  });
   return {
     executionId: id,
     status,
@@ -998,11 +976,6 @@ export async function deleteSandboxForChat(userId, chatId) {
       const { Sandbox } = await import('@vercel/sandbox');
       const sandbox = await Sandbox.get({ name, ...authOptions(config) });
       await sandbox.delete({ deleteOrphanSnapshots: true });
-      log.info('Conversation sandbox deleted', {
-        userId: String(userId),
-        chatId: String(chatId),
-        sandboxName: name,
-      });
       return true;
     });
   } catch (error) {

@@ -14,7 +14,6 @@ const owner = (req) => String(req.user?._id || '');
 const log = logger.child({ component: 'routes:interpreter' });
 
 router.get('/status', (_req, res) => {
-  log.debug('Interpreter status requested');
   res.json({ interpreter: getInterpreterStatus() });
 });
 
@@ -30,7 +29,6 @@ router.post('/execute', async (req, res, next) => {
       const chat = await getChat(owner(req), String(req.body.chatId));
       if (!chat) return res.status(404).json({ error: 'Conversation not found.' });
     }
-    log.info('Python execution started', { userId: owner(req) });
     const controller = new AbortController();
     const abortOnDisconnect = () => {
       if (!res.writableEnded) controller.abort();
@@ -69,7 +67,6 @@ router.post('/execute', async (req, res, next) => {
 });
 
 router.post('/cancel/:id', (req, res) => {
-  log.info('Python execution cancel requested', { userId: owner(req), executionId: req.params.id });
   const cancelled = cancelExecution(req.params.id, owner(req));
   res.status(cancelled ? 202 : 404).json({
     cancelled,
@@ -97,14 +94,8 @@ router.get('/artifacts/:id', async (req, res, next) => {
       return res.status(404).json({ error: 'Artifact not found.' });
     const artifact = await getArtifact(req.params.id, owner(req));
     if (!artifact) {
-      log.warn('Artifact not found', { userId: owner(req), artifactId: req.params.id });
       return res.status(404).json({ error: 'Artifact not found.' });
     }
-    log.info('Artifact downloaded', {
-      userId: owner(req),
-      artifactId: req.params.id,
-      name: artifact.name,
-    });
     const previewable = [
       'text/plain',
       'text/csv',

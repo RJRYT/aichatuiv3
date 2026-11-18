@@ -12,10 +12,8 @@ router.get('/:shareId', async (req, res, next) => {
       .select('title messages createdAt shareType artifacts')
       .lean();
     if (!share) {
-      log.warn('Public share not found', { shareId: req.params.shareId });
       return res.status(404).json({ error: 'This shared response is unavailable.' });
     }
-    log.info('Public share accessed', { shareId: req.params.shareId });
     res.set('Cache-Control', 'no-store');
     res.json({
       share: {

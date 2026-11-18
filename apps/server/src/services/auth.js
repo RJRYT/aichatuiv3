@@ -128,8 +128,7 @@ export async function requireAuth(req, res, next) {
       req.user = { _id: `guest:${req.ip}`, name: 'Guest', preferences: {}, memories: [] };
       return next();
     }
-    log.warn('Authentication required, no valid session');
-    return res.status(401).json({ error: 'Authentication required.' });
+    return res.status(401).json({ error: 'Authentication required, no valid session' });
   } catch (error) {
     return next(error);
   }
@@ -420,11 +419,6 @@ export async function oauthCallback(req, res, provider) {
       await user.save();
     }
     createSessionCookie(res, user._id);
-    log.info('OAuth sign-in completed', {
-      provider,
-      userId: String(user._id),
-      linked: linkAttempt,
-    });
     const returnTo =
       typeof statePayload.returnTo === 'string' &&
       statePayload.returnTo.startsWith('/') &&

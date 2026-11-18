@@ -14,7 +14,6 @@
     "start:build": "npm run build && npm start",
     "start:api": "npm run start --workspace @nemotron/server",
     "test": "node --test apps/server/test/*.test.js",
-    "migrate:users": "node apps/server/scripts/migrate-users.js",
     "sandbox:check": "npm run sandbox:check --workspace @nemotron/server",
     "sandbox:smoke": "npm run sandbox:smoke --workspace @nemotron/server",
     "format": "prettier --write \"apps/**/*.{js,jsx,ts,tsx,json,md}\"",

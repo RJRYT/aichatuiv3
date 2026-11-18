@@ -41,7 +41,6 @@ export function getBranchMessages(chat, branchId = chat.activeBranchId || 'main'
 export function createBranch(chat, { fromBranchId, forkedFromMessageId, messages = [] }) {
   ensureBranches(chat);
   if (chat.branches.length >= 100) {
-    log.warn('Branch limit reached', { branchCount: chat.branches.length });
     throw Object.assign(new Error('This conversation has reached the 100-branch limit.'), {
       status: 429,
     });
@@ -53,19 +52,16 @@ export function createBranch(chat, { fromBranchId, forkedFromMessageId, messages
     cursor = chat.branches.find((item) => item.branchId === cursor.parentBranchId);
   }
   if (depth >= 20) {
-    log.warn('Branch nesting limit reached', { depth });
     throw Object.assign(new Error('Branch nesting limit reached.'), { status: 429 });
   }
   const source = getBranchMessages(chat, fromBranchId);
   if (!source) {
-    log.warn('Source branch not found', { fromBranchId });
     throw Object.assign(new Error('Source branch not found.'), { status: 404 });
   }
   const index = forkedFromMessageId
     ? source.findIndex((message) => message.id === forkedFromMessageId)
     : -1;
   if (forkedFromMessageId && index < 0) {
-    log.warn('Fork message not found', { forkedFromMessageId });
     throw Object.assign(new Error('Fork message not found.'), { status: 404 });
   }
   const branch = {
@@ -78,11 +74,6 @@ export function createBranch(chat, { fromBranchId, forkedFromMessageId, messages
   };
   chat.branches.push(branch);
   chat.activeBranchId = branch.branchId;
-  log.info('Branch created', {
-    branchId: branch.branchId,
-    parentBranchId: branch.parentBranchId,
-    forkedFromMessageId: branch.forkedFromMessageId,
-  });
   return {
     branch,
     messages: forkedFromMessageId ? [...source.slice(0, index + 1), ...messages] : [...messages],

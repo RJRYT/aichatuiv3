@@ -48,7 +48,6 @@ router.get('/profile/username-availability', async (req, res) => {
 router.patch('/profile', async (req, res, next) => {
   const userId = String(req.user._id);
   if (guest(req)) return res.status(403).json({ error: 'Sign in to edit your profile.' });
-  log.info('Profile update requested', { userId, fields: Object.keys(req.body || {}) });
   const name = req.body?.name === undefined ? undefined : String(req.body.name).trim();
   const username =
     req.body?.username === undefined ? undefined : String(req.body.username).trim().toLowerCase();
@@ -72,13 +71,8 @@ router.patch('/profile', async (req, res, next) => {
     )
       .select('-memories')
       .lean();
-    log.info('Profile updated', { userId });
     res.json({ user });
   } catch (error) {
-    log.error('Profile update failed', {
-      userId,
-      error: error instanceof Error ? error.message : String(error),
-    });
     if (error.code === 11000)
       return res.status(409).json({ error: 'That username is already taken.' });
     return next(error);
@@ -86,7 +80,6 @@ router.patch('/profile', async (req, res, next) => {
 });
 router.get('/profile', async (req, res) => {
   if (guest(req)) return res.json({ user: req.user });
-  log.debug('Profile fetched', { userId: String(req.user._id) });
   const user = await User.findById(req.user._id).select('-memories').lean();
   res.json({ user });
 });
@@ -106,7 +99,6 @@ router.patch('/preferences', async (req, res) => {
   for (const key of Object.keys(defaults))
     if (req.body?.[key] !== undefined) next[`preferences.${key}`] = req.body[key];
   if (guest(req)) return res.json({ preferences: { ...defaults, ...req.body } });
-  log.info('Preferences updated', { userId, keys: Object.keys(next) });
   const user = await User.findByIdAndUpdate(req.user._id, { $set: next }, { new: true })
     .select('preferences')
     .lean();
@@ -118,7 +110,6 @@ router.post('/memories', async (req, res) => {
   if (!text || text.length > 2000)
     return res.status(400).json({ error: 'Memory must be between 1 and 2,000 characters.' });
   if (guest(req)) return res.status(403).json({ error: 'Sign in to save memories.' });
-  log.info('Memory saved', { userId, memoryLength: text.length });
   let user = await User.findOneAndUpdate(
     { _id: req.user._id, 'memories.text': { $ne: text } },
     { $push: { memories: { $each: [{ text, source: 'user' }], $slice: -50 } } },
@@ -143,16 +134,13 @@ router.patch('/memories/:id', async (req, res) => {
     .select('memories')
     .lean();
   if (!user) {
-    log.warn('Memory not found', { userId, memoryId: req.params.id });
     return res.status(404).json({ error: 'Memory not found.' });
   }
-  log.info('Memory updated', { userId, memoryId: req.params.id });
   res.json({ memories: user.memories });
 });
 router.delete('/memories/:id', async (req, res) => {
   const userId = String(req.user._id);
   if (guest(req)) return res.status(403).json({ error: 'Sign in to manage memories.' });
-  log.info('Memory deleted', { userId, memoryId: req.params.id });
   const user = await User.findByIdAndUpdate(
     req.user._id,
     { $pull: { memories: { _id: req.params.id } } },

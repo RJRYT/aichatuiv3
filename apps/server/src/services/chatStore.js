@@ -296,18 +296,14 @@ export async function deleteChat(sessionId, chatId) {
   if (mongoose.connection.readyState === 1) {
     const result = await Chat.deleteOne({ _id: chatId, sessionId });
     if (result.deletedCount > 0) {
-      log.info('Chat deleted', { sessionId, chatId });
       return true;
     }
-    log.warn('Chat delete failed: not found', { sessionId, chatId });
     return false;
   }
   const current = memory.get(chatId);
   if (!current || current.sessionId !== sessionId) {
-    log.warn('Chat delete failed: not found (in-memory)', { sessionId, chatId });
     return false;
   }
   memory.delete(chatId);
-  log.info('Chat deleted (in-memory)', { sessionId, chatId });
   return true;
 }
