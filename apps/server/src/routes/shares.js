@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { Share } from '../models/Share.js';
 import { getChat } from '../services/chatStore.js';
 import { ensureBranches, getBranchMessages } from '../services/conversationBranches.js';
-import { listArtifacts, getArtifact } from '../services/interpreter/artifactStore.js';
+import { getArtifact, listArtifacts } from '../services/interpreter/artifactStore.js';
 import logger from '../utils/logger.js';
 
 const router = Router();
@@ -15,7 +15,6 @@ router.get('/', async (req, res, next) => {
       .select('shareId title chatId shareType createdAt')
       .sort({ createdAt: -1 })
       .lean();
-    log.debug('Shares listed', { userId: owner(req), count: shares.length });
     res.json({ shares });
   } catch (error) {
     next(error);

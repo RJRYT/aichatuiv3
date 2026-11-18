@@ -1,8 +1,8 @@
 import mongoose from 'mongoose';
 import { Chat } from '../models/Chat.js';
 import logger from '../utils/logger.js';
-import { sanitizeRetrievedChat, sanitizeAgentPlan } from './conversationPrivacy.js';
 import { ensureBranches, getBranchMessages } from './conversationBranches.js';
+import { sanitizeAgentPlan, sanitizeRetrievedChat } from './conversationPrivacy.js';
 
 const log = logger.child({ component: 'chatStore' });
 const memory = new Map();
@@ -246,15 +246,12 @@ export async function createChat(sessionId, title = 'New chat') {
     createdAt: now(),
     updatedAt: now(),
   };
-  log.debug('Creating chat', { sessionId, title });
   if (mongoose.connection.readyState === 1) {
     const created = await Chat.create(doc);
-    log.info('Chat created', { sessionId, chatId: String(created._id), title });
     return created.toObject();
   }
   const created = { ...doc, _id: id() };
   memory.set(created._id, created);
-  log.info('Chat created (in-memory)', { sessionId, chatId: String(created._id), title });
   return created;
 }
 
@@ -269,7 +266,6 @@ export async function updateChat(sessionId, chatId, patch) {
       ...branch,
       messages: cleanMessages(branch.messages || []),
     }));
-  log.debug('Updating chat', { sessionId, chatId, expectedRevision });
   if (mongoose.connection.readyState === 1) {
     const updated = await Chat.findOneAndUpdate(
       {
@@ -280,11 +276,7 @@ export async function updateChat(sessionId, chatId, patch) {
       { $set: values },
       { new: true }
     ).lean();
-    if (!updated) {
-      log.warn('Chat update failed: not found or revision conflict', { sessionId, chatId });
-      return null;
-    }
-    log.info('Chat updated', { sessionId, chatId });
+    if (!updated) return null;
     return sanitizeRetrievedChat(updated);
   }
   const current = memory.get(chatId);
@@ -293,20 +285,14 @@ export async function updateChat(sessionId, chatId, patch) {
     current.sessionId !== sessionId ||
     (Number.isInteger(expectedRevision) && (current.revision || 0) !== expectedRevision)
   ) {
-    log.warn('Chat update failed: not found or revision conflict (in-memory)', {
-      sessionId,
-      chatId,
-    });
     return null;
   }
   const next = { ...current, ...values };
   memory.set(chatId, next);
-  log.info('Chat updated (in-memory)', { sessionId, chatId });
   return sanitizeRetrievedChat(next);
 }
 
 export async function deleteChat(sessionId, chatId) {
-  log.debug('Deleting chat', { sessionId, chatId });
   if (mongoose.connection.readyState === 1) {
     const result = await Chat.deleteOne({ _id: chatId, sessionId });
     if (result.deletedCount > 0) {

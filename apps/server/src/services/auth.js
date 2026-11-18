@@ -119,7 +119,6 @@ export async function requireAuth(req, res, next) {
         if (user) {
           req.user = user;
           req.authSessionExp = Number(payload.exp);
-          log.debug('Authenticated session', { userId: String(user._id) });
           return next();
         }
       }
@@ -127,7 +126,6 @@ export async function requireAuth(req, res, next) {
     if (cookies[cookieName]) clearSessionCookie(res);
     if (process.env.AUTH_REQUIRED === 'false' && process.env.NODE_ENV !== 'production') {
       req.user = { _id: `guest:${req.ip}`, name: 'Guest', preferences: {}, memories: [] };
-      log.debug('Guest session created', { ip: req.ip });
       return next();
     }
     log.warn('Authentication required, no valid session');
@@ -175,7 +173,6 @@ export function oauthStart(req, res, provider) {
     log.warn('OAuth provider not configured', { provider });
     return res.status(503).send(`${provider} OAuth is not configured on the server.`);
   }
-  log.info('OAuth authorization started', { provider });
   const state = crypto.randomBytes(24).toString('hex');
   const linkUserId = req.authLinkUserId || null;
   const requestedReturnTo = String(req.query.returnTo || '/');
@@ -282,7 +279,6 @@ async function fetchProfile(provider, token) {
 export async function oauthCallback(req, res, provider) {
   const frontend = process.env.FRONTEND_URL || 'http://localhost:5173';
   let linkAttempt = false;
-  log.info('OAuth callback received', { provider });
   try {
     const cookies = parseCookies(req.headers.cookie || '');
     const raw = verify(cookies[stateCookie]);

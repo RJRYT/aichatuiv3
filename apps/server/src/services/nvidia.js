@@ -1,18 +1,18 @@
 import crypto from 'node:crypto';
-import { getToolDefinitions, runTool } from './tools.js';
-import { buildSystemPrompt } from './systemPrompt.js';
 import logger from '../utils/logger.js';
-import { getArtifact, listArtifacts } from './interpreter/artifactStore.js';
 import {
-  detectDeliverableContract,
-  inspectZipBuffer,
-  assessWebsiteQuality,
-} from './deliverablePolicy.js';
-import {
-  initializePlanProgress,
   advancePlanAfterExecution,
+  initializePlanProgress,
   startNextPlanTask,
 } from './agentPlanProgress.js';
+import {
+  assessWebsiteQuality,
+  detectDeliverableContract,
+  inspectZipBuffer,
+} from './deliverablePolicy.js';
+import { getArtifact, listArtifacts } from './interpreter/artifactStore.js';
+import { buildSystemPrompt } from './systemPrompt.js';
+import { getToolDefinitions, runTool } from './tools.js';
 
 export const MODEL_ID = 'nvidia/nemotron-3.5-super-vl-120b-a12b';
 const log = logger.child({ component: 'nvidia' });
@@ -225,7 +225,6 @@ export async function requestRound({
   roundTimeoutMs = MODEL_ROUND_TIMEOUT_MS,
   heartbeatIntervalMs = MODEL_HEARTBEAT_INTERVAL_MS,
 }) {
-  log.debug('NVIDIA request round', { round, toolCount: tools.length, hasVision });
   const body = {
     model: MODEL_ID,
     messages,

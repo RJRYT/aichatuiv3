@@ -1,14 +1,14 @@
-import { executePython } from './interpreter/interpreter.js';
-import { getInterpreterStatus } from './interpreter/sandboxManager.js';
-import { getChat, searchChatContexts } from './chatStore.js';
 import { Parser } from 'expr-eval';
-import { User } from '../models/User.js';
-import { Share } from '../models/Share.js';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import { Share } from '../models/Share.js';
+import { User } from '../models/User.js';
 import logger from '../utils/logger.js';
-import { generateImageArtifact, getImageGenerationStatus } from './imageGeneration.js';
 import { createTaskPlan, updatePlannedTask } from './agentPlanning.js';
+import { getChat, searchChatContexts } from './chatStore.js';
+import { generateImageArtifact, getImageGenerationStatus } from './imageGeneration.js';
+import { executePython } from './interpreter/interpreter.js';
+import { getInterpreterStatus } from './interpreter/sandboxManager.js';
 
 const log = logger.child({ component: 'tools' });
 const parser = new Parser({
@@ -660,16 +660,13 @@ export function getPluginCatalog() {
   ];
 }
 export async function runTool(name, args, user, options = {}) {
-  const userId = user?._id ? String(user._id) : 'unknown';
   try {
-    log.debug('Tool execution started', { name, userId });
     const result = await executeTool(name, args, user, options);
-    log.debug('Tool execution completed', { name, userId });
     return { ok: true, result: result };
   } catch (error) {
     log.warn('Tool execution failed', {
       name,
-      userId,
+      userId: user?._id ? String(user._id) : 'unknown',
       error: error instanceof Error ? error.message : String(error),
     });
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
