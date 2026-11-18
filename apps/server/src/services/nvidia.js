@@ -721,16 +721,29 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
             error: `Recovery limit reached for ${name}. Stop retrying this tool and explain the remaining limitation.`,
           };
         } else {
-          outcome = await runTool(name, args, user, {
-            signal: controller.signal,
-            chatId: body.chatId,
-            agentState,
-            archiveOnly: Boolean(deliverableContract?.archiveRequired),
-            onAgentEvent: (eventType, data) => {
-              if (eventType === 'plan_created' && data.plan) agentState.plan = data.plan;
-              emitAgentEvent(eventType, data);
-            },
-          });
+          const toolHeartbeatTimer = setInterval(() => {
+            sse(res, {
+              type: 'heartbeat',
+              phase: 'tool',
+              name,
+              round,
+              message: `Still running ${name.replaceAll('_', ' ')}; waiting for its result.`,
+            });
+          }, MODEL_HEARTBEAT_INTERVAL_MS);
+          try {
+            outcome = await runTool(name, args, user, {
+              signal: controller.signal,
+              chatId: body.chatId,
+              agentState,
+              archiveOnly: Boolean(deliverableContract?.archiveRequired),
+              onAgentEvent: (eventType, data) => {
+                if (eventType === 'plan_created' && data.plan) agentState.plan = data.plan;
+                emitAgentEvent(eventType, data);
+              },
+            });
+          } finally {
+            clearInterval(toolHeartbeatTimer);
+          }
         }
         const toolCompleted =
           outcome.ok &&

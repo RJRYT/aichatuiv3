@@ -54,6 +54,13 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { buildChatExport, chatExportFilename } from './chatExport.js';
+import {
+  ChatStreamError,
+  chatErrorMessage,
+  fetchChatStream,
+  readChatEventStream,
+  responseError,
+} from './chatStream.js';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
 const DEFAULT_PREFERENCES = {
@@ -1037,7 +1044,7 @@ function LiveProgress({ progress, now, toolEvents = [] }) {
         title={toolEvents.length ? 'Click to show or hide tool activity' : undefined}
       >
         {isWorking ? (
-          <span>Working...</span>
+          <span>{message}</span>
         ) : (
           <span className="live-progress-typing" key={message}>
             <Markdown content={message} />
@@ -1210,7 +1217,7 @@ function Message({
             ) : null;
           })()}
         {message.error && (
-          <div className="message-error">
+          <div className="message-error" role="alert">
             <AlertCircle size={14} />
             {message.error}
           </div>
@@ -3018,142 +3025,139 @@ export default function App() {
     const controller = new AbortController();
     abortRef.current = controller;
     try {
-      const res = await fetch(api('/api/chat/stream'), {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          chatId: activeId,
-          branchId: activeBranchId,
-          expectedRevision: activeChat?.revision || 0,
-          preserveExistingMessageId: message.id,
-          thinkingEnabled: thinking,
-          activePlan: latestActivePlan(messages.slice(0, index)),
-          messages: messages.slice(0, index).map((m) => ({
-            ...(m.id ? { id: m.id } : {}),
-            role: m.role,
-            content: m.apiContent || m.content,
-            ...(m.createdAt ? { createdAt: m.createdAt } : {}),
-            ...(m.attachments?.length ? { attachments: m.attachments } : {}),
-          })),
-        }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || `Request failed (${res.status})`);
-      }
-      const reader = res.body.getReader(),
-        decoder = new TextDecoder();
-      let buffer = '',
-        regeneratedOutput = '',
+      const res = await fetchChatStream(
+        api('/api/chat/stream'),
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chatId: activeId,
+            branchId: activeBranchId,
+            expectedRevision: activeChat?.revision || 0,
+            preserveExistingMessageId: message.id,
+            thinkingEnabled: thinking,
+            activePlan: latestActivePlan(messages.slice(0, index)),
+            messages: messages.slice(0, index).map((m) => ({
+              ...(m.id ? { id: m.id } : {}),
+              role: m.role,
+              content: m.apiContent || m.content,
+              ...(m.createdAt ? { createdAt: m.createdAt } : {}),
+              ...(m.attachments?.length ? { attachments: m.attachments } : {}),
+            })),
+          }),
+        },
+        controller
+      );
+      if (!res.ok) throw await responseError(res, 'Could not regenerate the response');
+      let regeneratedOutput = '',
         regenerationToolEvents = [];
-      while (true) {
-        const part = await reader.read();
-        buffer += decoder.decode(part.value || new Uint8Array(), {
-          stream: !part.done,
-        });
-        const blocks = buffer.split(/\r?\n\r?\n/);
-        buffer = blocks.pop() || '';
-        for (const block of blocks) {
-          const line = block.split(/\r?\n/).find((x) => x.startsWith('data:'));
-          if (!line) continue;
-          const event = JSON.parse(line.slice(5).trim());
-          if (event.type === 'status') setStatus(event.status || 'Working');
-          if (event.type === 'heartbeat' && thinking)
+      for await (const event of readChatEventStream(res, { signal: controller.signal })) {
+        if (event.type === 'status') setStatus(event.status || 'Working');
+        if (event.type === 'heartbeat')
+          setLiveProgress((current) => ({
+            ...(current || { startedAt: Date.now(), lastActivityAt: Date.now() }),
+            message:
+              event.message ||
+              (event.phase === 'tool'
+                ? `Running ${String(event.name || 'tool').replaceAll('_', ' ')}; waiting for its result.`
+                : 'Waiting for the model response; the connection is still active.'),
+            lastActivityAt: Date.now(),
+          }));
+        if (event.type === 'agent_event') {
+          const item = event.event || {};
+          const progressMessage = item.type === 'progress_update' ? item.message : '';
+          if (progressMessage && thinking)
             setLiveProgress((current) => ({
-              ...(current || { startedAt: Date.now(), lastActivityAt: Date.now() }),
-              message: event.message || 'The model is still working; waiting for its response.',
+              ...(current || { startedAt: Date.now() }),
+              message: progressMessage,
+              lastActivityAt: Date.now(),
             }));
-          if (event.type === 'agent_event') {
-            const item = event.event || {};
-            const progressMessage = item.type === 'progress_update' ? item.message : '';
-            if (progressMessage && thinking)
-              setLiveProgress((current) => ({
-                ...(current || { startedAt: Date.now() }),
-                message: progressMessage,
-                lastActivityAt: Date.now(),
-              }));
-          }
-          if (event.type === 'final_content') {
-            if (!thinking) setLiveProgress(null);
-            regeneratedOutput = event.content || '';
-            setMessages((current) =>
-              current.map((item) =>
-                item.id === message.id
-                  ? {
-                      ...item,
-                      content: regeneratedOutput,
-                      isStreaming: true,
-                      toolEvents: regenerationToolEvents,
-                    }
-                  : item
-              )
-            );
-          }
-          if (event.type === 'chunk') {
-            if (!thinking) setLiveProgress(null);
-            regeneratedOutput += event.content || '';
-            setMessages((current) =>
-              current.map((item) =>
-                item.id === message.id
-                  ? {
-                      ...item,
-                      content: regeneratedOutput,
-                      isStreaming: true,
-                      toolEvents: regenerationToolEvents,
-                    }
-                  : item
-              )
-            );
-          }
-          if (event.type === 'tool_start') {
-            regenerationToolEvents = [
-              ...regenerationToolEvents,
-              {
-                name: event.name,
-                status: 'running',
-                arguments: event.arguments || {},
-                startedAt: event.startedAt,
-              },
-            ];
-            setMessages((current) =>
-              current.map((item) =>
-                item.id === message.id
-                  ? { ...item, isStreaming: true, toolEvents: regenerationToolEvents }
-                  : item
-              )
-            );
-          }
-          if (event.type === 'tool_result') {
-            const lastIndex = regenerationToolEvents
-              .map((item) => item.name)
-              .lastIndexOf(event.name);
-            if (lastIndex >= 0)
-              regenerationToolEvents = regenerationToolEvents.map((item, itemIndex) =>
-                itemIndex === lastIndex
-                  ? {
-                      ...item,
-                      status: event.status,
-                      result: event.result,
-                      error: event.error,
-                      startedAt: event.startedAt || item.startedAt,
-                      completedAt: event.completedAt,
-                      durationMs: event.durationMs,
-                    }
-                  : item
-              );
-            setMessages((current) =>
-              current.map((item) =>
-                item.id === message.id
-                  ? { ...item, isStreaming: true, toolEvents: regenerationToolEvents }
-                  : item
-              )
-            );
-          }
-          if (event.type === 'error') throw new Error(event.error || 'Regeneration failed.');
         }
-        if (part.done) break;
+        if (event.type === 'final_content') {
+          if (!thinking) setLiveProgress(null);
+          regeneratedOutput = event.content || '';
+          setMessages((current) =>
+            current.map((item) =>
+              item.id === message.id
+                ? {
+                    ...item,
+                    content: regeneratedOutput,
+                    isStreaming: true,
+                    toolEvents: regenerationToolEvents,
+                  }
+                : item
+            )
+          );
+        }
+        if (event.type === 'chunk') {
+          if (!thinking) setLiveProgress(null);
+          regeneratedOutput += event.content || '';
+          setMessages((current) =>
+            current.map((item) =>
+              item.id === message.id
+                ? {
+                    ...item,
+                    content: regeneratedOutput,
+                    isStreaming: true,
+                    toolEvents: regenerationToolEvents,
+                  }
+                : item
+            )
+          );
+        }
+        if (event.type === 'tool_start') {
+          regenerationToolEvents = [
+            ...regenerationToolEvents,
+            {
+              name: event.name,
+              status: 'running',
+              arguments: event.arguments || {},
+              startedAt: event.startedAt,
+            },
+          ];
+          setMessages((current) =>
+            current.map((item) =>
+              item.id === message.id
+                ? { ...item, isStreaming: true, toolEvents: regenerationToolEvents }
+                : item
+            )
+          );
+        }
+        if (event.type === 'tool_result') {
+          const lastIndex = regenerationToolEvents.map((item) => item.name).lastIndexOf(event.name);
+          if (lastIndex >= 0)
+            regenerationToolEvents = regenerationToolEvents.map((item, itemIndex) =>
+              itemIndex === lastIndex
+                ? {
+                    ...item,
+                    status: event.status,
+                    result: event.result,
+                    error: event.error,
+                    startedAt: event.startedAt || item.startedAt,
+                    completedAt: event.completedAt,
+                    durationMs: event.durationMs,
+                  }
+                : item
+            );
+          setMessages((current) =>
+            current.map((item) =>
+              item.id === message.id
+                ? { ...item, isStreaming: true, toolEvents: regenerationToolEvents }
+                : item
+            )
+          );
+        }
+        if (event.type === 'error')
+          throw new ChatStreamError(event.error || 'Regeneration failed.', {
+            code: 'CHAT_SERVER_ERROR',
+            status: event.status,
+          });
+        if (event.type === 'stopped') {
+          const stopped = new Error('Generation was stopped.');
+          stopped.name = 'AbortError';
+          throw stopped;
+        }
       }
       const refreshed = await (
         await request(`/api/chats/${activeId}?branchId=${activeBranchId}`)
@@ -3166,7 +3170,8 @@ export default function App() {
         current.map((item) => (item.id === message.id ? { ...message, isStreaming: false } : item))
       );
       setStatus(error.name === 'AbortError' ? 'Stopped' : 'Regeneration failed');
-      setFileError(error.message);
+      if (error.name !== 'AbortError')
+        setFileError(chatErrorMessage(error, 'Could not regenerate the response.'));
     } finally {
       abortRef.current = null;
       try {
@@ -3421,143 +3426,131 @@ export default function App() {
     };
     try {
       setStatus('Connecting…');
-      const res = await fetch(api('/api/chat/stream'), {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          chatId: chat._id,
-          branchId: options.branchId || activeBranchId,
-          expectedRevision: options.expectedRevision ?? (chat.revision || 0),
-          assistantMessageId: assistantId,
-          thinkingEnabled: thinking,
-          activePlan: continuingPlan,
-          messages: nextMessages.map((m) => ({
-            ...(m.id ? { id: m.id } : {}),
-            role: m.role,
-            content: m.apiContent || m.content,
-            ...(m.createdAt ? { createdAt: m.createdAt } : {}),
-            ...(m.attachments?.length ? { attachments: m.attachments } : {}),
-            ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
-          })),
-        }),
-      });
-      if (!res.ok) {
-        let data = {};
-        try {
-          data = await res.json();
-        } catch {
-          data.error = await res.text();
+      const res = await fetchChatStream(
+        api('/api/chat/stream'),
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chatId: chat._id,
+            branchId: options.branchId || activeBranchId,
+            expectedRevision: options.expectedRevision ?? (chat.revision || 0),
+            assistantMessageId: assistantId,
+            thinkingEnabled: thinking,
+            activePlan: continuingPlan,
+            messages: nextMessages.map((m) => ({
+              ...(m.id ? { id: m.id } : {}),
+              role: m.role,
+              content: m.apiContent || m.content,
+              ...(m.createdAt ? { createdAt: m.createdAt } : {}),
+              ...(m.attachments?.length ? { attachments: m.attachments } : {}),
+              ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
+            })),
+          }),
+        },
+        controller
+      );
+      if (!res.ok) throw await responseError(res, 'The server could not complete your request');
+      for await (const event of readChatEventStream(res, { signal: controller.signal })) {
+        if (event.type === 'status') setStatus(event.status || 'Working');
+        if (event.type === 'heartbeat')
+          setLiveProgress((current) => ({
+            ...(current || { startedAt: Date.now(), lastActivityAt: Date.now() }),
+            message:
+              event.message ||
+              (event.phase === 'tool'
+                ? `Running ${String(event.name || 'tool').replaceAll('_', ' ')}; waiting for its result.`
+                : 'Waiting for the model response; the connection is still active.'),
+            lastActivityAt: Date.now(),
+          }));
+        if (event.type === 'final_content') {
+          if (!thinking) setLiveProgress(null);
+          output = event.content || '';
+          update();
         }
-        throw new Error(data.error || `Request failed (${res.status})`);
-      }
-      const reader = res.body.getReader(),
-        decoder = new TextDecoder();
-      let buffer = '';
-      while (true) {
-        const chunk = await reader.read();
-        buffer += decoder.decode(chunk.value || new Uint8Array(), {
-          stream: !chunk.done,
-        });
-        const blocks = buffer.split(/\r?\n\r?\n/);
-        buffer = blocks.pop() || '';
-        for (const block of blocks) {
-          const line = block.split(/\r?\n/).find((x) => x.startsWith('data:'));
-          if (!line) continue;
-          let event;
-          try {
-            event = JSON.parse(line.slice(5).trim());
-          } catch {
-            continue;
-          }
-          if (event.type === 'status') setStatus(event.status || 'Working');
-          if (event.type === 'heartbeat' && thinking)
+        if (event.type === 'chunk') {
+          if (!thinking) setLiveProgress(null);
+          output += event.content || '';
+          setStatus('Generating');
+          update();
+        }
+        if (event.type === 'agent_event') {
+          const item = event.event || {};
+          agentEvents = [...agentEvents, item];
+          if (item.type === 'plan_created' && item.plan) agentPlan = item.plan;
+          if (item.type === 'task_updated' && item.plan) agentPlan = item.plan;
+          const message = item.type === 'progress_update' ? item.message : '';
+          if (message && thinking)
             setLiveProgress((current) => ({
-              ...(current || { startedAt: Date.now(), lastActivityAt: Date.now() }),
-              message: event.message || 'The model is still working; waiting for its response.',
+              ...(current || { startedAt: Date.now() }),
+              message,
+              lastActivityAt: Date.now(),
             }));
-          if (event.type === 'final_content') {
-            if (!thinking) setLiveProgress(null);
-            output = event.content || '';
-            update();
-          }
-          if (event.type === 'chunk') {
-            if (!thinking) setLiveProgress(null);
-            output += event.content || '';
-            setStatus('Generating');
-            update();
-          }
-          if (event.type === 'agent_event') {
-            const item = event.event || {};
-            agentEvents = [...agentEvents, item];
-            if (item.type === 'plan_created' && item.plan) agentPlan = item.plan;
-            if (item.type === 'task_updated' && item.plan) agentPlan = item.plan;
-            const message = item.type === 'progress_update' ? item.message : '';
-            if (message && thinking)
-              setLiveProgress((current) => ({
-                ...(current || { startedAt: Date.now() }),
-                message,
-                lastActivityAt: Date.now(),
-              }));
-            update();
-          }
-          if (event.type === 'tool_start') {
-            events = [
-              ...events,
-              {
-                name: event.name,
-                status: 'running',
-                arguments: event.arguments,
-                startedAt: event.startedAt,
-              },
-            ];
-            setStatus(`Using ${event.name.replaceAll('_', ' ')}…`);
-            update();
-          }
-          if (event.type === 'tool_result') {
-            if (
-              ['execute_python', 'generate_image'].includes(event.name) &&
-              event.result?.artifacts?.length
-            )
-              setLibraryRefresh((v) => v + 1);
-            if (event.name === 'save_memory') {
-              request('/api/account/memories')
-                .then((r) => r.json())
-                .then((data) => setMemories(data.memories || []))
-                .catch(() => {});
-              if (typeof BroadcastChannel !== 'undefined') {
-                const channel = new BroadcastChannel('nemotron-memory-sync');
-                channel.postMessage({ type: 'refresh' });
-                channel.close();
-              }
-            }
-            const index = events.map((x) => x.name).lastIndexOf(event.name);
-            if (index >= 0)
-              events = events.map((x, i) =>
-                i === index
-                  ? {
-                      ...x,
-                      status: event.status,
-                      error: event.error,
-                      result: event.result,
-                      startedAt: event.startedAt || x.startedAt,
-                      completedAt: event.completedAt,
-                      durationMs: event.durationMs,
-                    }
-                  : x
-              );
-            update();
-          }
-          if (event.type === 'done') {
-            usage = event.usage || usage;
-            durationMs = event.durationMs ?? Math.round(performance.now() - started);
-            update();
-          }
-          if (event.type === 'stopped') setStatus('Stopped');
-          if (event.type === 'error') throw new Error(event.error || 'Generation failed.');
+          update();
         }
-        if (chunk.done) break;
+        if (event.type === 'tool_start') {
+          events = [
+            ...events,
+            {
+              name: event.name,
+              status: 'running',
+              arguments: event.arguments,
+              startedAt: event.startedAt,
+            },
+          ];
+          setStatus(`Using ${event.name.replaceAll('_', ' ')}…`);
+          update();
+        }
+        if (event.type === 'tool_result') {
+          if (
+            ['execute_python', 'generate_image'].includes(event.name) &&
+            event.result?.artifacts?.length
+          )
+            setLibraryRefresh((v) => v + 1);
+          if (event.name === 'save_memory') {
+            request('/api/account/memories')
+              .then((r) => r.json())
+              .then((data) => setMemories(data.memories || []))
+              .catch(() => {});
+            if (typeof BroadcastChannel !== 'undefined') {
+              const channel = new BroadcastChannel('nemotron-memory-sync');
+              channel.postMessage({ type: 'refresh' });
+              channel.close();
+            }
+          }
+          const index = events.map((x) => x.name).lastIndexOf(event.name);
+          if (index >= 0)
+            events = events.map((x, i) =>
+              i === index
+                ? {
+                    ...x,
+                    status: event.status,
+                    error: event.error,
+                    result: event.result,
+                    startedAt: event.startedAt || x.startedAt,
+                    completedAt: event.completedAt,
+                    durationMs: event.durationMs,
+                  }
+                : x
+            );
+          update();
+        }
+        if (event.type === 'done') {
+          usage = event.usage || usage;
+          durationMs = event.durationMs ?? Math.round(performance.now() - started);
+          update();
+        }
+        if (event.type === 'stopped') {
+          const stopped = new Error('Generation was stopped.');
+          stopped.name = 'AbortError';
+          throw stopped;
+        }
+        if (event.type === 'error')
+          throw new ChatStreamError(event.error || 'The server could not complete your request.', {
+            code: 'CHAT_SERVER_ERROR',
+            status: event.status,
+          });
       }
       liveAssistant = {
         ...assistant,
@@ -3610,13 +3603,14 @@ export default function App() {
         toolEvents: events,
         agentPlan,
         agentEvents,
-        error: stopped ? 'Generation stopped.' : error.message,
+        error: stopped ? 'Generation stopped.' : chatErrorMessage(error),
         usage,
         durationMs: durationMs ?? Math.round(performance.now() - started),
       };
       if (activeIdRef.current === chat._id)
         setMessages((current) => current.map((m) => (m.id === assistantId ? liveAssistant : m)));
       setStatus(stopped ? 'Stopped' : 'Request failed');
+      if (!stopped) setFileError(chatErrorMessage(error));
       try {
         if (options.branchId)
           await request(`/api/chats/${chat._id}`, {
