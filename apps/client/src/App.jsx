@@ -37,6 +37,14 @@ import {
   Pencil,
   PencilLine,
   Plus,
+  Puzzle,
+  BarChart3,
+  Play,
+  Loader2,
+  Folder,
+  FolderCog,
+  Pin,
+  Star,
   RefreshCw,
   Search,
   Share2,
@@ -73,6 +81,21 @@ const DEFAULT_PREFERENCES = {
   headers: true,
   lists: true,
 };
+const PLUGIN_CATALOG = [
+  { id: 'execute_python', name: 'Python interpreter', description: 'run Python in a sandbox' },
+  { id: 'web_search', name: 'Web search', description: 'search the live web' },
+  { id: 'fetch_public_url', name: 'Fetch URL', description: 'read a web page' },
+  { id: 'npm_search', name: 'npm search', description: 'search npm packages' },
+  { id: 'github_search', name: 'GitHub search', description: 'search repos and code' },
+  { id: 'calculator', name: 'Calculator', description: 'evaluate math expressions' },
+  { id: 'create_task_plan', name: 'Task plans', description: 'structured multi-step plans' },
+  { id: 'save_memory', name: 'Save memory', description: 'remember things across chats' },
+  { id: 'search_memories', name: 'Search memories', description: 'recall saved memories' },
+  { id: 'search_previous_chats', name: 'Search past chats', description: 'find earlier conversations' },
+  { id: 'list_shared_links', name: 'Shared links', description: 'list active shared links' },
+  { id: 'get_current_datetime', name: 'Date & time', description: 'current date and time' },
+  { id: 'generate_image', name: 'Image generation', description: 'generate images' },
+];
 const COLOR_THEMES = [
   { id: 'forest', name: 'Forest', colors: ['#0b0e0c', '#a4df78'] },
   { id: 'midnight', name: 'Midnight', colors: ['#090d18', '#8ba7ff'] },
@@ -117,6 +140,20 @@ const SUGGESTIONS = [
       'Help me evaluate a product idea. Analyze feasibility, architecture, risks, and an MVP roadmap.',
   },
 ];
+// crypto.randomUUID is only available in secure contexts (https or localhost);
+// fall back for LAN/preview hosts served over plain HTTP.
+const uid = () =>
+  typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+// Touch-first devices (phones, tablets): Enter on the virtual keyboard inserts a
+// newline and messages are sent with the send button only.
+const IS_TOUCH_ONLY =
+  typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+
 function api(path) {
   return `${API_BASE}${path}`;
 }
@@ -335,12 +372,38 @@ async function prepareFiles(files) {
   return out;
 }
 
+const RUNNABLE = new Set(['python', 'py']);
 const CodeBlock = React.memo(({ children, className = '' }) => {
   const [copied, setCopied] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [runState, setRunState] = useState('idle');
+  const [runOutput, setRunOutput] = useState('');
   const code = String(children ?? '').replace(/\n$/, '');
   const language = className.match(/language-([\w-]+)/)?.[1] || 'code';
+  const runnable = RUNNABLE.has(language);
+  const runCode = async () => {
+    if (runState === 'running') return;
+    setRunState('running');
+    setRunOutput('');
+    try {
+      const response = await request('/api/interpreter/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, executionId: `cr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
+      const logs = [data.stdout, data.stderr].filter(Boolean).join('\n');
+      const result = data.result && data.result !== 'undefined' ? `\n→ ${data.result}` : '';
+      const err = data.error ? `\n${data.error}` : '';
+      setRunOutput(`${logs}${result}${err}`.trim() || '(no output)');
+      setRunState(data.status === 'completed' ? 'done' : 'error');
+    } catch (error) {
+      setRunOutput(`Run failed: ${error.message}`);
+      setRunState('error');
+    }
+  };
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(code);
@@ -365,7 +428,17 @@ const CodeBlock = React.memo(({ children, className = '' }) => {
         <button type="button" onClick={copy} aria-label="Copy code">
           <Copy size={12} />
         </button>
+        {runnable && (
+          <button type="button" onClick={runCode} aria-label="Run code" title="Run in Python sandbox">
+            {runState === 'running' ? <Loader2 size={12} className="spin" /> : <Play size={12} />}
+          </button>
+        )}
       </div>
+      {runOutput && (
+        <div className={`code-run-output ${runState}`}>
+          <span>{runOutput}</span>
+        </div>
+      )}
       {!collapsed && (
         <pre className="code-block">
           <code className={className}>{code}</code>
@@ -1648,11 +1721,18 @@ function HistoryDrawer({
   onNew,
   onDelete,
   onRename,
+  onChatMeta,
   onOpenLibrary,
   deletingChatIds = new Set(),
   chatsLoaded = true,
 }) {
+  const [folderFilter, setFolderFilter] = useState('');
   if (!open) return null;
+  const visibleChats = (() => {
+    if (folderFilter === '__pinned__') return chats.filter((chat) => chat.pinned);
+    if (folderFilter) return chats.filter((chat) => chat.folder === folderFilter);
+    return chats;
+  })();
   return (
     <div className="drawer-layer" onMouseDown={onClose}>
       <aside className="history-drawer" onMouseDown={(e) => e.stopPropagation()}>
@@ -1671,6 +1751,23 @@ function HistoryDrawer({
         <button className="library-nav-button" onClick={onOpenLibrary}>
           <Files size={15} /> File Library <span>Generated files</span>
         </button>
+        <div className="drawer-filters">
+          <button
+            className={folderFilter === '__pinned__' ? 'selected' : ''}
+            onClick={() => setFolderFilter(folderFilter === '__pinned__' ? '' : '__pinned__')}
+          >
+            <Star size={12} /> Pinned
+          </button>
+          {[...new Set(chats.map((chat) => chat.folder).filter(Boolean))].map((folder) => (
+            <button
+              key={folder}
+              className={folderFilter === folder ? 'selected' : ''}
+              onClick={() => setFolderFilter(folderFilter === folder ? '' : folder)}
+            >
+              <Folder size={12} /> {folder}
+            </button>
+          ))}
+        </div>
         <div className="history-list">
           {!chatsLoaded ? (
             <div className="history-skeleton">
@@ -1685,7 +1782,7 @@ function HistoryDrawer({
               ))}
             </div>
           ) : (
-            chats.map((chat) => (
+            visibleChats.map((chat) => (
               <div
                 className={`history-item ${chat._id === activeId ? 'active' : ''} ${deletingChatIds.has(chat._id) ? 'deleting' : ''}`}
                 key={chat._id}
@@ -1697,9 +1794,24 @@ function HistoryDrawer({
                 >
                   <MessageSquare size={15} />
                   <span>
-                    <b>{chat.title || 'New chat'}</b>
-                    <small>{dateLabel(chat.updatedAt)}</small>
+                    <b>
+                      {chat.pinned ? <Pin size={11} className="pin-flag" /> : null}
+                      {chat.title || 'New chat'}
+                    </b>
+                    <small>
+                      {dateLabel(chat.updatedAt)}
+                      {chat.folder ? ` · ${chat.folder}` : ''}
+                      {chat.tags?.length ? ` · ${chat.tags.join(', ')}` : ''}
+                    </small>
                   </span>
+                </button>
+                <button
+                  className="delete-chat"
+                  disabled={deletingChatIds.has(chat._id)}
+                  onClick={() => onChatMeta(chat)}
+                  title="Pin, folder & tags"
+                >
+                  <FolderCog size={13} />
                 </button>
                 <button
                   className="delete-chat"
@@ -1727,6 +1839,151 @@ function HistoryDrawer({
           {chatsLoaded && !chats.length && <p className="empty-history">No conversations yet.</p>}
         </div>
       </aside>
+    </div>
+  );
+}
+function UsageDashboard({ request }) {
+  const [range, setRange] = useState(30);
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    setError(false);
+    request(`/api/chats/usage?days=${range}`)
+      .then((r) => r.json())
+      .then((payload) => {
+        if (alive) setData(payload.usage || null);
+      })
+      .catch(() => alive && setError(true));
+    return () => {
+      alive = false;
+    };
+  }, [range, request]);
+  const totals = data?.totals || {};
+  const daily = data?.daily || [];
+  const maxTokens = Math.max(1, ...daily.map((d) => d.totalTokens || 0));
+  const cards = [
+    { label: 'Conversations', value: totals.chats },
+    { label: 'Your messages', value: totals.userMessages },
+    { label: 'Replies', value: totals.assistantMessages },
+    { label: 'Tool calls', value: totals.toolCalls },
+    { label: 'Tokens', value: totals.totalTokens },
+    {
+      label: 'Avg response',
+      value: totals.avgResponseMs ? `${(totals.avgResponseMs / 1000).toFixed(1)}s` : '—',
+    },
+  ];
+  return (
+    <div className="usage-dashboard">
+      <div className="usage-range">
+        {[7, 30, 90].map((days) => (
+          <button
+            key={days}
+            className={range === days ? 'selected' : ''}
+            onClick={() => setRange(days)}
+          >
+            {days}d
+          </button>
+        ))}
+      </div>
+      {error ? (
+        <div className="empty-history">Could not load usage right now.</div>
+      ) : !data ? (
+        <div className="usage-skeleton">
+          {Array.from({ length: 6 }, (_, index) => (
+            <Skeleton key={index} width="100%" height={54} />
+          ))}
+        </div>
+      ) : (
+        <>
+          <div className="usage-cards">
+            {cards.map((card) => (
+              <div className="usage-card" key={card.label}>
+                <small>{card.label}</small>
+                <b>{typeof card.value === 'number' ? card.value.toLocaleString() : card.value}</b>
+              </div>
+            ))}
+          </div>
+          <div className="usage-chart" aria-label="Tokens per day">
+            {daily.length ? (
+              daily.map((day) => (
+                <div
+                  key={day.date}
+                  className="usage-bar"
+                  title={`${day.date}: ${(day.totalTokens || 0).toLocaleString()} tokens`}
+                  style={{ height: `${Math.max(4, ((day.totalTokens || 0) / maxTokens) * 100)}%` }}
+                />
+              ))
+            ) : (
+              <div className="empty-history">No activity in this period.</div>
+            )}
+          </div>
+          <small className="usage-footnote">
+            {daily.length} active day{daily.length === 1 ? '' : 's'} · token counts come from model
+            usage metadata.
+          </small>
+        </>
+      )}
+    </div>
+  );
+}
+function ChatMetaDialog({ chat, onClose, onSave }) {
+  const [pinned, setPinned] = useState(Boolean(chat?.pinned));
+  const [folder, setFolder] = useState(chat?.folder || '');
+  const [tags, setTags] = useState((chat?.tags || []).join(', '));
+  if (!chat) return null;
+  return (
+    <div className="modal-layer" onMouseDown={onClose}>
+      <div className="chat-meta-dialog" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="dialog-head">
+          <b>Organise conversation</b>
+          <button className="icon-button" onClick={onClose}>
+            <X size={16} />
+          </button>
+        </div>
+        <label className="meta-row">
+          <span>Pin to top</span>
+          <Toggle label="" value={pinned} onChange={setPinned} />
+        </label>
+        <label className="meta-row">
+          <span>Folder</span>
+          <input
+            value={folder}
+            maxLength={60}
+            placeholder="e.g. Work"
+            onChange={(e) => setFolder(e.target.value)}
+          />
+        </label>
+        <label className="meta-row">
+          <span>Tags (comma-separated)</span>
+          <input
+            value={tags}
+            placeholder="draft, urgent"
+            onChange={(e) => setTags(e.target.value)}
+          />
+        </label>
+        <div className="dialog-actions">
+          <button className="secondary-button compact" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="primary-button compact"
+            onClick={() =>
+              onSave(chat._id, {
+                pinned,
+                folder: folder.trim(),
+                tags: tags
+                  .split(',')
+                  .map((tag) => tag.trim())
+                  .filter(Boolean)
+                  .slice(0, 12),
+              })
+            }
+          >
+            Save
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1759,6 +2016,10 @@ function PreferencesDialog({
     [username, setUsername] = useState(user?.username || ''),
     [usernameState, setUsernameState] = useState('idle'),
     [profileError, setProfileError] = useState('');
+  const [pluginPermissions, setPluginPermissions] = useState({}),
+    [customTools, setCustomTools] = useState([]),
+    [pluginsLoading, setPluginsLoading] = useState(false),
+    [toolDraft, setToolDraft] = useState(null);
   const usernameValid = /^[a-z0-9_]{3,24}$/.test(username);
   useEffect(() => {
     if (open) {
@@ -1863,6 +2124,30 @@ function PreferencesDialog({
           >
             <Share2 size={14} /> Shared links <span>{shares.length}</span>
           </button>
+          <button
+            className={tab === 'plugins' ? 'selected' : ''}
+            onClick={() => {
+              setTab('plugins');
+              if (!user || String(user._id || '').startsWith('guest:')) return;
+              setPluginsLoading(true);
+              request('/api/account/plugins')
+                .then((r) => r.json())
+                .then((data) => {
+                  setPluginPermissions(data.permissions || {});
+                  setCustomTools(data.customTools || []);
+                })
+                .catch(() => {})
+                .finally(() => setPluginsLoading(false));
+            }}
+          >
+            <Puzzle size={14} /> Tools & plugins
+          </button>
+          <button
+            className={tab === 'usage' ? 'selected' : ''}
+            onClick={() => setTab('usage')}
+          >
+            <BarChart3 size={14} /> Usage
+          </button>
         </div>
         {tab === 'shares' ? (
           <div className="shared-links">
@@ -1912,6 +2197,171 @@ function PreferencesDialog({
               </div>
             ))}
           </div>
+        ) : tab === 'plugins' ? (
+          <div className="plugin-manager">
+            <div className="memory-intro">
+              <b>Tool permissions</b>
+              <p>
+                Turn built-in tools off to stop the agent from calling them. Custom tools call your
+                own https:// endpoints when the model decides to.
+              </p>
+            </div>
+            {pluginsLoading ? (
+              <div className="account-content-skeleton">
+                {Array.from({ length: 3 }, (_, index) => (
+                  <div key={index}>
+                    <Skeleton width="40%" height={9} />
+                    <Skeleton width="100%" height={34} />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="preference-toggles">
+                {PLUGIN_CATALOG.map((plugin) => (
+                  <Toggle
+                    key={plugin.id}
+                    label={`${plugin.name} — ${plugin.description}`}
+                    value={pluginPermissions[plugin.id] !== false}
+                    onChange={(v) => {
+                      const next = { ...pluginPermissions, [plugin.id]: v };
+                      setPluginPermissions(next);
+                      request('/api/account/plugins', {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ permissions: { [plugin.id]: v } }),
+                      }).catch(() => {});
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+            <div className="custom-tools-head">
+              <b>Custom tools ({customTools.length})</b>
+              <button
+                className="secondary-button compact"
+                onClick={() =>
+                  setToolDraft({ name: '', url: '', description: '', method: 'POST', params: '' })
+                }
+              >
+                <Plus size={13} /> Add tool
+              </button>
+            </div>
+            {toolDraft && (
+              <div className="custom-tool-form">
+                <label>
+                  Name
+                  <input
+                    value={toolDraft.name}
+                    maxLength={60}
+                    placeholder="Weather lookup"
+                    onChange={(e) => setToolDraft({ ...toolDraft, name: e.target.value })}
+                  />
+                </label>
+                <label>
+                  Endpoint (https://)
+                  <input
+                    value={toolDraft.url}
+                    placeholder="https://api.example.com/weather"
+                    onChange={(e) => setToolDraft({ ...toolDraft, url: e.target.value })}
+                  />
+                </label>
+                <label>
+                  Description for the model
+                  <input
+                    value={toolDraft.description}
+                    maxLength={400}
+                    placeholder="Gets the current weather for a city"
+                    onChange={(e) => setToolDraft({ ...toolDraft, description: e.target.value })}
+                  />
+                </label>
+                <label>
+                  Parameters (comma-separated names)
+                  <input
+                    value={toolDraft.params}
+                    placeholder="city, units"
+                    onChange={(e) => setToolDraft({ ...toolDraft, params: e.target.value })}
+                  />
+                </label>
+                <label>
+                  Method
+                  <select
+                    value={toolDraft.method}
+                    onChange={(e) => setToolDraft({ ...toolDraft, method: e.target.value })}
+                  >
+                    <option value="POST">POST (JSON body)</option>
+                    <option value="GET">GET (query string)</option>
+                  </select>
+                </label>
+                <div>
+                  <button className="secondary-button compact" onClick={() => setToolDraft(null)}>
+                    Cancel
+                  </button>
+                  <button
+                    className="primary-button compact"
+                    disabled={!toolDraft.name.trim() || !/^https:\/\/[\w.-]+/.test(toolDraft.url)}
+                    onClick={() => {
+                      request('/api/account/plugins/custom-tools', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          name: toolDraft.name,
+                          url: toolDraft.url,
+                          description: toolDraft.description,
+                          method: toolDraft.method,
+                          parameters: toolDraft.params
+                            .split(',')
+                            .map((part) => part.trim())
+                            .filter(Boolean)
+                            .map((name) => ({ name, type: 'string', required: true })),
+                        }),
+                      })
+                        .then((r) => r.json())
+                        .then((data) => {
+                          if (data.customTools) setCustomTools(data.customTools);
+                          setToolDraft(null);
+                        })
+                        .catch(() => {});
+                    }}
+                  >
+                    Save tool
+                  </button>
+                </div>
+              </div>
+            )}
+            <div className="custom-tool-list">
+              {customTools.map((tool) => (
+                <div className="custom-tool-item" key={tool.id}>
+                  <span>
+                    <b>{tool.name}</b>
+                    <small>
+                      {tool.method} {tool.url}
+                    </small>
+                  </span>
+                  <button
+                    className="tiny-action danger-text"
+                    title="Delete"
+                    onClick={() => {
+                      request(`/api/account/plugins/custom-tools/${encodeURIComponent(tool.id)}`, {
+                        method: 'DELETE',
+                      })
+                        .then((r) => r.json())
+                        .then((data) => {
+                          if (data.customTools) setCustomTools(data.customTools);
+                        })
+                        .catch(() => {});
+                    }}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
+              {!customTools.length && !toolDraft && (
+                <div className="empty-history">No custom tools yet.</div>
+              )}
+            </div>
+          </div>
+        ) : tab === 'usage' ? (
+          <UsageDashboard request={request} />
         ) : tab === 'profile' ? (
           <div className="profile-settings">
             <label>
@@ -1962,21 +2412,23 @@ function PreferencesDialog({
             </button>
             <div className="linked-providers">
               <b>Linked sign-in providers</b>
-              {['google', 'github', 'discord'].map((provider) =>
-                user?.linkedAccounts?.some((item) => item.provider === provider) ? (
-                  <span key={provider} className="provider-linked">
-                    ✓ {provider} linked
-                  </span>
-                ) : providers?.[provider] ? (
+              {['google', 'github', 'discord'].map((provider) => {
+                if (user?.linkedAccounts?.some((item) => item.provider === provider)) {
+                  return (
+                    <span key={provider} className="provider-linked">
+                      ✓ {provider} linked
+                    </span>
+                  );
+                }
+                // Server state (which OAuth providers the deployment has configured)
+                // is not user-facing content: show nothing for unconfigured providers.
+                if (!providers?.[provider]) return null;
+                return (
                   <a key={provider} href={linkProvider(provider)}>
                     Link {provider}
                   </a>
-                ) : (
-                  <span key={provider} className="provider-unavailable">
-                    {provider} not configured
-                  </span>
-                )
-              )}
+                );
+              })}
             </div>
           </div>
         ) : tab === 'personalization' ? (
@@ -2316,6 +2768,8 @@ export default function App() {
   const [chats, setChats] = useState([]),
     [activeId, setActiveId] = useState(null),
     [deletingChatIds, setDeletingChatIds] = useState(() => new Set()),
+    [metaChat, setMetaChat] = useState(null),
+    [dragging, setDragging] = useState(false),
     [chatsLoaded, setChatsLoaded] = useState(false),
     [routeError, setRouteError] = useState(''),
     [fatalError, setFatalError] = useState(null),
@@ -2720,6 +3174,19 @@ export default function App() {
     const data = await res.json();
     setChats((current) => current.map((item) => (item._id === chat._id ? data.chat : item)));
   };
+  const saveChatMeta = async (id, patch) => {
+    try {
+      const res = await request(`/api/chats/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
+      });
+      const data = await res.json();
+      if (data.chat) setChats((current) => current.map((item) => (item._id === id ? data.chat : item)));
+      setMetaChat(null);
+    } catch {
+      setToast({ id: Date.now(), message: 'Could not update the conversation.', type: 'error' });
+    }
+  };
   const removeChat = async (id) => {
     if (deletingChatIds.has(id)) return;
     setDeletingChatIds((current) => new Set(current).add(id));
@@ -2970,7 +3437,7 @@ export default function App() {
     const parentMessage = messages[index - 1];
     const edited = {
       ...message,
-      id: crypto.randomUUID(),
+      id: uid(),
       content: value.trim(),
       createdAt: new Date().toISOString(),
       editedFrom: message.id,
@@ -3246,6 +3713,17 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
   const sendMessage = async (raw = input, attach = files, options = {}) => {
+    // Safety net: an unexpected error in the synchronous prelude below must never
+    // leave the composer stuck with busy=true.
+    try {
+      await runSend(raw, attach, options);
+    } catch (error) {
+      setBusy(false);
+      setFileError(chatErrorMessage(error));
+      setStatus('Request failed');
+    }
+  };
+  const runSend = async (raw = input, attach = files, options = {}) => {
     const text = String(raw || '').trim();
     if ((!text && !attach.length && !options.reuseLastUser) || busy) return;
     setFileError('');
@@ -3359,7 +3837,7 @@ export default function App() {
     const userMessage = options.reuseLastUser
       ? null
       : {
-          id: crypto.randomUUID(),
+          id: uid(),
           role: 'user',
           content: text || 'Please analyze the attached files and media.',
           attachments,
@@ -3374,7 +3852,7 @@ export default function App() {
     setInput('');
     setFiles([]);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
-    const assistantId = crypto.randomUUID(),
+    const assistantId = uid(),
       startedAt = new Date().toISOString(),
       assistant = {
         id: assistantId,
@@ -3909,10 +4387,22 @@ export default function App() {
             </div>
           )}
           <form
-            className="composer"
+            className={`composer ${dragging ? 'drag-over' : ''}`}
             onSubmit={(e) => {
               e.preventDefault();
               sendMessage();
+            }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              if (!dragging) setDragging(true);
+            }}
+            onDragLeave={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget)) setDragging(false);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragging(false);
+              if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files);
             }}
           >
             <textarea
@@ -3923,11 +4413,20 @@ export default function App() {
                 e.target.style.height = 'auto';
                 e.target.style.height = `${Math.min(e.target.scrollHeight, 180)}px`;
               }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && (e.shiftKey || e.metaKey)) {
+              onPaste={(e) => {
+                const pasted = [...(e.clipboardData?.files || [])];
+                if (pasted.length) {
                   e.preventDefault();
-                  sendMessage();
+                  addFiles(pasted);
                 }
+              }}
+              onKeyDown={(e) => {
+                // Touch-only devices (phones/tablets): Enter inserts a newline and
+                // messages are sent with the send button only.
+                if (e.key !== 'Enter' || IS_TOUCH_ONLY) return;
+                if (e.shiftKey) return; // Shift+Enter = newline
+                e.preventDefault();
+                sendMessage();
               }}
               rows={1}
               placeholder="Ask anything, or give your agent a task…"
@@ -3978,7 +4477,13 @@ export default function App() {
           </form>
           <div className="composer-caption">
             <span>
-              <kbd>Enter</kbd> newline · <kbd>Shift + Enter</kbd> send
+              {IS_TOUCH_ONLY ? (
+                'Tap the send button to send'
+              ) : (
+                <>
+                  <kbd>Enter</kbd> send · <kbd>Shift + Enter</kbd> newline
+                </>
+              )}
             </span>
             <span>Agent tools run automatically · Think mode {thinking ? 'on' : 'off'}</span>
           </div>
@@ -3994,6 +4499,7 @@ export default function App() {
         onNew={newChat}
         onDelete={removeChat}
         onRename={renameChat}
+        onChatMeta={(chat) => setMetaChat(chat)}
         onOpenLibrary={() => {
           setDrawer(false);
           setLibraryOpen(true);
@@ -4001,6 +4507,7 @@ export default function App() {
         deletingChatIds={deletingChatIds}
         chatsLoaded={chatsLoaded}
       />
+      <ChatMetaDialog chat={metaChat} onClose={() => setMetaChat(null)} onSave={saveChatMeta} />
       <FileLibraryDialog
         open={libraryOpen}
         onClose={() => setLibraryOpen(false)}

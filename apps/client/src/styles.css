@@ -235,10 +235,12 @@ a {
   box-shadow: 0 0 55px #9cdd6017;
 }
 .welcome h2 {
-  font-size: 42px;
-  line-height: 1.04;
-  letter-spacing: -0.065em;
+  font-family: 'DM Mono', monospace;
+  font-size: 34px;
+  line-height: 1.12;
+  letter-spacing: -0.045em;
   margin: 13px 0;
+  text-wrap: balance;
 }
 .welcome h2 em,
 .login-card h1 em {
@@ -246,7 +248,7 @@ a {
   color: var(--accent2);
 }
 .welcome > p {
-  font-size: 12px;
+  font-size: 13.5px;
   color: var(--muted);
   max-width: 490px;
   margin: 12px auto 0;
@@ -925,14 +927,16 @@ a {
 }
 .tab-row {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 7px;
   border-bottom: 1px solid var(--border);
   margin: 10px 0 17px;
 }
 .tab-row button {
   border: 0;
-  border-bottom: 2px solid transparent;
   background: transparent;
+  box-shadow: inset 0 -2px 0 transparent;
   color: #8c9a8e;
   padding: 11px 9px;
   font-size: 10px;
@@ -941,7 +945,7 @@ a {
   gap: 7px;
 }
 .tab-row button.selected {
-  border-color: var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
   color: var(--accent2);
 }
 .tab-row button span {
@@ -1248,7 +1252,7 @@ a {
     padding: 7vh 6px 24px;
   }
   .welcome h2 {
-    font-size: 35px;
+    font-size: 27px;
   }
   .suggestions {
     grid-template-columns: 1fr;
@@ -1267,10 +1271,10 @@ a {
   }
   .message-content,
   .user-text {
-    font-size: 12px;
+    font-size: 13px;
   }
   .composer-caption {
-    font-size: 8px;
+    font-size: 9px;
   }
   .composer-caption span:last-child {
     display: none;
@@ -1593,9 +1597,13 @@ a {
   color: #ffaaa0;
   background: #251614;
 }
-.@media(max-width:760px) {
+@media(max-width:760px) {
   .message-actions > button {
-    padding: 5px;
+    padding: 9px;
+    min-width: 36px;
+    min-height: 36px;
+    justify-content: center;
+    font-size: 10px;
   }
   .workspace-tools select {
     max-width: 92px;
@@ -4077,3 +4085,74 @@ body[data-theme] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Tool & plugin manager */
+.plugin-manager { display: flex; flex-direction: column; gap: 14px; }
+.preference-toggles { display: flex; flex-direction: column; gap: 6px; }
+.custom-tools-head { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; }
+.custom-tool-form { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--border, #2a2f2a); border-radius: 10px; }
+.custom-tool-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.custom-tool-form input, .custom-tool-form select {
+  background: var(--surface, #111411); color: inherit; border: 1px solid var(--border, #2a2f2a);
+  border-radius: 8px; padding: 8px 10px; font-size: 13px;
+}
+.custom-tool-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border-radius: 8px; background: var(--surface, #111411); }
+.custom-tool-item small { display: block; opacity: 0.6; font-size: 11px; word-break: break-all; }
+.danger-text { color: #e56553; }
+
+/* Drawer filters */
+.drawer-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 12px 8px; }
+.drawer-filters button {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; padding: 4px 10px;
+  border-radius: 999px; border: 1px solid var(--border, #2a2f2a); background: transparent; color: inherit; cursor: pointer;
+}
+.drawer-filters button.selected { background: var(--accent-soft, rgba(164, 223, 120, 0.14)); border-color: var(--accent, #a4df78); }
+.pin-flag { vertical-align: -1px; margin-right: 3px; }
+
+/* Chat meta dialog */
+.chat-meta-dialog {
+  background: var(--surface, #111411); color: inherit; border: 1px solid var(--border, #2a2f2a);
+  border-radius: 14px; padding: 16px; width: min(420px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 12px;
+}
+.chat-meta-dialog .dialog-head { display: flex; align-items: center; justify-content: space-between; }
+.meta-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; }
+.meta-row input {
+  background: transparent; color: inherit; border: 1px solid var(--border, #2a2f2a);
+  border-radius: 8px; padding: 7px 10px; font-size: 13px; width: 220px;
+}
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* Usage dashboard */
+.usage-dashboard { display: flex; flex-direction: column; gap: 14px; }
+.usage-range { display: flex; gap: 6px; }
+.usage-range button {
+  border: 1px solid var(--border, #2a2f2a); background: transparent; color: inherit;
+  border-radius: 999px; padding: 4px 12px; font-size: 12px; cursor: pointer;
+}
+.usage-range button.selected { background: var(--accent-soft, rgba(164, 223, 120, 0.14)); border-color: var(--accent, #a4df78); }
+.usage-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+.usage-card { border: 1px solid var(--border, #2a2f2a); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+.usage-card small { opacity: 0.6; font-size: 11px; }
+.usage-card b { font-size: 16px; }
+.usage-chart { display: flex; align-items: flex-end; gap: 3px; height: 110px; padding: 8px; border: 1px solid var(--border, #2a2f2a); border-radius: 10px; }
+.usage-bar { flex: 1; min-width: 4px; background: var(--accent, #a4df78); border-radius: 3px 3px 0 0; opacity: 0.85; }
+.usage-footnote, .usage-skeleton { opacity: 0.7; font-size: 11.5px; }
+.usage-skeleton { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+
+/* Drag-over composer state */
+.composer.drag-over { outline: 2px dashed var(--accent, #a4df78); outline-offset: 3px; }
+.composer.drag-over::after {
+  content: 'Drop files to attach';
+  position: absolute; inset: auto 0 100%; text-align: center; font-size: 12px; opacity: 0.75;
+}
+
+/* Code-run output */
+.code-run-output {
+  margin: 0; padding: 10px 14px; font-family: var(--mono, monospace); font-size: 12.5px;
+  border-top: 1px solid var(--border, #2a2f2a); white-space: pre-wrap; word-break: break-word;
+  background: rgba(0, 0, 0, 0.25); max-height: 220px; overflow: auto;
+}
+.code-run-output.error { color: #e56553; }
+.code-run-output.done { color: inherit; }
+.spin { animation: code-run-spin 0.9s linear infinite; }
+@keyframes code-run-spin { to { transform: rotate(360deg); } }

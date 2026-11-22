@@ -527,8 +527,94 @@ async function executeTool(name, args, user, options = {}) {
   }
   throw new Error(`Unknown tool: ${name}`);
 }
-export function getToolDefinitions() {
-  return tools;
+export function getToolDefinitions(user) {
+  const enabled = (pluginId) => isPluginEnabled(user, pluginId);
+  const builtins = tools.filter((tool) => enabled(tool.function.name));
+  return [...builtins, ...getCustomToolDefinitions(user)];
+}
+
+export function isPluginEnabled(user, pluginId) {
+  const permissions = user?.pluginPermissions;
+  if (!permissions || typeof permissions !== 'object' || permissions[pluginId] === undefined)
+    return true;
+  return permissions[pluginId] !== false;
+}
+
+function normalizeCustomTool(tool) {
+  const parameters = Array.isArray(tool?.parameters) ? tool.parameters : [];
+  return {
+    id: String(tool.id || '').slice(0, 40),
+    name: String(tool.name || '').slice(0, 60),
+    description: String(tool.description || '').slice(0, 400),
+    url: String(tool.url || '').slice(0, 500),
+    method: tool.method === 'GET' ? 'GET' : 'POST',
+    parameters: parameters.slice(0, 10).map((param) => ({
+      name: String(param?.name || '').replace(/[^\w-]/g, '').slice(0, 40),
+      type: ['string', 'number', 'boolean'].includes(param?.type) ? param.type : 'string',
+      description: String(param?.description || '').slice(0, 200),
+      required: Boolean(param?.required),
+    })),
+  };
+}
+
+function getCustomToolDefinitions(user) {
+  return (user?.customTools || []).map((tool) => {
+    const normalized = normalizeCustomTool(tool);
+    const properties = {};
+    const required = [];
+    for (const param of normalized.parameters) {
+      if (!param.name) continue;
+      properties[param.name] = {
+        type: param.type,
+        description: param.description || param.name,
+      };
+      if (param.required) required.push(param.name);
+    }
+    return {
+      type: 'function',
+      function: {
+        name: `custom_${normalized.id}`,
+        description:
+          normalized.description ||
+          `User-defined custom tool "${normalized.name}" that calls ${normalized.url}.`,
+        parameters: {
+          type: 'object',
+          properties,
+          ...(required.length ? { required } : {}),
+        },
+      },
+    };
+  });
+}
+
+async function runCustomTool(tool, args, signal) {
+  const normalized = normalizeCustomTool(tool);
+  if (!/^https:\/\/[\w.-]+/.test(normalized.url))
+    throw new Error('Custom tool URL must be a public https:// endpoint.');
+  const method = normalized.method;
+  const query = method === 'GET' && args && Object.keys(args).length
+    ? `?${new URLSearchParams(Object.entries(args).map(([k, v]) => [k, String(v)])).toString()}`
+    : '';
+  const response = await fetch(`${normalized.url}${query}`, {
+    method,
+    ...(method === 'POST'
+      ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(args || {}) }
+      : {}),
+    signal: signal || AbortSignal.timeout(20000),
+  });
+  if (!response.ok) throw new Error(`Custom tool returned HTTP ${response.status}`);
+  const type = response.headers.get('content-type') || '';
+  const text = await response.text();
+  if (/json/i.test(type)) {
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = text;
+    }
+    return typeof parsed === 'string' ? parsed.slice(0, 20000) : parsed;
+  }
+  return { content: text.slice(0, 20000) };
 }
 export function getPluginCatalog() {
   return [
@@ -627,6 +713,16 @@ export function getPluginCatalog() {
 }
 export async function runTool(name, args, user, options = {}) {
   try {
+    if (name.startsWith('custom_')) {
+      const tool = (user?.customTools || []).find(
+        (candidate) => `custom_${normalizeCustomTool(candidate).id}` === name
+      );
+      if (!tool) throw new Error(`Unknown custom tool: ${name}`);
+      const result = await runCustomTool(tool, args, options.signal);
+      return { ok: true, result };
+    }
+    if (!isPluginEnabled(user, name))
+      return { ok: false, error: `The ${name} tool is disabled in your plugin settings.` };
     const result = await executeTool(name, args, user, options);
     return { ok: true, result: result };
   } catch (error) {

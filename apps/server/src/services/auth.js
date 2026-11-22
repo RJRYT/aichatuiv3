@@ -101,6 +101,13 @@ export async function optionalAuth(req, res, next) {
         } else clearSessionCookie(res);
       } else clearSessionCookie(res);
     }
+    if (!req.user && process.env.AUTH_REQUIRED === 'false' && process.env.NODE_ENV !== 'production') {
+      const existing = await User.findOne({ email: 'dev@example.com' }).lean();
+      if (existing) {
+        req.user = existing;
+        createSessionCookie(res, existing._id);
+      }
+    }
     return next();
   } catch (error) {
     return next(error);

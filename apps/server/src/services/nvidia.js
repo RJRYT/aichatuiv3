@@ -433,7 +433,7 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
     throw Object.assign(new Error('A non-empty messages array is required.'), { status: 400 });
   }
   const userId = user?._id ? String(user._id) : 'unknown';
-  const tools = getToolDefinitions();
+  const tools = getToolDefinitions(user);
   const input = body.messages.map((m) => {
     const files = Array.isArray(m.attachments)
       ? m.attachments.filter((file) => file?.sandboxPath?.startsWith('uploads/'))

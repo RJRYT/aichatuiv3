@@ -150,4 +150,99 @@ router.delete('/memories/:id', async (req, res) => {
     .lean();
   res.json({ memories: user?.memories || [] });
 });
+
+router.get('/plugins', async (req, res) => {
+  const user = await User.findById(req.user._id)
+    .select('pluginPermissions customTools')
+    .lean();
+  res.json({
+    permissions: user?.pluginPermissions || {},
+    customTools: (user?.customTools || []).map((tool) => ({
+      id: tool.id,
+      name: tool.name,
+      description: tool.description,
+      url: tool.url,
+      method: tool.method,
+      parameters: tool.parameters || [],
+    })),
+  });
+});
+
+router.patch('/plugins', async (req, res, next) => {
+  try {
+    if (guest(req)) return res.status(403).json({ error: 'Sign in to manage plugins.' });
+    const permissions = req.body?.permissions;
+    if (!permissions || typeof permissions !== 'object' || Array.isArray(permissions))
+      return res.status(400).json({ error: 'permissions must be an object.' });
+    const patch = {};
+    for (const [key, value] of Object.entries(permissions)) {
+      if (typeof value === 'boolean') patch[`pluginPermissions.${key}`] = value;
+    }
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { $set: patch },
+      { new: true }
+    )
+      .select('pluginPermissions')
+      .lean();
+    res.json({ permissions: user?.pluginPermissions || {} });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/plugins/custom-tools', async (req, res, next) => {
+  try {
+    if (guest(req)) return res.status(403).json({ error: 'Sign in to add custom tools.' });
+    const name = String(req.body?.name || '').trim().slice(0, 60);
+    const url = String(req.body?.url || '').trim();
+    if (!name) return res.status(400).json({ error: 'Tool name is required.' });
+    if (!/^https:\/\/[\w.-]+/.test(url))
+      return res.status(400).json({ error: 'Tool URL must be a public https:// endpoint.' });
+    const id = `t${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`;
+    const tool = {
+      id,
+      name,
+      description: String(req.body?.description || '').trim().slice(0, 400),
+      url,
+      method: req.body?.method === 'GET' ? 'GET' : 'POST',
+      parameters: Array.isArray(req.body?.parameters)
+        ? req.body.parameters.slice(0, 10).map((param) => ({
+            name: String(param?.name || '').replace(/[^\w-]/g, '').slice(0, 40),
+            type: ['string', 'number', 'boolean'].includes(param?.type) ? param.type : 'string',
+            description: String(param?.description || '').slice(0, 200),
+            required: Boolean(param?.required),
+          }))
+        : [],
+    };
+    if (!tool.parameters.some((param) => param.name))
+      return res.status(400).json({ error: 'At least one named parameter is required.' });
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { $push: { customTools: tool } },
+      { new: true }
+    )
+      .select('customTools')
+      .lean();
+    res.json({ customTools: user?.customTools || [] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete('/plugins/custom-tools/:id', async (req, res, next) => {
+  try {
+    if (guest(req)) return res.status(403).json({ error: 'Sign in to manage custom tools.' });
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { $pull: { customTools: { id: req.params.id } } },
+      { new: true }
+    )
+      .select('customTools')
+      .lean();
+    res.json({ customTools: user?.customTools || [] });
+  } catch (error) {
+    next(error);
+  }
+});
 export default router;

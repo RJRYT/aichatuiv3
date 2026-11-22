@@ -2,6 +2,9 @@ import mongoose from 'mongoose';
 const shareSchema = new mongoose.Schema(
   {
     shareId: { type: String, required: true, unique: true, index: true },
+    expiresAt: { type: Date, default: null },
+    viewCount: { type: Number, default: 0 },
+    lastViewedAt: { type: Date, default: null },
     ownerId: { type: String, required: true, index: true },
     chatId: { type: String, required: true },
     title: { type: String, default: 'Shared response', maxlength: 120 },

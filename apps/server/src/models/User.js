@@ -38,6 +38,8 @@ const userSchema = new mongoose.Schema(
       lists: { type: Boolean, default: true },
     },
     memories: { type: [memorySchema], default: [] },
+    pluginPermissions: { type: mongoose.Schema.Types.Mixed, default: {} },
+    customTools: { type: [mongoose.Schema.Types.Mixed], default: [] },
     createdAt: { type: Date, default: Date.now },
     lastLoginAt: { type: Date, default: Date.now },
   },
