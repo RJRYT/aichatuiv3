@@ -2,6 +2,7 @@ import {
   AlertCircle,
   ArrowDown,
   ArrowUp,
+  ArrowUpRight,
   BarChart3,
   Bot,
   Brain,
@@ -1089,6 +1090,66 @@ function AgentPlanDock({ plan, onSave, disabled = false }) {
   );
 }
 
+function toolActivityMessage(name, args = {}) {
+  const label = String(name || '').replaceAll('_', ' ');
+  const path = args.path ? ` “${String(args.path).slice(0, 90)}”` : '';
+  const query = args.query ? ` for “${String(args.query).slice(0, 70)}”` : '';
+  const messages = {
+    workspace_list: 'Inspecting the project files and folder structure.',
+    workspace_read: `Reading${path} to understand the existing implementation.`,
+    workspace_create: `Creating${path} in the project workspace.`,
+    workspace_edit: `Updating${path} with the requested changes.`,
+    workspace_delete: `Removing${path} from the project workspace.`,
+    workspace_search: `Searching the project files${query}.`,
+    workspace_status: 'Checking the current project workspace and file status.',
+    workspace_archive: 'Packaging the completed project and validating the archive.',
+    execute_python: 'Running the Python task in the isolated environment.',
+    execute_node: 'Running the Node.js command in the isolated environment.',
+    web_search: `Researching current information${query}.`,
+    fetch_public_url: 'Opening the requested web page and extracting its content.',
+    create_task_plan: 'Organizing the work into a structured execution plan.',
+    update_task_status: 'Updating project milestone and task progress.',
+    save_memory: 'Saving durable project context for future conversations.',
+    search_memories: 'Checking saved context for relevant project decisions.',
+    report_progress: 'Updating you on the current work.',
+    generate_image: 'Generating the requested image.',
+  };
+  return messages[name] || `Running ${label || 'an agent operation'}.`;
+}
+
+function getSuggestedNextSteps(message) {
+  const plan = message.agentPlan;
+  const tasks = Array.isArray(plan?.tasks) ? plan.tasks : [];
+  const failed = tasks.filter((task) => task.status === 'failed');
+  const pending = tasks.filter((task) => task.status === 'pending');
+  const toolFailures = (message.toolEvents || []).filter((event) => event.status === 'error');
+  if (failed.length || toolFailures.length) {
+    return [
+      { label: 'Investigate the blocker', prompt: 'Investigate the remaining failed task or tool error. Inspect the current files and diagnostics, fix the root cause, and verify the correction without repeating failed steps unchanged.' },
+      { label: 'Review completed work', prompt: 'Summarize the completed work, current project state, and the exact remaining blockers.' },
+    ];
+  }
+  if (pending.length) {
+    return [
+      { label: 'Continue the next task', prompt: 'Continue the existing project plan from the next pending task. Inspect the current workspace and persisted progress first, preserve completed work, and verify each task before marking it complete.' },
+      { label: 'Review progress', prompt: 'Review the current project plan and completed milestones. Tell me what is done, what remains, and whether anything needs attention.' },
+    ];
+  }
+  const hasArchive = (message.toolEvents || []).some((event) =>
+    (event.result?.artifacts || []).some((artifact) => /\.zip$/i.test(String(artifact.name || '')))
+  );
+  if (hasArchive) {
+    return [
+      { label: 'Verify the deliverable', prompt: 'Perform a final verification of the generated project archive, its contents, and the project build/tests. Report any checks that cannot be run.' },
+      { label: 'Explain how to run it', prompt: 'Give me the exact installation, configuration, and run/deployment steps for this project.' },
+    ];
+  }
+  return [
+    { label: 'Verify the result', prompt: 'Run the most relevant checks for the changes just completed. Inspect failures and report verified results separately from unverified work.' },
+    { label: 'What should I do next?', prompt: 'Based on the result and current project state, recommend the most useful next step and explain why.' },
+  ];
+}
+
 function LiveProgress({ progress, now, toolEvents = [] }) {
   const [toolsExpanded, setToolsExpanded] = useState(true);
   if (!progress) return null;
@@ -1097,7 +1158,7 @@ function LiveProgress({ progress, now, toolEvents = [] }) {
     return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
   };
   const isWorking = progress.type === 'working';
-  const message = String(progress.message || 'Thinking...');
+  const message = String(progress.message || 'Preparing the next agent action…');
   return (
     <div
       className={`live-progress${isWorking ? ' live-progress-working' : ''}`}
@@ -1185,6 +1246,7 @@ function Message({
   liveProgress,
   progressClock,
   thinking,
+  onFollowup,
 }) {
   const [editing, setEditing] = useState(false),
     [promptExpanded, setPromptExpanded] = useState(false),
@@ -1342,6 +1404,19 @@ function Message({
                 </button>
               </span>
             )}
+          </div>
+        )}
+        {!user && !message.isStreaming && content.trim() && onFollowup &&
+          (message.agentPlan || message.toolEvents?.length > 0) && (
+          <div className="next-step-suggestions" aria-label="Suggested next steps">
+            <span className="next-step-heading"><Sparkles size={12} /> Suggested next steps</span>
+            <div className="next-step-actions">
+              {getSuggestedNextSteps(message).map((step) => (
+                <button key={step.label} onClick={() => onFollowup(step.prompt)}>
+                  {step.label}<ArrowUpRight size={12} />
+                </button>
+              ))}
+            </div>
           </div>
         )}
         {user && content.trim() && (
@@ -3503,7 +3578,7 @@ export default function App() {
     setStatus('Regenerating response…');
     setLiveProgress(
       thinking
-        ? { message: 'Thinking...', startedAt: Date.now(), lastActivityAt: Date.now() }
+        ? { message: 'Connecting to the agent…', startedAt: Date.now(), lastActivityAt: Date.now() }
         : { type: 'working' }
     );
     setMessages((current) =>
@@ -3552,17 +3627,15 @@ export default function App() {
         if (event.type === 'heartbeat')
           setLiveProgress((current) => ({
             ...(current || { startedAt: Date.now(), lastActivityAt: Date.now() }),
-            message:
-              event.message ||
-              (event.phase === 'tool'
-                ? `Running ${String(event.name || 'tool').replaceAll('_', ' ')}; waiting for its result.`
-                : 'Waiting for the model response; the connection is still active.'),
+            message: event.phase === 'tool'
+              ? toolActivityMessage(event.name, event.arguments || {})
+              : (event.message || 'The model is processing the request.'),
             lastActivityAt: Date.now(),
           }));
         if (event.type === 'agent_event') {
           const item = event.event || {};
           const progressMessage = item.type === 'progress_update' ? item.message : '';
-          if (progressMessage && thinking)
+          if (progressMessage)
             setLiveProgress((current) => ({
               ...(current || { startedAt: Date.now() }),
               message: progressMessage,
@@ -3570,7 +3643,7 @@ export default function App() {
             }));
         }
         if (event.type === 'final_content') {
-          if (!thinking) setLiveProgress(null);
+          setLiveProgress(null);
           regeneratedOutput = event.content || '';
           setMessages((current) =>
             current.map((item) =>
@@ -3586,7 +3659,7 @@ export default function App() {
           );
         }
         if (event.type === 'chunk') {
-          if (!thinking) setLiveProgress(null);
+          setLiveProgress(null);
           regeneratedOutput += event.content || '';
           setMessages((current) =>
             current.map((item) =>
@@ -3611,6 +3684,11 @@ export default function App() {
               startedAt: event.startedAt,
             },
           ];
+          setLiveProgress((current) => ({
+            ...(current || { startedAt: Date.now() }),
+            message: toolActivityMessage(event.name, event.arguments || {}),
+            lastActivityAt: Date.now(),
+          }));
           setMessages((current) =>
             current.map((item) =>
               item.id === message.id
@@ -3935,7 +4013,7 @@ export default function App() {
     const started = performance.now();
     setLiveProgress(
       thinking
-        ? { message: 'Thinking...', startedAt: Date.now(), lastActivityAt: Date.now() }
+        ? { message: 'Connecting to the agent…', startedAt: Date.now(), lastActivityAt: Date.now() }
         : { type: 'working' }
     );
     let output = '',
@@ -3996,20 +4074,18 @@ export default function App() {
         if (event.type === 'heartbeat')
           setLiveProgress((current) => ({
             ...(current || { startedAt: Date.now(), lastActivityAt: Date.now() }),
-            message:
-              event.message ||
-              (event.phase === 'tool'
-                ? `Running ${String(event.name || 'tool').replaceAll('_', ' ')}; waiting for its result.`
-                : 'Waiting for the model response; the connection is still active.'),
+            message: event.phase === 'tool'
+              ? toolActivityMessage(event.name, event.arguments || {})
+              : (event.message || 'The model is processing the request.'),
             lastActivityAt: Date.now(),
           }));
         if (event.type === 'final_content') {
-          if (!thinking) setLiveProgress(null);
+          setLiveProgress(null);
           output = event.content || '';
           update();
         }
         if (event.type === 'chunk') {
-          if (!thinking) setLiveProgress(null);
+          setLiveProgress(null);
           output += event.content || '';
           setStatus('Generating');
           update();
@@ -4020,7 +4096,7 @@ export default function App() {
           if (item.type === 'plan_created' && item.plan) agentPlan = item.plan;
           if (item.type === 'task_updated' && item.plan) agentPlan = item.plan;
           const message = item.type === 'progress_update' ? item.message : '';
-          if (message && thinking)
+          if (message)
             setLiveProgress((current) => ({
               ...(current || { startedAt: Date.now() }),
               message,
@@ -4039,6 +4115,11 @@ export default function App() {
             },
           ];
           setStatus(`Using ${event.name.replaceAll('_', ' ')}…`);
+          setLiveProgress((current) => ({
+            ...(current || { startedAt: Date.now() }),
+            message: toolActivityMessage(event.name, event.arguments || {}),
+            lastActivityAt: Date.now(),
+          }));
           update();
         }
         if (event.type === 'tool_result') {
@@ -4410,6 +4491,7 @@ export default function App() {
                     liveProgress={liveProgress}
                     progressClock={progressClock}
                     thinking={thinking}
+                    onFollowup={(prompt) => sendMessage(prompt, [])}
                   />
                 </React.Fragment>
               ))
@@ -4536,10 +4618,10 @@ export default function App() {
                     if (thinking) setLiveProgress(null);
                     setThinking((value) => !value);
                   }}
-                  title="Toggle model thinking"
+                  title="Toggle model think mode. Private reasoning is never displayed."
                 >
                   <Brain size={14} />
-                  <span>Thinking</span>
+                  <span>Think mode</span>
                   <i />
                 </button>
               </div>

@@ -4159,3 +4159,154 @@ body[data-theme] {
 .code-run-output.done { color: inherit; }
 .spin { animation: code-run-spin 0.9s linear infinite; }
 @keyframes code-run-spin { to { transform: rotate(360deg); } }
+
+
+/* Refined assistant response typography */
+.message-content,
+.message-main > .markdown {
+  max-width: 100%;
+}
+.markdown {
+  color: #dce5dd;
+  font-size: 13px;
+  line-height: 1.78;
+  overflow-wrap: anywhere;
+}
+.markdown p {
+  margin: 0 0 13px;
+}
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.32;
+  scroll-margin-top: 20px;
+}
+.markdown h1 { font-size: 24px; margin-top: 27px; }
+.markdown h2 { font-size: 20px; margin-top: 25px; padding-bottom: 7px; border-bottom: 1px solid #263329; }
+.markdown h3 { font-size: 16px; margin-top: 21px; }
+.markdown h4 { font-size: 14px; margin-top: 18px; }
+.markdown ul,
+.markdown ol {
+  padding-left: 24px;
+  margin: 9px 0 17px;
+}
+.markdown li { padding-left: 3px; margin: 5px 0; }
+.markdown li::marker { color: #9bcf77; }
+.markdown li > p { margin: 4px 0; }
+.markdown strong { color: #f1f6ef; font-weight: 700; }
+.markdown del { color: #87948a; }
+.markdown img {
+  display: block;
+  max-width: min(100%, 720px);
+  height: auto;
+  margin: 14px 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.markdown a {
+  color: #b9e995;
+  text-decoration: underline;
+  text-decoration-color: #b9e99555;
+  text-underline-offset: 3px;
+}
+.markdown a:hover { text-decoration-color: currentColor; }
+.markdown blockquote {
+  border-left: 3px solid #91c66b;
+  border-radius: 0 9px 9px 0;
+  padding: 11px 15px;
+  margin: 15px 0;
+  background: linear-gradient(90deg, #91c66b0d, #111813);
+}
+.markdown blockquote > :last-child { margin-bottom: 0; }
+.markdown hr { margin: 23px 0; border-color: #2b382e; }
+.markdown .table-wrap { margin: 16px 0 19px; box-shadow: 0 8px 24px #00000012; }
+.markdown table { font-size: 12px; line-height: 1.55; }
+.markdown th { font-weight: 700; white-space: nowrap; }
+.markdown td { color: #cbd6cc; }
+.markdown tr:nth-child(even) td { background: #ffffff04; }
+.markdown input[type='checkbox'] { accent-color: var(--accent); margin-right: 7px; }
+.markdown .inline-code {
+  white-space: break-spaces;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  padding: 2px 6px;
+  background: #1b261e;
+  border-color: #334536;
+}
+.code-shell {
+  margin: 15px 0 18px;
+  border: 1px solid #2c3a30;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #0d130f;
+  box-shadow: 0 8px 24px #00000018;
+}
+.code-head {
+  min-height: 36px;
+  padding: 5px 9px 5px 13px;
+  background: #18221b;
+  border-bottom: 1px solid #2b392e;
+  color: #a9b9aa;
+}
+.code-head span { font: 10px 'DM Mono'; letter-spacing: .025em; text-transform: lowercase; }
+.code-head button { width: 27px; height: 25px; border-radius: 6px; }
+.code-head button:hover { background: #2b3b2e; color: var(--accent2); }
+.code-block {
+  margin: 0;
+  padding: 15px 16px;
+  max-height: 560px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 11.5px;
+  line-height: 1.7;
+  tab-size: 2;
+}
+.next-step-suggestions {
+  margin-top: 17px;
+  padding-top: 12px;
+  border-top: 1px solid #263329;
+}
+.next-step-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 9px;
+  color: #94a398;
+  font: 10px 'DM Mono';
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.next-step-heading svg { color: var(--accent); }
+.next-step-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.next-step-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid #344638;
+  border-radius: 8px;
+  background: #151f18;
+  color: #c5d4c6;
+  font-size: 11px;
+  transition: .16s ease;
+}
+.next-step-actions button:hover {
+  border-color: #83ad69;
+  background: #1b2a1e;
+  color: #e7f4e2;
+  transform: translateY(-1px);
+}
+.next-step-actions button svg { color: #9bce78; }
+@media (max-width: 640px) {
+  .markdown { font-size: 12.5px; }
+  .markdown h1 { font-size: 21px; }
+  .markdown h2 { font-size: 18px; }
+  .markdown table { min-width: 480px; }
+  .next-step-actions { display: grid; grid-template-columns: 1fr; }
+  .next-step-actions button { justify-content: space-between; }
+}

@@ -4,7 +4,7 @@ import { buildSystemPrompt, SYSTEM_PROMPT_VERSION } from '../src/services/system
 
 test('system prompt loads the versioned Markdown identity and tool policy', () => {
   const prompt = buildSystemPrompt();
-  assert.equal(SYSTEM_PROMPT_VERSION, '8.0.0');
+  assert.equal(SYSTEM_PROMPT_VERSION, '8.1.0');
   assert.match(prompt, /You are \*\*Nemi\*\*/);
   assert.match(prompt, /Robin J R \(RJRYT\)/);
   assert.match(prompt, /`execute_python`/);
@@ -20,6 +20,9 @@ test('system prompt loads the versioned Markdown identity and tool policy', () =
   assert.match(prompt, /`update_task_status`/);
   assert.match(prompt, /`generate_image`/);
   assert.match(prompt, /Self-correction and bounded recovery/);
+  assert.match(prompt, /User-facing progress and response discipline/);
+  assert.match(prompt, /Never expose private chain-of-thought/);
+  assert.match(prompt, /Project continuity and milestone memory/);
 });
 
 test('system prompt protects secrets while allowing high-level architecture explanations', () => {

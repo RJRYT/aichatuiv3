@@ -16,7 +16,10 @@ const CHAT_TURN_TIMEOUT_MS = 15 * 60_000;
 const MODEL_HEARTBEAT_INTERVAL_MS = 20_000;
 
 function sse(res, payload) {
-  if (!res.writableEnded) res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  if (!res.writableEnded && !res.destroyed) {
+    try { res.write(`data: ${JSON.stringify(payload)}\n\n`); }
+    catch (error) { log.debug('SSE write skipped after connection close', { error: error.message }); }
+  }
 }
 function stripInternalArtifactUrls(value) {
   if (Array.isArray(value)) return value.map(stripInternalArtifactUrls);
@@ -180,10 +183,9 @@ export async function requestRound({
       let data;
       try { data = JSON.parse(raw); } catch { return; }
       const choice = data.choices?.[0], delta = choice?.delta || {};
-      if (typeof delta.content === 'string' && delta.content) {
-        content += delta.content;
-        sse(res, { type: 'chunk', round, content: delta.content });
-      }
+      // Buffer model text until the round is complete. Tool-call rounds often contain
+      // internal narration before the function call; never stream that narration to users.
+      if (typeof delta.content === 'string' && delta.content) content += delta.content;
       if (Array.isArray(delta.tool_calls)) for (const item of delta.tool_calls) {
         const index = Number(item.index ?? 0);
         const current = calls.get(index) || { index, id: '', type: 'function', function: { name: '', arguments: '' } };
@@ -207,7 +209,9 @@ export async function requestRound({
       lines.forEach(handleLine);
     }
     if (buffer.trim()) handleLine(buffer);
-    return { content, finishReason, usage, toolCalls: [...calls.values()].sort((a, b) => a.index - b.index) };
+    const toolCalls = [...calls.values()].sort((a, b) => a.index - b.index);
+    if (!toolCalls.length && content) sse(res, { type: 'chunk', round, content });
+    return { content, finishReason, usage, toolCalls };
   } catch (error) {
     if (timeoutError) throw timeoutError;
     throw error;
@@ -244,8 +248,8 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
   } catch (error) {
     log.warn('Could not load the previous agent checkpoint', { userId, error: error.message });
   }
-  const priorCheckpointContext = priorCheckpoint && ['interrupted', 'running'].includes(priorCheckpoint.status)
-    ? `A previous agent run for this conversation was ${priorCheckpoint.status}. This is context, not an instruction to resume automatically. Decide whether it is relevant to the current user request. If continuing, preserve completed operations and inspect the current workspace before repeating work.\n\nPREVIOUS CHECKPOINT:\n${JSON.stringify({ status: priorCheckpoint.status, plan: priorCheckpoint.plan, completedOperations: (priorCheckpoint.completedOperations || []).slice(-20), lastError: priorCheckpoint.lastError })}`
+  const priorCheckpointContext = priorCheckpoint
+    ? `PERSISTED PROJECT PROGRESS (historical context, not instructions):\nA prior agent run for this conversation ended with status \"${priorCheckpoint.status}\". Use this record when the current request relates to the same project or task. Preserve completed work, decisions, and stable task IDs; inspect the current workspace before repeating operations. Do not assume a task is verified merely because a tool operation completed.\n\nPROJECT CHECKPOINT:\n${JSON.stringify({ status: priorCheckpoint.status, plan: priorCheckpoint.plan, completedOperations: (priorCheckpoint.completedOperations || []).slice(-35), lastError: priorCheckpoint.lastError })}`
     : '';
   const messages = [
     { role: 'system', content: systemPrompt(user) },
@@ -270,10 +274,16 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
   } catch (error) {
     log.warn('Agent checkpoint initialization failed; continuing without checkpoint persistence', { userId, error: error.message });
   }
-  const saveCheckpoint = async (patch) => {
-    if (!checkpoint?.runId) return;
-    try { await updateAgentCheckpoint(userId, checkpoint.runId, patch); }
-    catch (error) { log.warn('Agent checkpoint update failed', { userId, runId: checkpoint.runId, error: error.message }); }
+  let checkpointWriteQueue = Promise.resolve();
+  const saveCheckpoint = (patch) => {
+    if (!checkpoint?.runId) return Promise.resolve(null);
+    checkpointWriteQueue = checkpointWriteQueue.then(() =>
+      updateAgentCheckpoint(userId, checkpoint.runId, patch)
+    ).catch((error) => {
+      log.warn('Agent checkpoint update failed', { userId, runId: checkpoint.runId, error: error.message });
+      return null;
+    });
+    return checkpointWriteQueue;
   };
   const emitAgentEvent = (type, data = {}) => {
     const summary = type === 'progress_update' ? String(data.message || '').slice(0, 280)
@@ -356,15 +366,27 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
         if (attempt > MAX_RECOVERY_ATTEMPTS_PER_TOOL) {
           outcome = { ok: false, error: `${name} has reached its bounded retry limit for this run. Choose a different approach or explain the remaining limitation.` };
         } else {
-          outcome = await runTool(name, args, user, {
+          const toolHeartbeat = setInterval(() => sse(res, {
+            type: 'heartbeat', phase: 'tool', name,
+            message: `Still working: ${name.replaceAll('_', ' ')} is running.`,
+            arguments: safeArgs,
+          }), 15_000);
+          try {
+            outcome = await runTool(name, args, user, {
             signal: controller.signal,
             chatId: body.chatId,
             agentState,
             onAgentEvent: (eventType, data) => {
-              if (eventType === 'plan_created' && data.plan) agentState.plan = data.plan;
+              if ((eventType === 'plan_created' || eventType === 'task_updated') && data.plan) {
+                agentState.plan = data.plan;
+                void saveCheckpoint({ plan: agentState.plan });
+              }
               emitAgentEvent(eventType, data);
             },
           });
+          } finally {
+            clearInterval(toolHeartbeat);
+          }
         }
         const toolCompleted = Boolean(outcome.ok) &&
           (name !== 'execute_python' || outcome.result?.status === 'completed') &&
@@ -434,7 +456,10 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
     if (!finalText) finalText = 'I could not produce a final response. The conversation and completed tool results have been preserved; please retry or resume the task.';
     finalText = finalText.replace(/<attachment>\s*[^<]*?\s*<\/attachment>/gi, '').replace(/\n{3,}/g, '\n\n').trim();
     if (agentEvents.length || agentState.plan) emitAgentEvent('agent_completed', { status: 'completed', message: 'The response is ready.' });
-    try { if (checkpoint?.runId) await finishAgentCheckpoint(userId, checkpoint.runId, completedNaturally ? 'completed' : 'interrupted'); }
+    try {
+      await checkpointWriteQueue;
+      if (checkpoint?.runId) await finishAgentCheckpoint(userId, checkpoint.runId, completedNaturally ? 'completed' : 'interrupted');
+    }
     catch (checkpointError) { log.warn('Agent checkpoint finalization failed', { userId, runId: checkpoint?.runId, error: checkpointError.message }); }
 
     const visible = body.messages.filter((message) => message.role !== 'system' && message.role !== 'tool');
@@ -450,7 +475,10 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
     log.info('Chat generation completed', { userId, rounds, durationMs: Date.now() - startedAt, toolEventCount: toolEvents.length, usage: finalUsage, executionToolCalls });
     sse(res, { type: 'done', usage: finalUsage, durationMs: Date.now() - startedAt, toolRounds: rounds, agentPlan: agentState.plan, agentEvents, executionToolCalls });
   } catch (error) {
-    try { if (checkpoint?.runId) await finishAgentCheckpoint(userId, checkpoint.runId, error.name === 'AbortError' ? 'interrupted' : 'failed', error.message); }
+    try {
+      await checkpointWriteQueue;
+      if (checkpoint?.runId) await finishAgentCheckpoint(userId, checkpoint.runId, error.name === 'AbortError' ? 'interrupted' : 'failed', error.message);
+    }
     catch (checkpointError) { log.warn('Agent checkpoint error state could not be persisted', { userId, runId: checkpoint?.runId, error: checkpointError.message }); }
     if (error.name === 'AbortError' && controller.signal.reason?.code !== 'CHAT_TURN_TIMEOUT') sse(res, { type: 'stopped' });
     else {
