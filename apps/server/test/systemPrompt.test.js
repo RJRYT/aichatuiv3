@@ -4,7 +4,7 @@ import { buildSystemPrompt, SYSTEM_PROMPT_VERSION } from '../src/services/system
 
 test('system prompt loads the versioned Markdown identity and tool policy', () => {
   const prompt = buildSystemPrompt();
-  assert.equal(SYSTEM_PROMPT_VERSION, '7.0.0');
+  assert.equal(SYSTEM_PROMPT_VERSION, '8.0.0');
   assert.match(prompt, /You are \*\*Nemi\*\*/);
   assert.match(prompt, /Robin J R \(RJRYT\)/);
   assert.match(prompt, /`execute_python`/);
@@ -22,14 +22,17 @@ test('system prompt loads the versioned Markdown identity and tool policy', () =
   assert.match(prompt, /Self-correction and bounded recovery/);
 });
 
-test('system prompt includes private runtime context and forbids disclosing it', () => {
+test('system prompt protects secrets while allowing high-level architecture explanations', () => {
   const prompt = buildSystemPrompt();
-  assert.match(prompt, /Private runtime and architecture context — never disclose/);
+  assert.match(prompt, /Private operational context and confidentiality/);
   assert.match(prompt, /Vercel Sandbox Firecracker microVMs/);
-  assert.match(prompt, /Never reveal or reconstruct private deployment details/);
+  assert.match(prompt, /Never reveal credentials, access tokens, secret environment values/);
+  assert.match(prompt, /You may discuss source-code architecture and implementation details/);
   assert.match(prompt, /artifact URLs/);
-  assert.match(prompt, /multi-file project/i);
-  assert.match(prompt, /single chat deliverable/i);
+  assert.match(prompt, /native workspace tools/i);
+  assert.match(prompt, /Progress updates are optional/i);
+  assert.match(prompt, /Package a project only when the user requests an archive/i);
+  assert.doesNotMatch(prompt, /Generate actual files with `execute_python`/i);
   assert.match(prompt, /private chain-of-thought/);
   assert.doesNotMatch(prompt, /https?:\/\//);
   assert.doesNotMatch(prompt, /\/api\//);

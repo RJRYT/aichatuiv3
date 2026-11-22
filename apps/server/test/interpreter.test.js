@@ -29,7 +29,7 @@ test('rejects empty and oversized source', () => {
 test('enforces per-user and global concurrent execution quotas and releases slots', () => {
   const releaseA = acquireExecution('test-user');
   const releaseB = acquireExecution('test-user');
-  assert.throws(() => acquireExecution('test-user'), /concurrent Python execution limit/);
+  assert.throws(() => acquireExecution('test-user'), /concurrent code execution limit/);
   releaseA();
   const releaseC = acquireExecution('test-user');
   releaseB();

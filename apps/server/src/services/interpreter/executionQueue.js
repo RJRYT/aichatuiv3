@@ -10,14 +10,14 @@ export function acquireExecution(userId) {
   if (count >= EXECUTION_LIMITS.maxConcurrentPerUser) {
     throw Object.assign(
       new Error(
-        'You have reached the concurrent Python execution limit. Wait for an existing task to finish.'
+        'You have reached the concurrent code execution limit. Wait for an existing task to finish.'
       ),
       { status: 429 }
     );
   }
   if (activeGlobal >= EXECUTION_LIMITS.maxConcurrentGlobal) {
     throw Object.assign(
-      new Error('The Python execution service is busy. Please retry in a moment.'),
+      new Error('The Code execution service is busy. Please retry in a moment.'),
       { status: 429 }
     );
   }

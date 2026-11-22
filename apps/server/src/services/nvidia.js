@@ -1,201 +1,20 @@
 import crypto from 'node:crypto';
 import logger from '../utils/logger.js';
-import {
-  advancePlanAfterExecution,
-  initializePlanProgress,
-  startNextPlanTask,
-} from './agentPlanProgress.js';
-import {
-  assessWebsiteQuality,
-  detectDeliverableContract,
-  findArchiveDuplicateArtifactIds,
-  formatVerifiedArchiveResponse,
-  hasArchiveCandidate,
-  inspectZipBuffer,
-  stripAttachmentMarkers,
-  shouldAttemptDeliverableVerification,
-} from './deliverablePolicy.js';
-import { deleteArtifacts, getArtifact, listArtifacts } from './interpreter/artifactStore.js';
 import { buildSystemPrompt } from './systemPrompt.js';
+import { createAgentCheckpoint, finishAgentCheckpoint, getLatestAgentCheckpoint, updateAgentCheckpoint } from './agents/checkpointManager.js';
 import { getToolDefinitions, runTool } from './tools.js';
 
 export const MODEL_ID = 'nvidia/nemotron-3.5-super-vl-120b-a12b';
 const log = logger.child({ component: 'nvidia' });
 const NVIDIA_ENDPOINT = 'https://integrate.api.nvidia.com/v1/chat/completions';
-const MAX_TOOL_ROUNDS = 64;
-const MAX_EXECUTION_TOOL_CALLS = 24;
-const MAX_RECOVERY_ATTEMPTS_PER_TOOL = 3;
+const MAX_TOOL_ROUNDS = Math.max(16, Math.min(128, Number(process.env.AGENT_MAX_MODEL_ROUNDS) || 96));
+const MAX_EXECUTION_TOOL_CALLS = Math.max(8, Math.min(128, Number(process.env.AGENT_MAX_TOOL_CALLS) || 64));
+const MAX_RECOVERY_ATTEMPTS_PER_TOOL = Math.max(1, Math.min(5, Number(process.env.AGENT_MAX_RECOVERY_ATTEMPTS) || 3));
 const MODEL_STREAM_IDLE_TIMEOUT_MS = 90_000;
 const MODEL_ROUND_TIMEOUT_MS = 10 * 60_000;
 const CHAT_TURN_TIMEOUT_MS = 15 * 60_000;
 const MODEL_HEARTBEAT_INTERVAL_MS = 20_000;
 
-const FILE_ACTION_PROMPT = `This request requires a real file operation. Use the required execution tool, perform the requested action, save the resulting file into the current workspace, and verify the stored artifact. Do not provide a script for the user to run instead of doing the operation. Do not claim success without a real, non-empty artifact.`;
-const IMAGE_DELIVERABLE_PROMPT = `The user requested an original image. Use the required image-generation tool, inspect its actual result, and only report success if the image artifact is stored and verified. Do not provide a prompt or instructions as a substitute for generating the image.`;
-
-const DELIVERABLE_PROMPT = `You are producing a real, user-facing deliverable, not a tutorial.
-Treat the user's request as a product brief. Before implementation, define the actual requirements,
-feature scope, information architecture, visual direction, responsive behavior, accessibility,
-error/empty/loading states, data model, and acceptance criteria appropriate to the requested product.
-Create a detailed implementation plan (normally 5–8 meaningful tasks). Do not use vague tasks such as
-"write files". Plan design, implementation, quality assurance, packaging, and verification separately.
-
-Implementation quality is a priority. Do not rush or minimize the source to save tokens. Generate
-complete, cohesive, maintainable files with production-minded structure, thoughtful UX, polished visual
-design, responsive layouts, semantic markup, accessible controls, validation, empty states, useful
-feedback, and robust edge-case handling. Use the same implementation depth you would provide in a
-high-quality direct code answer. Do not replace implementation with snippets, pseudocode, TODOs,
-placeholders, or instructions for the user to finish.
-
-Use execute_python as the file-writing and verification bridge: create the actual, complete source
-files in the workspace, run appropriate static/functional checks, and fix failures. Do not substitute
-Python-generated toy or abbreviated application content for the requested implementation; keep the
-project source complete and thoughtfully designed. For multi-file projects, package the finished
-project and README into one ZIP even if the user did not explicitly say "zip". Reopen the archive,
-inspect its entries, and verify it is readable and non-empty. Report a concise file manifest and check
-results in stdout so the assistant can accurately communicate the result. The user should receive the
-final ZIP as the single chat deliverable, not separate source-file attachments or code blocks. Do not
-write literal <attachment> tags in your response; the application attaches verified archives
-automatically. Do not claim browser testing unless a browser test actually ran. Do not claim
-production readiness without evidence. The backend independently checks the requested artifact before
-accepting completion.`;
-
-async function verifyDeliverableArtifacts(
-  result,
-  userId,
-  contract,
-  chatId = '',
-  executionStartedAt = ''
-) {
-  const returnedArtifacts = Array.isArray(result?.artifacts) ? result.artifacts : [];
-  const executionStartedAtMs = new Date(executionStartedAt).getTime();
-  // The sandbox response is the primary source. Query the per-chat library as a
-  // recovery path in case a provider response omitted artifact metadata after save.
-  let storedArtifacts = [];
-  if (chatId) {
-    try {
-      const library = await listArtifacts(userId, { chatId, limit: 100 });
-      const recentCutoff = Date.now() - 15 * 60 * 1000;
-      storedArtifacts = (Array.isArray(library.files) ? library.files : []).filter((item) => {
-        if (result?.executionId && String(item.executionId || '') === String(result.executionId))
-          return true;
-        const updatedAt = new Date(item.createdAt || 0).getTime();
-        const cutoff = Number.isFinite(executionStartedAtMs)
-          ? Math.max(recentCutoff, executionStartedAtMs)
-          : recentCutoff;
-        return Number.isFinite(updatedAt) && updatedAt >= cutoff;
-      });
-    } catch (error) {
-      log.warn('Could not query chat artifacts during verification', {
-        chatId,
-        error: error.message,
-      });
-    }
-  }
-  const byId = new Map();
-  for (const item of [...returnedArtifacts, ...storedArtifacts]) {
-    if (item?.id) byId.set(String(item.id), item);
-  }
-  const artifacts = [...byId.values()];
-  const archiveCandidateFound = hasArchiveCandidate(artifacts);
-  if (contract.archiveRequired && !archiveCandidateFound) {
-    return {
-      valid: false,
-      verified: [],
-      archive: null,
-      archiveCandidateFound: false,
-      qualityChecks: {},
-      reason: 'A valid, non-empty ZIP archive has not been generated and verified.',
-    };
-  }
-  const verified = [];
-  const fileContents = new Map();
-  const zipContents = new Map();
-  for (const metadata of artifacts) {
-    if (!metadata?.id || !Number(metadata.size)) continue;
-    const stored = await getArtifact(metadata.id, userId);
-    if (!stored || !Buffer.isBuffer(stored.data) || stored.data.length !== Number(metadata.size))
-      continue;
-    if (metadata.sha256 && stored.sha256 !== metadata.sha256) continue;
-    fileContents.set(String(metadata.name || ''), stored.data);
-    const item = {
-      id: metadata.id,
-      name: metadata.name,
-      size: stored.data.length,
-      mimeType: stored.mimeType,
-    };
-    if (/\.zip$/i.test(String(metadata.name || '')) || stored.mimeType === 'application/zip') {
-      const zip = inspectZipBuffer(stored.data);
-      if (zip.valid) {
-        zipContents.set(String(metadata.id), zip.entries);
-        item.zip = {
-          valid: true,
-          fileCount: zip.fileCount,
-          entries: zip.entries.map(({ name, compressedSize, uncompressedSize }) => ({
-            name,
-            compressedSize,
-            uncompressedSize,
-          })),
-        };
-      }
-    }
-    verified.push(item);
-  }
-  const archive = verified.find((item) => item.zip);
-  const websiteFiles = archive
-    ? zipContents.get(String(archive.id)) || []
-    : [...fileContents.entries()].map(([name, content]) => ({
-        name,
-        content,
-        uncompressedSize: content.length,
-      }));
-  const websiteQuality = contract.website
-    ? assessWebsiteQuality(websiteFiles)
-    : { passed: true, checks: {} };
-  const qualityChecks = websiteQuality.checks;
-  const qualityPassed = websiteQuality.passed;
-  const valid = contract.archiveRequired
-    ? Boolean(archive && (!contract.website || qualityPassed))
-    : contract.website
-      ? qualityPassed
-      : verified.length > 0;
-  if (valid && contract.archiveRequired && archive && chatId) {
-    try {
-      const library = await listArtifacts(userId, { chatId, limit: 100 });
-      const duplicateIds = findArchiveDuplicateArtifactIds(
-        library.files || [],
-        archive.zip.entries
-      );
-      if (duplicateIds.length) {
-        await deleteArtifacts(duplicateIds, userId);
-      }
-    } catch (error) {
-      log.warn('Could not remove source files already included in the verified ZIP', {
-        chatId,
-        error: error.message,
-      });
-    }
-  }
-  return {
-    valid,
-    verified,
-    archive: archive || null,
-    archiveCandidateFound,
-    qualityChecks,
-    reason: !valid
-      ? contract.archiveRequired
-        ? contract.website
-          ? `Website ZIP failed quality checks: ${
-              Object.entries(qualityChecks)
-                .filter(([, passed]) => !passed)
-                .map(([name]) => name)
-                .join(', ') || 'required HTML/CSS/JS files missing'
-            }.`
-          : 'A valid, non-empty ZIP archive has not been generated and verified.'
-        : 'No generated artifact has been stored and verified.'
-      : '',
-  };
-}
 function sse(res, payload) {
   if (!res.writableEnded) res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
@@ -227,8 +46,41 @@ function parseToolArgs(raw) {
     throw new Error(`Invalid tool arguments: ${error.message}`);
   }
 }
+
+function safeToolArguments(name, args = {}) {
+  if (name === 'execute_python') return { task_context: String(args.task_context || '').slice(0, 500), code_bytes: Buffer.byteLength(String(args.code || ''), 'utf8') };
+  if (name === 'workspace_create') return { path: args.path, overwrite: Boolean(args.overwrite), content_bytes: Buffer.byteLength(String(args.content || ''), 'utf8') };
+  if (name === 'workspace_edit') return { path: args.path, mode: args.mode, expectedRevision: args.expectedRevision, old_text_bytes: Buffer.byteLength(String(args.oldText || ''), 'utf8'), new_text_bytes: Buffer.byteLength(String(args.newText || args.content || ''), 'utf8') };
+  if (name === 'workspace_read' || name === 'workspace_delete') return { path: args.path };
+  if (name === 'workspace_search') return { query: String(args.query || '').slice(0, 120), prefix: args.prefix || '' };
+  if (name === 'execute_node') return { command: args.command, args: Array.isArray(args.args) ? args.args.slice(0, 20) : [], timeout_ms: args.timeout_ms };
+  if (name === 'workspace_archive') return { name: args.name || 'project.zip' };
+  if (name === 'save_memory') return { memory_characters: String(args.memory || '').length };
+  if (name === 'search_memories') return { query_characters: String(args.query || '').length };
+  if (name === 'list_shared_links') return { limit: args.limit };
+  if (name === 'search_previous_chats') return { query: String(args.query || '').slice(0, 80), limit: args.limit };
+  if (name === 'fetch_public_url') { try { const url = new URL(String(args.url || '')); return { url: `${url.origin}${url.pathname}` }; } catch { return { url: '[invalid URL]' }; } }
+  if (name.startsWith('custom_')) return { argumentNames: Object.keys(args).slice(0, 20) };
+  return args;
+}
+
+function safeToolEventResult(name, result) {
+  if (!result || typeof result !== 'object') return result;
+  if (name === 'workspace_read') return { path: result.path, size: result.size, revision: result.revision, sha256: result.sha256, contentBytes: Buffer.byteLength(String(result.content || ''), 'utf8') };
+  if (name === 'workspace_search') return { query: result.query, resultCount: result.results?.length || 0, truncated: Boolean(result.truncated) };
+  if (name === 'execute_python') return { status: result.status, exitCode: result.exitCode, durationMs: result.durationMs, artifactNames: (result.artifacts || []).map((item) => item.name).slice(0, 20) };
+  if (name === 'execute_node') return { runtime: 'node', status: result.status, exitCode: result.exitCode, durationMs: result.durationMs };
+  if (name === 'web_search') return { query: result.query, resultCount: result.results?.length || 0 };
+  if (name === 'fetch_public_url') return { url: result.url, contentType: result.contentType, contentBytes: Buffer.byteLength(String(result.content || ''), 'utf8') };
+  if (name === 'generate_image') return { status: result.status, artifactNames: (result.artifacts || []).map((item) => item.name).slice(0, 4) };
+  if (name === 'save_memory') return { saved: result.saved, duplicate: result.duplicate, totalMemories: result.totalMemories };
+  if (name === 'search_memories') return { memoryCount: result.memories?.length || 0 };
+  if (name === 'search_previous_chats') return { resultCount: result.results?.length || 0 };
+  if (name === 'list_shared_links') return { shareCount: result.shares?.length || 0 };
+  return result;
+}
 export function countsTowardExecutionLimit(toolName) {
-  return !['create_task_plan', 'update_task_status', 'report_progress'].includes(toolName);
+  return !['create_task_plan', 'update_task_status', 'report_progress', 'get_agent_status'].includes(toolName);
 }
 export function normalizeActivePlan(plan) {
   if (!plan || typeof plan !== 'object' || !Array.isArray(plan.tasks)) return null;
@@ -256,15 +108,12 @@ function systemPrompt(user) {
 }
 export async function requestRound({
   messages,
-  tools,
-  thinkingEnabled,
+  tools = [],
+  thinkingEnabled = false,
   signal,
   res,
   round,
   hasVision,
-  requiredToolName,
-  forceRequiredTool = false,
-  isDeliverable,
   idleTimeoutMs = MODEL_STREAM_IDLE_TIMEOUT_MS,
   roundTimeoutMs = MODEL_ROUND_TIMEOUT_MS,
   heartbeatIntervalMs = MODEL_HEARTBEAT_INTERVAL_MS,
@@ -272,21 +121,12 @@ export async function requestRound({
   const body = {
     model: MODEL_ID,
     messages,
-    temperature: isDeliverable ? 0.35 : hasVision ? 0.6 : 1.0,
-    top_p: isDeliverable ? 0.9 : 0.95,
+    temperature: hasVision ? 0.6 : 0.8,
+    top_p: 0.95,
     max_tokens: 8192,
     stream: true,
     chat_template_kwargs: { enable_thinking: Boolean(thinkingEnabled) },
-    ...(tools.length
-      ? {
-          tools,
-          tool_choice:
-            requiredToolName && forceRequiredTool
-              ? { type: 'function', function: { name: requiredToolName } }
-              : 'auto',
-          parallel_tool_calls: false,
-        }
-      : {}),
+    ...(tools.length ? { tools, tool_choice: 'auto', parallel_tool_calls: false } : {}),
   };
   const requestController = new AbortController();
   let reader;
@@ -297,68 +137,40 @@ export async function requestRound({
     timeoutError = error;
     requestController.abort(error);
   };
-  const abortRequest = () => {
-    failRequest(
-      signal.reason ||
-        Object.assign(new Error('The chat request was cancelled.'), { name: 'AbortError' })
-    );
-  };
+  const abortRequest = () => failRequest(signal.reason || Object.assign(new Error('The chat request was cancelled.'), { name: 'AbortError' }));
   const resetIdleTimer = () => {
     clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => {
-      failRequest(
-        Object.assign(
-          new Error(
-            `The AI model did not send a response for ${Math.ceil(idleTimeoutMs / 1000)} seconds. Please retry.`
-          ),
-          { code: 'MODEL_STREAM_IDLE_TIMEOUT', status: 504 }
-        )
-      );
-    }, idleTimeoutMs);
+    idleTimer = setTimeout(() => failRequest(Object.assign(
+      new Error(`The AI model did not send a response for ${Math.ceil(idleTimeoutMs / 1000)} seconds. Please retry.`),
+      { code: 'MODEL_STREAM_IDLE_TIMEOUT', status: 504 }
+    )), idleTimeoutMs);
   };
   if (signal?.aborted) abortRequest();
   else signal?.addEventListener('abort', abortRequest, { once: true });
   resetIdleTimer();
-  const roundTimer = setTimeout(() => {
-    failRequest(
-      Object.assign(new Error('The AI model response exceeded its time limit. Please retry.'), {
-        code: 'MODEL_ROUND_TIMEOUT',
-        status: 504,
-      })
-    );
-  }, roundTimeoutMs);
-  const heartbeatTimer = setInterval(() => {
-    sse(res, {
-      type: 'heartbeat',
-      phase: 'model',
-      round,
-      message: 'The model is still working and may be reasoning before replying.',
-    });
-  }, heartbeatIntervalMs);
+  const roundTimer = setTimeout(() => failRequest(Object.assign(
+    new Error('The AI model response exceeded its time limit. Please retry.'),
+    { code: 'MODEL_ROUND_TIMEOUT', status: 504 }
+  )), roundTimeoutMs);
+  const heartbeatTimer = setInterval(() => sse(res, {
+    type: 'heartbeat', phase: 'model', round,
+    message: 'The model is still working.',
+  }), heartbeatIntervalMs);
   try {
     const response = await fetch(NVIDIA_ENDPOINT, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${process.env.NVIDIA_API_KEY}`,
-        'Content-Type': 'application/json',
-        Accept: 'text/event-stream',
-      },
+      headers: { Authorization: `Bearer ${process.env.NVIDIA_API_KEY}`, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
       body: JSON.stringify(body),
       signal: requestController.signal,
     });
     if (!response.ok) {
       const detail = (await response.text()).slice(0, 9000);
-      throw Object.assign(new Error(`NVIDIA NIM returned HTTP ${response.status}: ${detail}`), {
-        status: response.status,
-      });
+      throw Object.assign(new Error(`NVIDIA NIM returned HTTP ${response.status}: ${detail}`), { status: response.status });
     }
     if (!response.body) throw new Error('NVIDIA returned an empty streaming response body.');
     reader = response.body.getReader();
     const decoder = new TextDecoder();
-    let buffer = '',
-      content = '',
-      finishReason = null,
-      usage = null;
+    let buffer = '', content = '', finishReason = null, usage = null;
     const calls = new Map();
     const handleLine = (line) => {
       const trimmed = line.trim();
@@ -366,32 +178,21 @@ export async function requestRound({
       const raw = trimmed.slice(5).trim();
       if (!raw || raw === '[DONE]') return;
       let data;
-      try {
-        data = JSON.parse(raw);
-      } catch {
-        return;
-      }
-      const choice = data.choices?.[0],
-        delta = choice?.delta || {};
+      try { data = JSON.parse(raw); } catch { return; }
+      const choice = data.choices?.[0], delta = choice?.delta || {};
       if (typeof delta.content === 'string' && delta.content) {
         content += delta.content;
         sse(res, { type: 'chunk', round, content: delta.content });
       }
-      if (Array.isArray(delta.tool_calls))
-        for (const item of delta.tool_calls) {
-          const index = Number(item.index ?? 0),
-            current = calls.get(index) || {
-              index,
-              id: '',
-              type: 'function',
-              function: { name: '', arguments: '' },
-            };
-          if (item.id && !current.id) current.id = item.id;
-          if (item.function?.name) current.function.name += item.function.name;
-          if (item.function?.arguments) current.function.arguments += item.function.arguments;
-          calls.set(index, current);
-          sse(res, { type: 'tool_call_delta', round, index, name: current.function.name });
-        }
+      if (Array.isArray(delta.tool_calls)) for (const item of delta.tool_calls) {
+        const index = Number(item.index ?? 0);
+        const current = calls.get(index) || { index, id: '', type: 'function', function: { name: '', arguments: '' } };
+        if (item.id && !current.id) current.id = item.id;
+        if (item.function?.name) current.function.name += item.function.name;
+        if (item.function?.arguments) current.function.arguments += item.function.arguments;
+        calls.set(index, current);
+        sse(res, { type: 'tool_call_delta', round, index, name: current.function.name });
+      }
       if (choice?.finish_reason) finishReason = choice.finish_reason;
       if (data.usage) usage = data.usage;
     };
@@ -406,693 +207,261 @@ export async function requestRound({
       lines.forEach(handleLine);
     }
     if (buffer.trim()) handleLine(buffer);
-    return {
-      content,
-      finishReason,
-      usage,
-      toolCalls: [...calls.values()].sort((a, b) => a.index - b.index),
-    };
+    return { content, finishReason, usage, toolCalls: [...calls.values()].sort((a, b) => a.index - b.index) };
   } catch (error) {
     if (timeoutError) throw timeoutError;
     throw error;
   } finally {
     if (reader) reader.releaseLock();
-    clearTimeout(idleTimer);
-    clearTimeout(roundTimer);
-    clearInterval(heartbeatTimer);
+    clearTimeout(idleTimer); clearTimeout(roundTimer); clearInterval(heartbeatTimer);
     signal?.removeEventListener('abort', abortRequest);
   }
 }
+
 export async function runNemotronChat({ body, req, res, persist, user }) {
-  if (!process.env.NVIDIA_API_KEY) {
-    log.error('NVIDIA_API_KEY is missing on the backend.');
-    throw Object.assign(new Error('NVIDIA_API_KEY is missing on the backend.'), { status: 503 });
-  }
-  if (!Array.isArray(body.messages) || !body.messages.length) {
-    log.warn('Invalid chat request: empty messages');
-    throw Object.assign(new Error('A non-empty messages array is required.'), { status: 400 });
-  }
+  if (!process.env.NVIDIA_API_KEY) throw Object.assign(new Error('NVIDIA_API_KEY is missing on the backend.'), { status: 503 });
+  if (!Array.isArray(body.messages) || !body.messages.length) throw Object.assign(new Error('A non-empty messages array is required.'), { status: 400 });
+
   const userId = user?._id ? String(user._id) : 'unknown';
   const tools = getToolDefinitions(user);
-  const input = body.messages.map((m) => {
-    const files = Array.isArray(m.attachments)
-      ? m.attachments.filter((file) => file?.sandboxPath?.startsWith('uploads/'))
-      : [];
-    let content = m.content;
-    if (files.length && m.role === 'user') {
-      const fileContext = `User-provided files are available to execute_python in this conversation's sandbox workspace:\n${files.map((file) => `- ${file.name} (${file.type || 'file'}, ${Number(file.size) || 'unknown'} bytes): ${file.sandboxPath}`).join('\n')}\nUse these exact paths with Python pathlib/open; do not guess filenames. The execution service verifies each file's stored bytes and mounts it before running Python. If the execution tool reports a mount/integrity error, report that error rather than claiming the file is empty.`;
-      content = Array.isArray(content)
-        ? [{ type: 'text', text: fileContext }, ...content]
-        : `${String(content || '')}\n\n${fileContext}`;
+  const input = body.messages.map((message) => {
+    const attachments = Array.isArray(message.attachments) ? message.attachments.filter((file) => file?.sandboxPath?.startsWith('uploads/')) : [];
+    let content = message.content;
+    if (attachments.length && message.role === 'user') {
+      const note = `User attachments available to the Python execution environment (only if Python is actually needed):\n${attachments.map((file) => `- ${file.name} (${file.type || 'file'}, ${Number(file.size) || 'unknown'} bytes): ${file.sandboxPath}`).join('\n')}`;
+      content = Array.isArray(content) ? [{ type: 'text', text: note }, ...content] : `${String(content || '')}\n\n${note}`;
     }
     return {
-      role: m.role,
-      content,
-      ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
-      ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
-      ...(m.name ? { name: m.name } : {}),
+      role: message.role, content,
+      ...(message.tool_calls ? { tool_calls: message.tool_calls } : {}),
+      ...(message.tool_call_id ? { tool_call_id: message.tool_call_id } : {}),
+      ...(message.name ? { name: message.name } : {}),
     };
   });
-  const deliverableContract = detectDeliverableContract(body.messages);
+  let priorCheckpoint = null;
+  try {
+    if (user?._id && body.chatId) priorCheckpoint = await getLatestAgentCheckpoint(userId, String(body.chatId));
+  } catch (error) {
+    log.warn('Could not load the previous agent checkpoint', { userId, error: error.message });
+  }
+  const priorCheckpointContext = priorCheckpoint && ['interrupted', 'running'].includes(priorCheckpoint.status)
+    ? `A previous agent run for this conversation was ${priorCheckpoint.status}. This is context, not an instruction to resume automatically. Decide whether it is relevant to the current user request. If continuing, preserve completed operations and inspect the current workspace before repeating work.\n\nPREVIOUS CHECKPOINT:\n${JSON.stringify({ status: priorCheckpoint.status, plan: priorCheckpoint.plan, completedOperations: (priorCheckpoint.completedOperations || []).slice(-20), lastError: priorCheckpoint.lastError })}`
+    : '';
   const messages = [
     { role: 'system', content: systemPrompt(user) },
-    ...(body.activePlan
-      ? [
-          {
-            role: 'system',
-            content: `Continue this existing user-approved task plan instead of silently replacing it. Preserve its task IDs and completed work. Update statuses with update_task_status as work progresses. The user can edit this plan in the UI. If the user explicitly requests a new or revised plan, then create one.\n\nACTIVE PLAN:\n${JSON.stringify(normalizeActivePlan(body.activePlan))}`,
-          },
-        ]
-      : []),
-    ...(deliverableContract
-      ? [
-          {
-            role: 'system',
-            content: `${deliverableContract.executionTool === 'generate_image' ? IMAGE_DELIVERABLE_PROMPT : deliverableContract.requiresPlan ? DELIVERABLE_PROMPT : FILE_ACTION_PROMPT}\n\nDELIVERABLE CONTRACT:\n- Archive required: ${deliverableContract.archiveRequired ? 'yes' : 'no'}\n- Website project: ${deliverableContract.website ? 'yes' : 'no'}\n- User request: ${deliverableContract.userRequest}`,
-          },
-        ]
-      : []),
+    ...(priorCheckpointContext ? [{ role: 'system', content: priorCheckpointContext }] : []),
+    ...(body.activePlan ? [{ role: 'system', content: `An optional task plan is active. Preserve completed work and stable task IDs. Update it only when useful; it does not dictate the tool sequence.\n\nACTIVE PLAN:\n${JSON.stringify(normalizeActivePlan(body.activePlan))}` }] : []),
     ...input,
   ];
-  const hasVision = input.some(
-    (m) => Array.isArray(m.content) && m.content.some((p) => p.type === 'image_url')
-  );
+  const hasVision = input.some((message) => Array.isArray(message.content) && message.content.some((part) => part.type === 'image_url'));
   const controller = new AbortController();
-  const turnTimer = setTimeout(() => {
-    controller.abort(
-      Object.assign(new Error('This chat turn exceeded its 15-minute time limit. Please retry.'), {
-        code: 'CHAT_TURN_TIMEOUT',
-        status: 504,
-      })
-    );
-  }, CHAT_TURN_TIMEOUT_MS);
-  const onClose = () => {
-    if (!res.writableEnded) controller.abort();
-  };
+  const turnTimer = setTimeout(() => controller.abort(Object.assign(new Error('This chat turn exceeded its 15-minute time limit. Please retry.'), { code: 'CHAT_TURN_TIMEOUT', status: 504 })), CHAT_TURN_TIMEOUT_MS);
+  const onClose = () => { if (!res.writableEnded) controller.abort(); };
   res.on('close', onClose);
+
   const startedAt = Date.now();
-  let finalUsage = null,
-    finalText = '',
-    modelText = '',
-    rounds = 0,
-    toolEvents = [];
-  const agentState = {
-    plan: normalizeActivePlan(body.activePlan),
-    deliverableContract,
-    deliverableVerification: null,
-    deliverableVerificationAttempts: 0,
+  let finalUsage = null, finalText = '', rounds = 0, executionToolCalls = 0;
+  const toolEvents = [], agentEvents = [];
+  const agentState = { plan: normalizeActivePlan(body.activePlan) };
+  const failuresByTool = new Map();
+  let checkpoint = null;
+  try {
+    if (user?._id && body.chatId) checkpoint = await createAgentCheckpoint({ ownerId: userId, chatId: String(body.chatId), plan: agentState.plan });
+  } catch (error) {
+    log.warn('Agent checkpoint initialization failed; continuing without checkpoint persistence', { userId, error: error.message });
+  }
+  const saveCheckpoint = async (patch) => {
+    if (!checkpoint?.runId) return;
+    try { await updateAgentCheckpoint(userId, checkpoint.runId, patch); }
+    catch (error) { log.warn('Agent checkpoint update failed', { userId, runId: checkpoint.runId, error: error.message }); }
   };
-  const agentEvents = [];
-  const consecutiveFailures = new Map();
-  let requiredToolCorrections = 0;
-  let executionToolCalls = 0;
-  let progressRetries = 0;
-  let progressReported = false;
-  let requiredToolBlocked = false;
-  const emitAgentEvent = (eventType, data = {}) => {
-    const summary =
-      eventType === 'progress_update'
-        ? String(data.message || '').slice(0, 280)
-        : eventType === 'plan_created'
-          ? `Planning: ${String(data.plan?.objective || 'organizing the work').slice(0, 180)}`
-          : eventType === 'task_updated'
-            ? `${data.task?.status === 'completed' ? 'Completed' : data.task?.status === 'running' ? 'Working on' : 'Updating'}: ${String(data.task?.title || 'current task').slice(0, 120)}`
-            : eventType === 'tool_started'
-              ? `Using ${String(data.label || data.name || 'a tool').replaceAll('_', ' ')}`
-              : eventType === 'tool_completed'
-                ? `Checking the result from ${String(data.label || data.name || 'the tool').replaceAll('_', ' ')}`
-                : eventType === 'self_correction'
-                  ? `Recovering from an issue with ${String(data.tool || 'a tool').replaceAll('_', ' ')}`
-                  : eventType === 'agent_completed'
-                    ? 'The response is ready.'
-                    : eventType === 'deliverable_validation'
-                      ? data.status === 'verified'
-                        ? 'Verifying the generated files: complete.'
-                        : 'Checking the generated files.'
-                      : '';
-    const event = {
-      id: crypto.randomUUID(),
-      type: eventType,
-      at: new Date().toISOString(),
-      ...(summary ? { summary } : {}),
-      ...data,
-    };
+  const emitAgentEvent = (type, data = {}) => {
+    const summary = type === 'progress_update' ? String(data.message || '').slice(0, 280)
+      : type === 'plan_created' ? 'Created an execution plan.'
+      : type === 'task_updated' ? `Updated task: ${String(data.task?.title || 'task').slice(0, 100)}`
+      : type === 'tool_started' ? `Using ${String(data.label || data.name || 'a tool').replaceAll('_', ' ')}`
+      : type === 'tool_completed' ? `Completed ${String(data.label || data.name || 'tool').replaceAll('_', ' ')}`
+      : type === 'self_correction' ? `Recovering from ${String(data.tool || 'a tool').replaceAll('_', ' ')}`
+      : type === 'agent_completed' ? 'The response is ready.' : '';
+    const event = { id: crypto.randomUUID(), type, at: new Date().toISOString(), ...(summary ? { summary } : {}), ...data };
     agentEvents.push(event);
     sse(res, { type: 'agent_event', event });
     return event;
   };
+
   try {
-    for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+    let completedNaturally = false;
+    let outputContinuations = 0;
+    let accumulatedOutput = '';
+    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       rounds = round + 1;
-      sse(res, {
-        type: 'status',
-        status: 'Working',
-        round,
-      });
-      const requiredToolName = deliverableContract
-        ? deliverableContract.requiresPlan && !agentState.plan
-          ? 'create_task_plan'
-          : !agentState.deliverableVerification?.valid
-            ? deliverableContract.executionTool
-            : null
-        : null;
-      const expectedToolName = progressReported ? requiredToolName : 'report_progress';
+      if (controller.signal.aborted) throw controller.signal.reason || new Error('Chat cancelled.');
+      sse(res, { type: 'status', status: 'Working', round });
       const result = await requestRound({
         messages,
-        tools,
-        requiredToolName: expectedToolName,
-        forceRequiredTool: Boolean(expectedToolName),
-        isDeliverable: Boolean(deliverableContract),
-        thinkingEnabled: body.thinkingEnabled !== false,
-        signal: controller.signal,
-        res,
-        round,
-        hasVision,
+        tools: executionToolCalls >= MAX_EXECUTION_TOOL_CALLS ? tools.filter((tool) => ['create_task_plan', 'update_task_status', 'report_progress', 'get_agent_status'].includes(tool.function.name)) : tools,
+        thinkingEnabled: Boolean(body.thinkingEnabled),
+        signal: controller.signal, res, round, hasVision,
       });
       finalUsage = result.usage || finalUsage;
-      modelText += result.content;
-      if (!result.toolCalls.length) finalText = result.content;
       if (!result.toolCalls.length) {
-        if (expectedToolName === 'report_progress' && progressRetries < 2) {
-          progressRetries += 1;
-          messages.push({ role: 'assistant', content: result.content || ' ' });
-          messages.push({
-            role: 'system',
-            content:
-              'Before answering, call report_progress with one concise, specific sentence describing the real next action for this request. Do not provide private reasoning or a generic placeholder.',
-          });
+        if (result.finishReason === 'length' && outputContinuations < 4) {
+          accumulatedOutput += result.content || '';
+          outputContinuations++;
+          messages.push({ role: 'assistant', content: result.content || '' });
+          messages.push({ role: 'system', content: 'Your previous response was cut off by the model output limit. Continue from the exact point where it stopped. Do not repeat completed content. If the task requires files or actions, use the available tools instead of emitting an incomplete source dump.' });
           continue;
         }
-        if (expectedToolName === 'report_progress') {
-          progressReported = true;
-          continue;
-        }
-        if (requiredToolName && requiredToolCorrections < 3) {
-          requiredToolCorrections += 1;
-          messages.push({ role: 'assistant', content: result.content || ' ' });
-          messages.push({
-            role: 'system',
-            content: `The required operation has not been executed. Do not answer the user yet. Invoke the required function ${requiredToolName} now with valid arguments. Do not claim the task is complete.`,
-          });
-          continue;
-        }
-        if (requiredToolName) {
-          requiredToolBlocked = true;
-          finalText =
-            result.content ||
-            `I couldn't start the required ${requiredToolName} operation after several attempts. No completion is being claimed.`;
-        }
+        finalText = accumulatedOutput + (result.content || '');
+        completedNaturally = result.finishReason !== 'length';
         break;
       }
-      if (round === MAX_TOOL_ROUNDS) {
-        requiredToolBlocked = true;
-        finalText =
-          'I reached the safe tool-execution limit before finishing this request. The work completed so far is preserved, but I cannot mark the task as complete.';
-        break;
-      }
+
       const calls = result.toolCalls.map((call, index) => ({
-        id: call.id || `call_${round}_${index}`,
+        id: call.id || `call_${round}_${index}_${crypto.randomUUID()}`,
         type: 'function',
         function: { name: call.function.name, arguments: call.function.arguments || '{}' },
       }));
       messages.push({ role: 'assistant', content: result.content || null, tool_calls: calls });
-      let requiredToolMismatch = false;
+
       for (const call of calls) {
-        const name = call.function.name;
+        const name = String(call.function.name || '');
         let args;
-        try {
-          args = parseToolArgs(call.function.arguments);
-        } catch (parseError) {
-          requiredToolMismatch = true;
-          messages.push({
-            role: 'tool',
-            tool_call_id: call.id,
-            name: name || 'unknown_tool',
-            content: JSON.stringify({
-              ok: false,
-              error: `Invalid function arguments: ${parseError.message}. Return valid JSON arguments and retry.`,
-            }),
-          });
+        try { args = parseToolArgs(call.function.arguments); }
+        catch (error) {
+          messages.push({ role: 'tool', tool_call_id: call.id, name: name || 'unknown_tool', content: JSON.stringify({ ok: false, error: `Invalid tool arguments: ${error.message}. Correct the JSON and retry.` }) });
           continue;
         }
+
         if (name === 'report_progress') {
-          const message = String(args.message || '')
-            .replace(/\s+/g, ' ')
-            .trim()
-            .slice(0, 280);
-          const genericProgress =
-            /^(thinking|working|processing|please wait|one moment|i am thinking|i'm thinking|i will help|i'll help|i will assist|i'll assist|let me think|let me check|on it)[.!…\s]*$/i.test(
-              message
-            );
-          const validMessage = message.length >= 8 && !genericProgress;
-          if (validMessage) {
-            emitAgentEvent('progress_update', { message });
-            progressReported = true;
-            progressRetries = 0;
-          } else {
-            requiredToolMismatch = true;
-          }
-          messages.push({
-            role: 'tool',
-            tool_call_id: call.id,
-            name,
-            content: JSON.stringify({
-              ok: validMessage,
-              displayed: validMessage,
-              ...(validMessage
-                ? {}
-                : {
-                    error:
-                      'Provide one specific, user-facing sentence about the real action or finding; generic placeholders such as “Thinking...” are not accepted.',
-                  }),
-            }),
-          });
+          const message = String(args.message || '').replace(/\s+/g, ' ').trim().slice(0, 280);
+          if (message.length >= 8) emitAgentEvent('progress_update', { message });
+          messages.push({ role: 'tool', tool_call_id: call.id, name, content: JSON.stringify({ ok: message.length >= 8, displayed: message.length >= 8 }) });
           continue;
         }
-        if (expectedToolName && name !== expectedToolName) {
-          requiredToolMismatch = true;
-          messages.push({
-            role: 'tool',
-            tool_call_id: call.id,
-            name,
-            content: JSON.stringify({
-              ok: false,
-              error: `This operation was not executed because ${expectedToolName} must be completed first.`,
-            }),
-          });
+
+        if (executionToolCalls >= MAX_EXECUTION_TOOL_CALLS && countsTowardExecutionLimit(name)) {
+          messages.push({ role: 'tool', tool_call_id: call.id, name, content: JSON.stringify({ ok: false, error: `This run has reached its ${MAX_EXECUTION_TOOL_CALLS}-operation execution budget. Preserve completed work and provide an honest summary, or ask the user to resume.` }) });
           continue;
         }
-        if (countsTowardExecutionLimit(name)) {
-          if (executionToolCalls >= MAX_EXECUTION_TOOL_CALLS) {
-            requiredToolBlocked = true;
-            finalText =
-              'I reached the safe execution limit before finishing the request. The work completed so far is preserved, but I cannot mark the task as complete.';
-            break;
-          }
-          executionToolCalls += 1;
-        }
-        if (name === deliverableContract?.executionTool && deliverableContract?.requiresPlan) {
-          startNextPlanTask(
-            agentState,
-            emitAgentEvent,
-            'The implementation or packaging operation is starting.'
-          );
-        }
-        const activeTask =
-          agentState.plan?.tasks?.find((task) => String(task.id) === String(args.task_id)) ||
-          agentState.plan?.tasks?.find((task) => task.status === 'running');
-        const safeArgs =
-          name === 'execute_python'
-            ? {
-                ...(activeTask?.id ? { task_id: activeTask.id } : {}),
-                ...(activeTask?.title ? { task_title: activeTask.title } : {}),
-                ...(activeTask?.description ? { task_description: activeTask.description } : {}),
-                ...(activeTask?.note ? { task_note: activeTask.note } : {}),
-                ...(agentState.plan?.objective ? { objective: agentState.plan.objective } : {}),
-                task_context: String(args.task_context || '').slice(0, 500),
-                code_bytes: Buffer.byteLength(String(args.code || ''), 'utf8'),
-              }
-            : name === 'update_task_status'
-              ? {
-                  ...args,
-                  ...(activeTask?.title ? { task_title: activeTask.title } : {}),
-                  ...(activeTask?.description ? { task_description: activeTask.description } : {}),
-                  ...(agentState.plan?.objective ? { objective: agentState.plan.objective } : {}),
-                }
-              : args;
+        if (countsTowardExecutionLimit(name)) executionToolCalls++;
+
         const toolStartedAt = new Date().toISOString();
-        sse(res, {
-          type: 'tool_start',
-          name,
-          arguments: safeArgs,
-          round,
-          startedAt: toolStartedAt,
-        });
-        const progressTarget =
-          name === 'web_search'
-            ? String(args.query || args.search_query || args.q || args.search_terms || '').slice(
-                0,
-                100
-              )
-            : name === 'fetch_public_url'
-              ? String(args.url || args.uri || '').slice(0, 120)
-              : '';
-        emitAgentEvent('tool_started', {
-          name,
-          label: name.replaceAll('_', ' '),
-          arguments: safeArgs,
-          round,
-          ...(progressTarget ? { progressTarget } : {}),
-        });
-        const previousFailures = consecutiveFailures.get(name) || 0;
         const toolStartedMs = Date.now();
+        const safeArgs = safeToolArguments(name, args);
+        sse(res, { type: 'tool_start', name, arguments: safeArgs, round, startedAt: toolStartedAt });
+        emitAgentEvent('tool_started', { name, label: name.replaceAll('_', ' '), arguments: safeArgs, round });
+        const attempt = (failuresByTool.get(name) || 0) + 1;
         let outcome;
-        if (previousFailures >= MAX_RECOVERY_ATTEMPTS_PER_TOOL) {
-          outcome = {
-            ok: false,
-            error: `Recovery limit reached for ${name}. Stop retrying this tool and explain the remaining limitation.`,
-          };
+        if (attempt > MAX_RECOVERY_ATTEMPTS_PER_TOOL) {
+          outcome = { ok: false, error: `${name} has reached its bounded retry limit for this run. Choose a different approach or explain the remaining limitation.` };
         } else {
-          const toolHeartbeatTimer = setInterval(() => {
-            sse(res, {
-              type: 'heartbeat',
-              phase: 'tool',
-              name,
-              round,
-              message: `Still running ${name.replaceAll('_', ' ')}; waiting for its result.`,
-            });
-          }, MODEL_HEARTBEAT_INTERVAL_MS);
-          try {
-            outcome = await runTool(name, args, user, {
-              signal: controller.signal,
-              chatId: body.chatId,
-              agentState,
-              archiveOnly: Boolean(deliverableContract?.archiveRequired),
-              onAgentEvent: (eventType, data) => {
-                if (eventType === 'plan_created' && data.plan) agentState.plan = data.plan;
-                emitAgentEvent(eventType, data);
-              },
-            });
-          } finally {
-            clearInterval(toolHeartbeatTimer);
-          }
-        }
-        const toolCompleted =
-          outcome.ok &&
-          (name !== 'execute_python' || outcome.result?.status === 'completed') &&
-          (name !== 'generate_image' || outcome.result?.status === 'completed');
-        if (name === 'create_task_plan' && toolCompleted) {
-          initializePlanProgress(agentState, emitAgentEvent);
-        }
-        let deliverableVerificationAttempted = false;
-        if (
-          deliverableContract &&
-          name === deliverableContract.executionTool &&
-          outcome.ok &&
-          outcome.result?.status === 'completed'
-        ) {
-          try {
-            const verification = await verifyDeliverableArtifacts(
-              outcome.result,
-              userId,
-              deliverableContract,
-              body.chatId,
-              toolStartedAt
-            );
-            deliverableVerificationAttempted = shouldAttemptDeliverableVerification(
-              deliverableContract,
-              verification
-            );
-            if (deliverableVerificationAttempted) {
-              agentState.deliverableVerification = verification;
-            }
-          } catch (verificationError) {
-            deliverableVerificationAttempted = true;
-            agentState.deliverableVerification = {
-              valid: false,
-              verified: [],
-              reason: `Artifact verification failed: ${verificationError.message}`,
-            };
-          }
-          if (deliverableVerificationAttempted) {
-            agentState.deliverableVerificationAttempts += 1;
-            emitAgentEvent('deliverable_validation', {
-              status: agentState.deliverableVerification.valid ? 'verified' : 'incomplete',
-              verifiedCount: agentState.deliverableVerification.verified.length,
-              message: agentState.deliverableVerification.valid
-                ? 'Requested deliverable was found in storage and independently verified.'
-                : agentState.deliverableVerification.reason,
-            });
-          }
-        }
-        if (
-          deliverableContract?.requiresPlan &&
-          name === deliverableContract.executionTool &&
-          toolCompleted
-        ) {
-          advancePlanAfterExecution(
+          outcome = await runTool(name, args, user, {
+            signal: controller.signal,
+            chatId: body.chatId,
             agentState,
-            emitAgentEvent,
-            Boolean(agentState.deliverableVerification?.valid)
-          );
+            onAgentEvent: (eventType, data) => {
+              if (eventType === 'plan_created' && data.plan) agentState.plan = data.plan;
+              emitAgentEvent(eventType, data);
+            },
+          });
         }
-        if (toolCompleted) consecutiveFailures.delete(name);
-        else consecutiveFailures.set(name, previousFailures + 1);
+        const toolCompleted = Boolean(outcome.ok) &&
+          (name !== 'execute_python' || outcome.result?.status === 'completed') &&
+          (name !== 'generate_image' || outcome.result?.status === 'completed') &&
+          (name !== 'execute_node' || outcome.result?.status === 'completed');
+        if (toolCompleted) failuresByTool.delete(name);
+        else failuresByTool.set(name, attempt);
+
         const errorText = outcome.ok
           ? name === 'execute_python' && outcome.result?.status !== 'completed'
             ? outcome.result?.stderr || `Python execution ${outcome.result?.status || 'failed'}.`
             : name === 'generate_image' && outcome.result?.status !== 'completed'
               ? outcome.result?.error || 'Image generation did not complete.'
-              : undefined
+              : name === 'execute_node' && outcome.result?.status !== 'completed'
+                ? outcome.result?.stderr || `Node.js execution ${outcome.result?.status || 'failed'}.` : undefined
           : outcome.error;
         const safeOutcome = stripInternalArtifactUrls(outcome);
-        if (deliverableContract?.archiveRequired && safeOutcome?.result?.artifacts) {
-          safeOutcome.result.artifacts = safeOutcome.result.artifacts.filter((artifact) =>
-            /\.zip$/i.test(String(artifact.name || ''))
-          );
-        }
         const event = {
-          name,
-          arguments: safeArgs,
-          status: toolCompleted ? 'complete' : 'error',
-          result: safeOutcome.ok ? safeOutcome.result : undefined,
+          name, arguments: safeArgs, status: toolCompleted ? 'complete' : 'error',
+          result: safeOutcome.ok ? safeToolEventResult(name, safeOutcome.result) : undefined,
           error: errorText,
-          attempt: previousFailures + 1,
+          attempt,
           startedAt: toolStartedAt,
           completedAt: new Date().toISOString(),
           durationMs: Date.now() - toolStartedMs,
         };
         toolEvents.push(event);
-        if (!toolCompleted) {
-          emitAgentEvent('self_correction', {
-            tool: name,
-            attempt: previousFailures + 1,
-            maxAttempts: MAX_RECOVERY_ATTEMPTS_PER_TOOL,
-            status:
-              previousFailures + 1 >= MAX_RECOVERY_ATTEMPTS_PER_TOOL ? 'blocked' : 'diagnosing',
-            error: String(errorText || 'Tool did not complete.').slice(0, 1200),
-            message:
-              previousFailures + 1 >= MAX_RECOVERY_ATTEMPTS_PER_TOOL
-                ? 'Retry limit reached. Reassess the approach.'
-                : 'A tool failed. Inspect the error, correct the cause, then retry only if the operation is recoverable.',
-          });
-        } else {
-          emitAgentEvent('tool_completed', {
-            name,
-            label: name.replaceAll('_', ' '),
-            attempt: previousFailures + 1,
-          });
-        }
-        sse(res, { type: 'tool_result', ...event, round });
-        const toolPayload = {
-          ...safeOutcome,
-          ...(deliverableContract &&
-          name === deliverableContract.executionTool &&
-          deliverableVerificationAttempted
-            ? { deliverableValidation: agentState.deliverableVerification }
-            : {}),
-          ...(!toolCompleted
-            ? {
-                recoveryGuidance:
-                  previousFailures + 1 >= MAX_RECOVERY_ATTEMPTS_PER_TOOL
-                    ? 'The retry limit has been reached. Do not call this tool again in this turn. Explain the failure and offer a different approach.'
-                    : 'Self-correction required: inspect the actual error, identify the cause, change the arguments or implementation, then retry at most within the remaining attempt budget. Never repeat the same failing call unchanged.',
-              }
-            : {}),
-        };
-        messages.push({
-          role: 'tool',
-          tool_call_id: call.id,
-          name,
-          content: JSON.stringify(toolPayload),
+        if (toolCompleted) emitAgentEvent('tool_completed', { name, label: name.replaceAll('_', ' '), attempt });
+        else emitAgentEvent('self_correction', {
+          tool: name, attempt, maxAttempts: MAX_RECOVERY_ATTEMPTS_PER_TOOL,
+          status: attempt >= MAX_RECOVERY_ATTEMPTS_PER_TOOL ? 'retry_limit_reached' : 'diagnosing',
+          error: String(errorText || 'Tool did not complete.').slice(0, 1200),
+          message: 'The operation failed. Inspect the diagnostic, change the approach, and avoid repeating the same failing call unchanged.',
         });
-        if (
-          deliverableContract &&
-          name === deliverableContract.executionTool &&
-          outcome.ok &&
-          outcome.result?.status === 'completed' &&
-          deliverableVerificationAttempted &&
-          agentState.deliverableVerification &&
-          !agentState.deliverableVerification.valid
-        ) {
-          messages.push({
-            role: 'system',
-            content: `The previous Python execution succeeded, but the requested deliverable FAILED independent validation: ${agentState.deliverableVerification.reason} Do not stop and do not answer the user yet. Inspect the validation result, modify the existing workspace files as needed, create or repair the requested archive, rerun relevant checks, and invoke execute_python again. Preserve the existing work; do not restart from scratch.`,
-          });
-        }
-        // Require a fresh, model-authored progress sentence after each real operation.
-        progressReported = false;
-        if (!toolCompleted && previousFailures >= MAX_RECOVERY_ATTEMPTS_PER_TOOL) {
-          requiredToolBlocked = true;
-          finalText = `I couldn't complete ${name.replaceAll('_', ' ')} after the available recovery attempts. ${String(errorText || 'The operation failed.').slice(0, 500)} No completion is being claimed.`;
-          break;
-        }
-        if (
-          deliverableContract &&
-          name === deliverableContract.executionTool &&
-          deliverableVerificationAttempted &&
-          agentState.deliverableVerification &&
-          !agentState.deliverableVerification.valid &&
-          agentState.deliverableVerificationAttempts >= MAX_RECOVERY_ATTEMPTS_PER_TOOL
-        ) {
-          emitAgentEvent('self_correction', {
+        sse(res, { type: 'tool_result', ...event, round });
+
+        await saveCheckpoint({
+          round,
+          executionToolCalls,
+          plan: agentState.plan,
+          operation: {
             tool: name,
-            status: 'blocked',
-            error: String(
-              agentState.deliverableVerification.reason || 'Artifact verification failed'
-            ).slice(0, 1200),
-            message:
-              'The generated output did not pass verification after the available recovery attempts.',
-          });
-          requiredToolBlocked = true;
-          break;
-        }
-      }
-      if (requiredToolBlocked) break;
-      if (requiredToolMismatch) {
-        if (expectedToolName === 'report_progress' && progressRetries < 2) {
-          progressRetries += 1;
-          messages.push({
-            role: 'system',
-            content:
-              'Call report_progress again with one specific, concise sentence describing the next real action. Do not call another function yet.',
-          });
-          continue;
-        }
-        if (expectedToolName === 'report_progress') {
-          progressReported = true;
-          continue;
-        }
-        if (requiredToolCorrections < 3) {
-          requiredToolCorrections += 1;
-          messages.push({
-            role: 'system',
-            content: requiredToolName
-              ? `The previous function call did not perform the required ${requiredToolName} operation or contained invalid arguments. It was not executed. Call ${requiredToolName} now with valid arguments. Do not claim completion.`
-              : 'The previous tool call contained invalid arguments and was not executed. Correct the arguments and retry, or provide a direct answer if no tool is needed.',
-          });
-          continue;
-        }
-        requiredToolBlocked = true;
-        finalText = requiredToolName
-          ? 'I could not start the required operation after several correction attempts. No completion is being claimed.'
-          : 'I could not correct the tool call after several attempts. No action is being reported as successful.';
-        break;
+            status: toolCompleted ? 'completed' : 'failed',
+            arguments: safeArgs,
+            result: safeToolEventResult(name, safeOutcome.result),
+            error: String(errorText || '').slice(0, 1000),
+            durationMs: Date.now() - toolStartedMs,
+          },
+        });
+        const payload = {
+          ...safeOutcome,
+          ...(toolCompleted ? {} : { recoveryGuidance: 'Inspect the exact error. If recoverable, correct the inputs or implementation, or select another tool. Previously completed work remains available.' }),
+        };
+        const serialized = JSON.stringify(payload);
+        messages.push({ role: 'tool', tool_call_id: call.id, name, content: serialized.length > 60000 ? `${serialized.slice(0, 60000)}\n[Tool result truncated by the application.]` : serialized });
       }
     }
-    if (deliverableContract && !agentState.deliverableVerification?.valid) {
-      requiredToolBlocked = true;
-      finalText = `I couldn't complete the requested deliverable. ${agentState.deliverableVerification?.reason || 'The required generation or verification step did not finish.'} The work completed so far is preserved, but I won't report it as finished.`;
+
+    if (!completedNaturally) {
+      messages.push({ role: 'system', content: 'The current execution budget has been reached. Do not call tools. Provide a concise, honest summary of completed work, remaining work, and any blocker. Never claim unverified completion.' });
+      const finalRound = await requestRound({ messages, tools: [], thinkingEnabled: Boolean(body.thinkingEnabled), signal: controller.signal, res, round: rounds, hasVision });
+      finalUsage = finalRound.usage || finalUsage;
+      finalText = accumulatedOutput + (finalRound.content || finalText);
     }
-    if (
-      deliverableContract?.requiresPlan &&
-      (!agentState.plan?.tasks?.length ||
-        !agentState.plan.tasks.every((task) => ['completed', 'skipped'].includes(task.status)))
-    ) {
-      requiredToolBlocked = true;
-      finalText =
-        'The deliverable is not complete yet because some execution steps remain unfinished. Any generated files are preserved, but I will not mark the request as complete.';
-    }
-    const visible = body.messages.filter((m) => m.role !== 'system' && m.role !== 'tool');
-    if (deliverableContract && agentState.deliverableVerification?.valid && !requiredToolBlocked) {
-      if (deliverableContract.archiveRequired) {
-        finalText = formatVerifiedArchiveResponse(
-          agentState.deliverableVerification,
-          agentState.plan?.objective || deliverableContract.userRequest
-        );
-      } else {
-        const names = agentState.deliverableVerification.verified
-          .map((item) => item.name)
-          .filter(Boolean);
-        finalText = `The requested deliverable was generated and verified. Available file${names.length === 1 ? '' : 's'}: ${names.join(', ')}. Use the generated-file controls in this conversation to access them.`;
-      }
-    }
-    finalText = stripAttachmentMarkers(finalText).replace(
-      /\/?api\/interpreter\/artifacts\/[a-zA-Z0-9_-]+/g,
-      '[use the generated-file controls in this conversation]'
-    );
-    if (!finalText.trim()) {
-      if (deliverableContract && agentState.deliverableVerification?.valid) {
-        const names = agentState.deliverableVerification.verified
-          .map((item) => item.name)
-          .filter(Boolean);
-        finalText = `The requested deliverable has been generated and independently verified. Files: ${names.join(', ') || 'generated files are available in the File Library'}.`;
-      } else if (deliverableContract) {
-        finalText = `I couldn't complete the requested deliverable. ${agentState.deliverableVerification?.reason || 'The required generation or verification step did not finish.'} The work completed so far is preserved, but I won't report it as finished.`;
-      } else {
-        finalText =
-          'I could not produce a response this time. Please retry; your conversation has been preserved.';
-      }
-    }
-    // Replace any partial/tool-round text with the canonical final response. This also
-    // delivers backend-generated recovery messages that were not streamed by the model.
-    if (finalText !== modelText) sse(res, { type: 'final_content', content: finalText });
-    if (agentEvents.length || agentState.plan) {
-      const allDone =
-        !agentState.plan ||
-        agentState.plan.tasks.every((task) => ['completed', 'skipped'].includes(task.status));
-      emitAgentEvent('agent_completed', {
-        status: allDone ? 'completed' : 'finished_with_pending_tasks',
-        message: allDone
-          ? 'The planned work is complete.'
-          : 'The response finished with some planned tasks still pending.',
-      });
-    }
+
+    finalText = String(finalText || '').trim();
+    if (!finalText) finalText = 'I could not produce a final response. The conversation and completed tool results have been preserved; please retry or resume the task.';
+    finalText = finalText.replace(/<attachment>\s*[^<]*?\s*<\/attachment>/gi, '').replace(/\n{3,}/g, '\n\n').trim();
+    if (agentEvents.length || agentState.plan) emitAgentEvent('agent_completed', { status: 'completed', message: 'The response is ready.' });
+    try { if (checkpoint?.runId) await finishAgentCheckpoint(userId, checkpoint.runId, completedNaturally ? 'completed' : 'interrupted'); }
+    catch (checkpointError) { log.warn('Agent checkpoint finalization failed', { userId, runId: checkpoint?.runId, error: checkpointError.message }); }
+
+    const visible = body.messages.filter((message) => message.role !== 'system' && message.role !== 'tool');
     await persist?.([
       ...visible,
       {
-        id: String(body.assistantMessageId || crypto.randomUUID()),
-        role: 'assistant',
-        content: finalText,
-        usage: finalUsage,
-        toolEvents,
-        agentPlan: agentState.plan,
-        agentEvents,
-        startedAt: new Date(startedAt).toISOString(),
-        createdAt: new Date(startedAt).toISOString(),
-        completedAt: new Date().toISOString(),
-        durationMs: Date.now() - startedAt,
+        id: String(body.assistantMessageId || crypto.randomUUID()), role: 'assistant', content: finalText,
+        usage: finalUsage, toolEvents, agentPlan: agentState.plan, agentEvents,
+        startedAt: new Date(startedAt).toISOString(), createdAt: new Date(startedAt).toISOString(),
+        completedAt: new Date().toISOString(), durationMs: Date.now() - startedAt,
       },
     ]);
-    log.info('Chat generation completed', {
-      userId,
-      rounds,
-      durationMs: Date.now() - startedAt,
-      toolEventCount: toolEvents.length,
-      usage: finalUsage,
-    });
-    sse(res, {
-      type: 'done',
-      usage: finalUsage,
-      durationMs: Date.now() - startedAt,
-      toolRounds: rounds,
-      agentPlan: agentState.plan,
-      agentEvents,
-      deliverableVerification: agentState.deliverableVerification,
-    });
+    log.info('Chat generation completed', { userId, rounds, durationMs: Date.now() - startedAt, toolEventCount: toolEvents.length, usage: finalUsage, executionToolCalls });
+    sse(res, { type: 'done', usage: finalUsage, durationMs: Date.now() - startedAt, toolRounds: rounds, agentPlan: agentState.plan, agentEvents, executionToolCalls });
   } catch (error) {
-    if (error.name === 'AbortError' && controller.signal.reason?.code !== 'CHAT_TURN_TIMEOUT') {
-      sse(res, { type: 'stopped' });
-    } else {
-      log.error('Chat generation failed', {
-        userId,
-        error:
-          error instanceof Error
-            ? { message: error.message, stack: error.stack, status: error.status }
-            : String(error),
-      });
-      sse(res, {
-        type: 'error',
-        status: error.status || 502,
-        error: error.message || 'NVIDIA request failed.',
-      });
+    try { if (checkpoint?.runId) await finishAgentCheckpoint(userId, checkpoint.runId, error.name === 'AbortError' ? 'interrupted' : 'failed', error.message); }
+    catch (checkpointError) { log.warn('Agent checkpoint error state could not be persisted', { userId, runId: checkpoint?.runId, error: checkpointError.message }); }
+    if (error.name === 'AbortError' && controller.signal.reason?.code !== 'CHAT_TURN_TIMEOUT') sse(res, { type: 'stopped' });
+    else {
+      log.error('Chat generation failed', { userId, error: error instanceof Error ? { message: error.message, stack: error.stack, status: error.status } : String(error) });
+      sse(res, { type: 'error', status: error.status || 502, error: error.message || 'NVIDIA request failed.' });
     }
   } finally {
-    clearTimeout(turnTimer);
-    res.off('close', onClose);
-    if (!res.writableEnded) res.end();
+    clearTimeout(turnTimer); res.off('close', onClose); if (!res.writableEnded) res.end();
   }
 }
+
 export async function generateChatTitle(text) {
   const response = await fetch(NVIDIA_ENDPOINT, {
     method: 'POST',

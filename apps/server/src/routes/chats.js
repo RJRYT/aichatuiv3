@@ -8,6 +8,8 @@ import {
 } from '../services/conversationBranches.js';
 import logger from '../utils/logger.js';
 import { deleteSandboxForChat } from '../services/interpreter/sandboxManager.js';
+import { deleteWorkspaceForChat } from '../services/workspace/workspaceManager.js';
+import { deleteAgentCheckpointsForChat } from '../services/agents/checkpointManager.js';
 import {
   storeConversationUploads,
   deleteConversationUploads,
@@ -466,6 +468,8 @@ router.delete('/:id', async (req, res, next) => {
     const deleted = await deleteChat(owner(req), req.params.id);
     if (!deleted) return res.status(404).json({ error: 'Chat not found.' });
     await deleteSandboxForChat(owner(req), req.params.id);
+    await deleteWorkspaceForChat(owner(req), req.params.id);
+    await deleteAgentCheckpointsForChat(owner(req), req.params.id);
     await deleteConversationUploads(owner(req), req.params.id);
     res.json({ ok: true });
   } catch (error) {

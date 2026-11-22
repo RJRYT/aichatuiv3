@@ -10,7 +10,8 @@ Nemotron Agent Lab is a full-stack AI chat and agent workspace. Users can have p
 - **Client:** React 19 + Vite in `apps/client`. The main application and chat experience are in `src/App.jsx`; shared visual styles are in `src/styles.css`.
 - **Server:** Express 4 + Mongoose in `apps/server/src`.
 - **Persistence:** MongoDB stores users, preferences, memories, chats/branches, shares, uploads, and artifact metadata. The chat store can also use an in-memory mode for local tests or configured fallback operation.
-- **Model:** NVIDIA Nemotron 3.5 Super VL through NVIDIA NIM's OpenAI-compatible streaming API. The backend owns the API key and tool loop.
+- **Model:** NVIDIA Nemotron 3.5 Super VL through NVIDIA NIM's OpenAI-compatible streaming API. The backend owns the API key and model-directed tool loop.
+- **Agent checkpoints:** MongoDB stores run status, plan snapshots, recent operation summaries, budgets, and interruption details in `AgentRun`.
 - **Python:** `@vercel/sandbox` runs Python 3.14 in an isolated Firecracker microVM. Sandboxes are persistent per user/chat; execution code, timeouts, output limits, artifacts, and uploads are managed under `apps/server/src/services/interpreter`.
 - **Other integrations:** Tavily web search and Cloudflare Workers AI image generation.
 
@@ -20,18 +21,19 @@ Nemotron Agent Lab is a full-stack AI chat and agent workspace. Users can have p
 
 1. The client sends conversation messages to `POST /api/chat/stream`.
 2. The server validates the chat/branch/revision, then `services/nvidia.js` calls NVIDIA NIM and streams Server-Sent Events (SSE) to the client.
-3. The model may invoke tools from `services/tools.js`. Multi-step work can create a visible plan, report progress, update task statuses, run Python, search the web, or generate images.
+3. Nemotron selects tools from `services/tools.js` using automatic tool choice. Planning and progress reporting are optional model-selected capabilities. Native workspace operations handle project files; isolated runtimes are used only when code execution is needed.
 4. The server persists completed assistant messages and metadata to the appropriate chat branch.
 5. The client refreshes the chat and renders the plan, progress, response, and generated-file controls.
 
 The client stream reader lives in `apps/client/src/chatStream.js`. It parses SSE, surfaces structured or plain-text HTTP errors, rejects incomplete streams, and applies connection, idle, and whole-turn deadlines. It does not impose a short deadline on the model's first visible text: server heartbeats keep the user informed during extended reasoning. Chat and regeneration flows in `App.jsx` use the same reader.
 
-### Plans and file deliverables
+### Plans and workspaces
 
-- Plans have stable task IDs and explicit pending/running/completed/failed/skipped states. Completed plans should not be carried forward as active plans for later unrelated tasks.
-- Multi-file project deliverables are implemented in the sandbox and packaged into a ZIP. When archive-only delivery applies, packaged source files should not also be stored as separate File Library entries.
-- Deliverables are checked server-side; the assistant must not claim success unless expected artifacts exist and pass validation.
-- Re-saving a file with an existing library name adds a numeric suffix (for example `filename-1.ext`).
+- Plans are optional and model-directed. They have stable task IDs and explicit pending/running/completed/failed/skipped states.
+- Native workspace files are scoped by owner and conversation and stored in MongoDB. Files support listing, reading, creation, revision-aware editing, deletion, searching, status, and optional ZIP packaging.
+- Ordinary project file creation does not start Python. The model may select Python or Node.js execution when actual code execution, builds, tests, or computation are required.
+- ZIP archives are created only when requested or genuinely necessary and are independently checked for archive integrity before storage.
+- Re-saving a File Library artifact with an existing name adds a numeric suffix (for example `filename-1.ext`).
 
 ### Python execution and artifacts
 
@@ -55,13 +57,16 @@ Chat export downloads JSON using the chat title as a lowercase, hyphenated filen
 - `apps/server/src/routes/chat.js` — chat streaming endpoint and persistence merge.
 - `apps/server/src/routes/chats.js` — chat CRUD, branches, uploads, and response versions.
 - `apps/server/src/routes/interpreter.js` — execution, cancellation, status, and artifact API.
-- `apps/server/src/services/nvidia.js` — model streaming, agent/tool loop, limits, timeouts, progress events, and deliverable verification.
+- `apps/server/src/services/nvidia.js` — model streaming, model-directed tool loop, bounded execution/recovery budgets, timeouts, and actual lifecycle events.
 - `apps/server/src/services/tools.js` — tool definitions and dispatch.
-- `apps/server/src/services/agentPlanning.js` and `agentPlanProgress.js` — plan validation and execution-state transitions.
+- `apps/server/src/services/agentPlanning.js` — model-directed plan validation and task-state transitions.
 - `apps/server/src/services/chatStore.js` and `conversationBranches.js` — chat persistence and branch behavior.
-- `apps/server/src/services/interpreter/` — sandbox, execution queue/schemas, upload storage, and artifact storage.
-- `apps/server/src/services/deliverablePolicy.js` — deliverable/archive detection and ZIP/website checks.
-- `apps/server/src/models/` — Mongoose models.
+- `apps/server/src/services/interpreter/` — Python sandbox, execution queue/schemas, upload storage, and artifact storage. The sandbox manager also provides the optional isolated Node.js command runtime.
+- `apps/server/src/services/archiveValidation.js` — ZIP integrity inspection and archive metadata helpers.
+- `apps/server/src/services/workspace/workspaceManager.js` — persistent per-conversation text workspace and ZIP packaging.
+- `apps/server/src/models/WorkspaceFile.js` — MongoDB workspace file metadata and content.
+- `apps/server/src/models/` — Mongoose models, including `WorkspaceFile` and `AgentRun`.
+- `apps/server/src/services/agents/checkpointManager.js` — persisted agent-run checkpoints and interruption recovery context.
 - `apps/server/test/` — Node test-runner coverage for routes, agent behavior, persistence, deliverables, sandbox execution, and stream timeouts.
 
 ## Development and verification
@@ -87,6 +92,7 @@ Use `.env.example` as the source of truth for available variables. Main backend 
 - `MONGODB_URI` and `SESSION_SECRET` for persistence and sessions.
 - OAuth provider credentials and callback URLs as needed.
 - `VERCEL_TOKEN`, `VERCEL_TEAM_ID`, and `VERCEL_PROJECT_ID` for sandbox use outside Vercel; Vercel-hosted deployments can use OIDC.
+- `VERCEL_NODE_SANDBOX_IMAGE` to enable the isolated Node.js runtime. The operator must provide and validate an appropriate image.
 - Optional `TAVILY_API_KEY` and Cloudflare Workers AI credentials.
 
 Production deployments should use HTTPS, explicit trusted CORS origins, a strong session secret, and backend-only credentials.
@@ -94,10 +100,11 @@ Production deployments should use HTTPS, explicit trusted CORS origins, a strong
 ## Recent behavior changes and debugging notes
 
 - Fixed stale completed plans influencing a new task and ensured new plans can open in the UI.
-- Improved multi-file project creation so the assistant writes complete files through Python, verifies the project, and delivers a ZIP as the single chat attachment.
-- ZIP-required projects are verified only after an execution produces a ZIP candidate. The final assistant response should summarize the verified archive name, its included-file manifest, and the checks that passed; it should not deliver the source files individually.
-- A follow-up such as “give me the ZIP” must still be recognized as a file-deliverable request. If missed, Python runs can save every project source file as separate library items and the model may emit a literal `<attachment>…</attachment>` tag. Successful verified ZIP handling now removes only same-chat library files whose exact relative paths are included in that ZIP, and strips model-authored attachment tags; the app's tool artifact UI provides the actual download. The File Library itself is account-wide, so unrelated files from other chats remain visible.
-- The latest budget-tracker export's early incomplete turns show a Python `NameError` (`project_root` undefined) and repeated invalid `update_task_status` calls against already-completed tasks. Those tool/planning errors explain the unfinished-plan responses; the export does not contain raw model stream diagnostics, so it cannot establish a provider/network stream interruption. The final ZIP turn completed with all planned tasks and the saved response was complete, but included a literal attachment tag.
+- v8 removes regex-driven deliverable classification, forced progress calls, forced Python execution, mandatory project plans, mandatory ZIP packaging, website-specific regex quality gates, and backend-generated final-response overrides.
+- Native workspace tools are the default for source-file operations. Python receives a read-only snapshot of non-secret workspace files under `/tmp/nemotron-source`.
+- An isolated Node.js runtime is available only when `VERCEL_NODE_SANDBOX_IMAGE` is configured. Node commands run in a separate sandbox; they are never executed in the Express process. Node sandbox changes are not automatically synchronized back into MongoDB workspace files; source edits should use workspace tools.
+- ZIP creation is an explicit workspace capability. The backend validates the generated ZIP's central directory, decompression, CRC values, and entry paths before storing it as an artifact.
+- The earlier budget-tracker export showed Python file-generation failures and rigid plan/status requirements. The v8 agent loop now returns tool diagnostics to the model and permits strategy changes rather than forcing a fixed tool sequence.
 - Added duplicate artifact filename suffixes.
 - Added timestamps, tool/assistant durations, and work-time totals to exported chat JSON.
 - Export inspection found a turn whose `execute_python` event remained `running` for over 16 minutes without a tool result. Sandbox cancellation now propagates through startup and lock waits, and stopping a sandbox is bounded.
@@ -109,4 +116,4 @@ Production deployments should use HTTPS, explicit trusted CORS origins, a strong
 
 The worktree may contain changes from multiple recent fixes. Check `git status --short` before editing, and preserve unrelated staged or unstaged work.
 
-At the last validation, focused chat-stream/model-timeout/sandbox tests passed and the client production build succeeded. The full test suite also has two pre-existing failures in source-text assertions: `authReliability.test.js` expects a particular optional-auth expression, and `clientRoutes.test.js` expects a light-theme CSS selector. The client build reports an existing CSS minifier warning around an `@media` rule. Re-run checks before relying on these results because the project can change.
+For this v8 upgrade, dependency installation could not complete in the build environment, so the full dependency-backed test suite and Vite production build remain unverified. Dependency-free architecture, archive-validation, and system-prompt tests were run separately. Re-run `npm ci`, `npm test`, and `npm run build` in the target development environment before deployment.

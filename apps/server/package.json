@@ -1,7 +1,7 @@
 {
   "name": "@nemotron/server",
   "private": true,
-  "version": "7.5.0",
+  "version": "8.0.0",
   "type": "module",
   "scripts": {
     "start": "node src/server.js",

@@ -115,8 +115,8 @@ const PRIVATE_SUBNETS = [
   '240.0.0.0/4',
 ];
 
-function sandboxNameFor(userId, chatId, executionId) {
-  const identity = chatId ? `chat:${chatId}` : `execution:${executionId}`;
+function sandboxNameFor(userId, chatId, executionId, runtime = 'python') {
+  const identity = `${runtime === 'python' ? '' : `${runtime}:`}${chatId ? `chat:${chatId}` : `execution:${executionId}`}`;
   const digest = createHash('sha256').update(`${userId}:${identity}`).digest('hex').slice(0, 32);
   return `nemotron-${digest}`;
 }
@@ -134,8 +134,13 @@ function networkPolicy(config) {
   return { allow: ['*'], subnets: { deny: PRIVATE_SUBNETS } };
 }
 
-async function getSandbox({ userId, chatId, executionId, signal }) {
+async function getSandbox({ userId, chatId, executionId, signal, runtime = 'python' }) {
   const config = getVercelSandboxConfig();
+  if (runtime === 'node') {
+    const nodeImage = String(process.env.VERCEL_NODE_SANDBOX_IMAGE || '').trim();
+    if (!nodeImage) throw Object.assign(new Error('Node.js sandbox is not configured. Set VERCEL_NODE_SANDBOX_IMAGE to an approved isolated Node.js sandbox image.'), { status: 503 });
+    config.image = nodeImage;
+  }
   if (!config.configured) {
     throw Object.assign(
       new Error(
@@ -145,7 +150,7 @@ async function getSandbox({ userId, chatId, executionId, signal }) {
     );
   }
   const { Sandbox } = await import('@vercel/sandbox');
-  const name = sandboxNameFor(userId, chatId, executionId);
+  const name = sandboxNameFor(userId, chatId, executionId, runtime);
   const options = {
     name,
     ...authOptions(config),
@@ -696,6 +701,7 @@ export async function executeWithVercelSandbox({
   executionId,
   signal,
   archiveOnly = false,
+  workspaceFiles = [],
   getSandbox: getSandboxOverride = getSandbox,
 }) {
   const id = executionId || randomUUID();
@@ -790,6 +796,18 @@ export async function executeWithVercelSandbox({
           chatId: resolvedChatId,
           signal: controller.signal,
         });
+        if (Array.isArray(workspaceFiles) && workspaceFiles.length) {
+          const sourceRoot = '/tmp/nemotron-source';
+          await ensureSandboxDirectory(sandbox, sourceRoot, controller.signal);
+          const sourceWrites = workspaceFiles.slice(0, 500).map((file) => {
+            const relative = safeRelativePath(file.path);
+            if (!relative) throw new Error('A workspace snapshot contains an unsafe path.');
+            return { path: path.posix.join(sourceRoot, relative), content: Buffer.from(String(file.content || ''), 'utf8'), mode: 0o600 };
+          });
+          const directories = [...new Set(sourceWrites.map((file) => path.posix.dirname(file.path)))];
+          for (const directory of directories) await ensureSandboxDirectory(sandbox, directory, controller.signal);
+          if (sourceWrites.length) await sandbox.writeFiles(sourceWrites, { signal: controller.signal });
+        }
         const pythonPath = await ensurePythonEnvironment(sandbox, workspacePath, controller.signal);
         const scriptPath = `/tmp/nemotron-${id.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80)}.py`;
         await sandbox.writeFiles(
@@ -950,6 +968,67 @@ export async function executeWithVercelSandbox({
   };
 }
 
+export async function executeNodeInSandbox({ command = 'node', args = [], userId, chatId = '', executionId = randomUUID(), signal, timeoutMs = 120000, workspaceFiles = [] }) {
+  if (shuttingDown) throw Object.assign(new Error('Node.js execution is unavailable while the server is shutting down.'), { status: 503 });
+  if (!['node', 'npm', 'npx'].includes(command)) throw new Error('Node runtime command must be node, npm, or npx.');
+  if (!Array.isArray(args) || args.length > 64 || args.some((item) => typeof item !== 'string' || item.length > 1000)) throw new Error('Node runtime arguments are invalid.');
+  const config = getVercelSandboxConfig();
+  if (!config.configured) throw Object.assign(new Error('Vercel Sandbox is not configured.'), { status: 503 });
+  if (!process.env.VERCEL_NODE_SANDBOX_IMAGE) throw Object.assign(new Error('Node.js sandbox is not configured. Set VERCEL_NODE_SANDBOX_IMAGE to an approved isolated Node.js sandbox image.'), { status: 503 });
+  const uid = String(userId);
+  const id = String(executionId || randomUUID());
+  const jobKey = `${uid}:${id}`;
+  if (active.has(jobKey)) throw new Error('This execution ID is already active.');
+  const controller = new AbortController();
+  const job = { userId: uid, sandboxName: sandboxNameFor(uid, chatId, id, 'node'), controller, cancelled: false, command: null };
+  const abortFromCaller = () => { job.cancelled = true; controller.abort(abortError(signal)); };
+  signal?.addEventListener('abort', abortFromCaller, { once: true });
+  if (signal?.aborted) abortFromCaller();
+  active.set(jobKey, job);
+  let sandbox;
+  const startedAt = Date.now();
+  let status = 'failed', stdout = '', stderr = '', exitCode = null;
+  try {
+    await withSandboxLock(job.sandboxName, async () => {
+      const created = await getSandbox({ userId: uid, chatId: String(chatId || ''), executionId: id, signal: controller.signal, runtime: 'node' });
+      sandbox = created.sandbox;
+      const workspacePath = path.posix.join(sandbox.cwd || '/vercel/sandbox', WORKSPACE_NAME);
+      await ensureSandboxDirectory(sandbox, workspacePath, controller.signal);
+      // Keep dependency caches, but replace source files with the durable workspace snapshot.
+      await sandbox.runCommand({ cmd: 'find', args: ['.', '-mindepth', '1', '-maxdepth', '1', '!', '-name', 'node_modules', '!', '-name', '.npm', '-exec', 'rm', '-rf', '--', '{}', '+'], cwd: workspacePath, timeoutMs: 10000, signal: controller.signal });
+      const files = Array.isArray(workspaceFiles) ? workspaceFiles.slice(0, 500) : [];
+      const totalBytes = files.reduce((sum, file) => sum + Buffer.byteLength(String(file.content || ''), 'utf8'), 0);
+      if (totalBytes > 20 * 1024 * 1024) throw new Error('Workspace snapshot exceeds the 20 MB runtime transfer limit.');
+      const writes = [];
+      for (const file of files) {
+        const relative = safeRelativePath(file.path);
+        if (!relative) throw new Error('Workspace snapshot contains an unsafe path.');
+        writes.push({ path: path.posix.join(workspacePath, relative), content: Buffer.from(String(file.content || ''), 'utf8'), mode: 0o600 });
+      }
+      const dirs = [...new Set(writes.map((file) => path.posix.dirname(file.path)))];
+      for (const directory of dirs) await ensureSandboxDirectory(sandbox, directory, controller.signal);
+      if (writes.length) await sandbox.writeFiles(writes, { signal: controller.signal });
+      if (controller.signal.aborted) throw abortError(controller.signal);
+      job.command = await sandbox.runCommand({ cmd: command, args, cwd: workspacePath, timeoutMs: Math.max(10000, Math.min(300000, Number(timeoutMs) || 120000)), signal: controller.signal });
+      exitCode = job.command.exitCode;
+      stdout = truncateOutput(await readCommandOutput(job.command, 'stdout'), EXECUTION_LIMITS.maxOutputBytes).text;
+      stderr = truncateOutput(await readCommandOutput(job.command, 'stderr'), EXECUTION_LIMITS.maxOutputBytes).text;
+      status = controller.signal.aborted ? 'cancelled' : exitCode === 0 ? 'completed' : (exitCode === 124 || exitCode === 137 ? 'timeout' : 'failed');
+    }, controller.signal);
+  } catch (error) {
+    status = controller.signal.aborted || error?.name === 'AbortError' ? 'cancelled' : /timeout|deadline/i.test(String(error?.message || '')) ? 'timeout' : 'failed';
+    stderr = String(error?.message || error).slice(0, EXECUTION_LIMITS.maxOutputBytes);
+  } finally {
+    if (sandbox) {
+      try { await sandbox.stop({ signal: AbortSignal.timeout(SANDBOX_STOP_TIMEOUT_MS) }); }
+      catch (error) { log.warn('Node sandbox snapshot failed', { userId: uid, executionId: id, error: error.message }); }
+    }
+    signal?.removeEventListener('abort', abortFromCaller);
+    active.delete(jobKey);
+  }
+  return { executionId: id, runtime: 'node', status, stdout, stderr, exitCode: status === 'completed' ? 0 : exitCode, durationMs: Date.now() - startedAt, provider: 'vercel-sandbox', sandbox: { persistentWorkspace: Boolean(chatId), imageConfigured: true } };
+}
+
 export function executeInSandbox(args) {
   return executeWithVercelSandbox(args);
 }
@@ -965,29 +1044,23 @@ export function cancelExecution(executionId, userId) {
 export async function deleteSandboxForChat(userId, chatId) {
   const config = getVercelSandboxConfig();
   if (!config.configured || !chatId) return false;
-  const name = sandboxNameFor(String(userId), String(chatId), '');
-  for (const job of active.values())
-    if (job.sandboxName === name) {
-      job.cancelled = true;
-      job.controller.abort();
+  let deleted = false;
+  for (const runtime of ['python', 'node']) {
+    const name = sandboxNameFor(String(userId), String(chatId), '', runtime);
+    for (const job of active.values()) if (job.sandboxName === name) { job.cancelled = true; job.controller.abort(); }
+    try {
+      await withSandboxLock(name, async () => {
+        const { Sandbox } = await import('@vercel/sandbox');
+        const sandbox = await Sandbox.get({ name, ...authOptions(config) });
+        await sandbox.delete({ deleteOrphanSnapshots: true });
+        deleted = true;
+      });
+    } catch (error) {
+      const message = String(error?.message || error);
+      if (!/not found|404|does not exist/i.test(message)) log.warn('Conversation sandbox cleanup failed', { userId: String(userId), chatId: String(chatId), runtime, error: message });
     }
-  try {
-    return await withSandboxLock(name, async () => {
-      const { Sandbox } = await import('@vercel/sandbox');
-      const sandbox = await Sandbox.get({ name, ...authOptions(config) });
-      await sandbox.delete({ deleteOrphanSnapshots: true });
-      return true;
-    });
-  } catch (error) {
-    const message = String(error?.message || error);
-    if (/not found|404|does not exist/i.test(message)) return false;
-    log.warn('Conversation sandbox cleanup failed', {
-      userId: String(userId),
-      chatId: String(chatId),
-      error: message,
-    });
-    return false;
   }
+  return deleted;
 }
 
 export function getInterpreterStatus() {

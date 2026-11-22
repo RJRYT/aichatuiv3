@@ -23,6 +23,7 @@ export async function executePython(input, userId, options = {}) {
       chatId: options.chatId || chatId,
       signal: options.signal,
       archiveOnly: options.archiveOnly,
+      workspaceFiles: options.workspaceFiles,
     });
   } finally {
     release();

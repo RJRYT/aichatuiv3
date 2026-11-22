@@ -8,7 +8,12 @@ import { createTaskPlan, updatePlannedTask } from './agentPlanning.js';
 import { getChat, searchChatContexts } from './chatStore.js';
 import { generateImageArtifact, getImageGenerationStatus } from './imageGeneration.js';
 import { executePython } from './interpreter/interpreter.js';
-import { getInterpreterStatus } from './interpreter/sandboxManager.js';
+import { executeNodeInSandbox, getInterpreterStatus } from './interpreter/sandboxManager.js';
+import { acquireExecution } from './interpreter/executionQueue.js';
+import {
+  archiveWorkspace, createWorkspaceFile, deleteWorkspaceFile, editWorkspaceFile,
+  getWorkspaceSnapshot, getWorkspaceStatus, listWorkspaceFiles, readWorkspaceFile, searchWorkspaceFiles,
+} from './workspace/workspaceManager.js';
 
 const log = logger.child({ component: 'tools' });
 const parser = new Parser({
@@ -16,6 +21,14 @@ const parser = new Parser({
 });
 
 const tools = [
+  { type: 'function', function: { name: 'workspace_list', description: 'List files in the current conversation workspace. Use this to inspect project structure and file revisions. This is a native file operation; it does not start Python or Node.js.', parameters: { type: 'object', properties: { prefix: { type: 'string', description: 'Optional relative directory prefix.' } } } } },
+  { type: 'function', function: { name: 'workspace_read', description: 'Read a text file from the current conversation workspace. Use this before editing unfamiliar or existing files. Large files can be read in chunks using start_line and max_lines; continue from nextLine when truncated is true. This does not start a runtime.', parameters: { type: 'object', properties: { path: { type: 'string' }, start_line: { type: 'integer', minimum: 1 }, max_lines: { type: 'integer', minimum: 1, maximum: 500 } }, required: ['path'] } } },
+  { type: 'function', function: { name: 'workspace_create', description: 'Create a complete text source file in the current conversation workspace. Use for HTML, CSS, JavaScript, TypeScript, JSON, Markdown, Python source and other text files. This does not execute code. Existing files are not overwritten unless overwrite=true.', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' }, overwrite: { type: 'boolean' } }, required: ['path', 'content'] } } },
+  { type: 'function', function: { name: 'workspace_edit', description: 'Edit an existing workspace file without running a code interpreter. Prefer exact oldText/newText replacement with expectedRevision from workspace_read. Supports append, exact replace, or full overwrite.', parameters: { type: 'object', properties: { path: { type: 'string' }, mode: { type: 'string', enum: ['append', 'replace', 'overwrite'] }, oldText: { type: 'string' }, newText: { type: 'string' }, content: { type: 'string' }, expectedRevision: { type: 'integer' }, replaceAll: { type: 'boolean' } }, required: ['path', 'mode'] } } },
+  { type: 'function', function: { name: 'workspace_delete', description: 'Delete a file from the current conversation workspace. Use only when deletion is necessary for the requested change.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } },
+  { type: 'function', function: { name: 'workspace_search', description: 'Search text content across files in the current conversation workspace.', parameters: { type: 'object', properties: { query: { type: 'string' }, prefix: { type: 'string' } }, required: ['query'] } } },
+  { type: 'function', function: { name: 'workspace_status', description: 'Get current workspace file count, size, and storage limits.', parameters: { type: 'object', properties: {} } } },
+  { type: 'function', function: { name: 'workspace_archive', description: 'Create a verified ZIP archive of non-secret workspace files and save it as a downloadable artifact. Sensitive files such as .env and private keys are excluded. Use only when the user requests an archive or when packaging is genuinely necessary for delivery.', parameters: { type: 'object', properties: { name: { type: 'string' } } } } },
   {
     type: 'function',
     function: {
@@ -42,14 +55,14 @@ const tools = [
     function: {
       name: 'execute_python',
       description:
-        'Execute full CPython 3.14 code in an isolated Vercel Firecracker microVM. For a requested website, application, project, script, or other concrete deliverable, this is the required implementation environment: generate complete, high-quality source files (not snippets), documentation, tests or validation scripts, and any requested archive. Treat the request as a product brief; implement a polished, complete result rather than a minimal demo. Use a cohesive file structure, responsive and accessible UI where applicable, robust validation, error/empty states, and thoughtful interaction design. Run checks, fix failures, and create/inspect the requested ZIP. Never substitute instructions or code snippets in chat for actual files. Use for calculations, data analysis, automation, document creation, image processing, charts, and general Python tasks. The sandbox has a persistent private workspace for this conversation, supports pip installs and normal filesystem operations, and has public network access with private/reserved IP ranges blocked. Supported uploaded images and documents for this conversation are mounted under uploads/; video attachments are provided as sampled frames to the vision model. Write generated files into the current working directory outside uploads/; the backend automatically collects supported files into the user File Library. Common missing libraries (including matplotlib, numpy, pandas, scipy, Pillow, openpyxl, reportlab, python-docx and python-pptx) are detected and installed automatically before execution; for other packages, install them with subprocess.run([sys.executable, "-m", "pip", "install", "package"], check=True). If an OS-level dependency is unavailable, report the limitation rather than assuming privileged package installation is available. Never read host secrets or environment variables, attempt sandbox escape, or target private/internal networks. Treat uploaded files as private and do not transmit them externally unless the user explicitly requests it. Inspect stdout, stderr, exitCode, status and artifact metadata. Do not claim success unless status is completed.',
+        'Execute CPython 3.14 code in an isolated Vercel Sandbox microVM. Use for Python-specific execution, computation, data processing, automation, document generation, image processing, charts, and Python application testing. A read-only snapshot of non-secret project files is mounted under /tmp/nemotron-source when a workspace exists. For ordinary source-file creation, reading, editing, searching, and project organization, use native workspace tools instead; do not start Python merely to write files. Uploaded files are mounted under uploads/. Generated files are collected into the user File Library. Inspect execution status, stdout, stderr, exit code and artifact metadata. Never claim success unless execution completed.',
       parameters: {
         type: 'object',
         properties: {
           code: {
             type: 'string',
             description:
-              'Complete Python 3.14 source code. For project requests, include all source content and generation logic in this call; create the full project and run real checks. Avoid placeholders, TODOs, pseudocode, abbreviated files, and toy implementations. Use normal CPython, filesystem APIs and installed third-party libraries. Write output files into the current working directory so they are saved to the File Library. Common missing dependencies are auto-installed before execution; install any unrecognized package with subprocess.run([sys.executable, "-m", "pip", "install", "package"], check=True). Keep output concise.',
+              'Complete Python source code for the computation or Python program that genuinely needs execution. Do not use this tool as a wrapper for routine workspace file creation. Write generated outputs into the current working directory. Inspect stdout, stderr, exitCode, status and artifact metadata.',
           },
           task_context: {
             type: 'string',
@@ -63,9 +76,33 @@ const tools = [
   {
     type: 'function',
     function: {
+      name: 'execute_node',
+      description: 'Run an isolated Node.js, npm, or npx command against a snapshot of the current conversation workspace. Use for JavaScript syntax checks, Node.js scripts, dependency installation, Vite/React builds, and Node tests. This runs in a separate sandbox, never in the application server. Requires a configured Node sandbox image.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', enum: ['node', 'npm', 'npx'] },
+          args: { type: 'array', items: { type: 'string' }, maxItems: 64 },
+          timeout_ms: { type: 'integer', minimum: 10000, maximum: 300000 },
+        },
+        required: ['command', 'args'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_agent_status',
+      description: 'Inspect the latest persisted agent-run checkpoint for this conversation. Use when the user asks to resume or continue earlier work, or when you need to understand what was completed before an interruption. This returns operation summaries, not source contents.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'create_task_plan',
       description:
-        'Create a visible execution plan for a complex multi-step user request. Use this before beginning tasks that require multiple distinct steps or tools. Provide a concise objective and ordered tasks with stable IDs and dependencies. This creates a user-visible plan; it does not execute tasks by itself.',
+        'Create a visible execution plan when it materially helps coordinate a complex or resumable task. Keep the objective and ordered tasks concise, with stable IDs and dependencies. Planning is optional and does not execute tasks by itself.',
       parameters: {
         type: 'object',
         properties: {
@@ -345,6 +382,23 @@ async function tavilySearch(args) {
 }
 async function executeTool(name, args, user, options = {}) {
   const userId = user?._id ? String(user._id) : 'unknown';
+  if (name.startsWith('workspace_')) {
+    if (!user?._id || String(user._id).startsWith('guest:')) throw new Error('Sign in is required for persistent workspace operations.');
+    const chatId = String(options.chatId || '');
+    if (name === 'workspace_list') return listWorkspaceFiles(userId, chatId, args.prefix || '');
+    if (name === 'workspace_read') return readWorkspaceFile(userId, chatId, args.path, { startLine: args.start_line, maxLines: args.max_lines });
+    if (name === 'workspace_create') return createWorkspaceFile(userId, chatId, args.path, args.content, { overwrite: Boolean(args.overwrite) });
+    if (name === 'workspace_edit') return editWorkspaceFile(userId, chatId, args.path, args);
+    if (name === 'workspace_delete') return deleteWorkspaceFile(userId, chatId, args.path);
+    if (name === 'workspace_search') return searchWorkspaceFiles(userId, chatId, args.query, args.prefix || '');
+    if (name === 'workspace_status') return getWorkspaceStatus(userId, chatId);
+    if (name === 'workspace_archive') return archiveWorkspace(userId, chatId, args.name || 'project.zip');
+  }
+  if (name === 'get_agent_status') {
+    if (!user?._id || String(user._id).startsWith('guest:')) throw new Error('Sign in is required to inspect agent checkpoints.');
+    if (!options.chatId) throw new Error('A conversation is required to inspect agent checkpoints.');
+    return { checkpoint: await getLatestAgentCheckpoint(userId, String(options.chatId)) };
+  }
   if (name === 'create_task_plan')
     return createTaskPlan(args, options.agentState, options.onAgentEvent);
   if (name === 'update_task_status')
@@ -365,6 +419,7 @@ async function executeTool(name, args, user, options = {}) {
       throw new Error(
         'This conversation no longer exists. Start a new conversation before running Python.'
       );
+    const workspaceFiles = options.chatId ? await getWorkspaceSnapshot(userId, String(options.chatId)) : [];
     const result = await executePython(
       { code: args.code, chatId: options.chatId },
       String(user._id),
@@ -372,9 +427,28 @@ async function executeTool(name, args, user, options = {}) {
         signal: options.signal,
         chatId: options.chatId,
         archiveOnly: Boolean(options.archiveOnly),
+        workspaceFiles,
       }
     );
     return { ...result, taskContext: String(args.task_context || '').slice(0, 500) };
+  }
+  if (name === 'execute_node') {
+    if (!user?._id || String(user._id).startsWith('guest:')) throw new Error('A signed-in user is required for Node.js execution.');
+    if (!options.chatId || !(await getChat(userId, String(options.chatId)))) throw new Error('A valid conversation is required for Node.js execution.');
+    if (!process.env.VERCEL_NODE_SANDBOX_IMAGE) throw new Error('Node.js execution is not configured. Set VERCEL_NODE_SANDBOX_IMAGE to an approved isolated Node.js sandbox image.');
+    const workspaceFiles = await getWorkspaceSnapshot(userId, String(options.chatId));
+    const release = acquireExecution(userId);
+    try {
+      return await executeNodeInSandbox({
+        command: args.command,
+        args: Array.isArray(args.args) ? args.args : [],
+        timeoutMs: args.timeout_ms,
+        userId,
+        chatId: String(options.chatId),
+        signal: options.signal,
+        workspaceFiles,
+      });
+    } finally { release(); }
   }
   if (name === 'save_memory') {
     if (!user?._id || String(user._id).startsWith('guest:')) {
@@ -529,7 +603,7 @@ async function executeTool(name, args, user, options = {}) {
 }
 export function getToolDefinitions(user) {
   const enabled = (pluginId) => isPluginEnabled(user, pluginId);
-  const builtins = tools.filter((tool) => enabled(tool.function.name));
+  const builtins = tools.filter((tool) => enabled(tool.function.name) && (tool.function.name !== 'execute_node' || Boolean(process.env.VERCEL_NODE_SANDBOX_IMAGE && getInterpreterStatus().configured)));
   return [...builtins, ...getCustomToolDefinitions(user)];
 }
 
@@ -618,6 +692,14 @@ async function runCustomTool(tool, args, signal) {
 }
 export function getPluginCatalog() {
   return [
+    { id: 'workspace_list', name: 'Workspace files', description: 'Inspect files in the current project workspace', icon: 'FolderOpen', configured: true },
+    { id: 'workspace_read', name: 'Workspace reading', description: 'Read source and project files', icon: 'FileText', configured: true },
+    { id: 'workspace_create', name: 'Workspace creation', description: 'Create source and project files without starting a runtime', icon: 'FilePlus', configured: true },
+    { id: 'workspace_edit', name: 'Workspace editing', description: 'Apply revision-aware edits to project files', icon: 'FilePenLine', configured: true },
+    { id: 'workspace_delete', name: 'Workspace deletion', description: 'Delete project files when requested or necessary', icon: 'FileX', configured: true },
+    { id: 'workspace_search', name: 'Workspace search', description: 'Search text across project files', icon: 'Search', configured: true },
+    { id: 'workspace_status', name: 'Workspace status', description: 'Inspect workspace size and file limits', icon: 'FolderCheck', configured: true },
+    { id: 'workspace_archive', name: 'Workspace archive', description: 'Package the current workspace when requested', icon: 'FileArchive', configured: true },
     {
       id: 'execute_python',
       name: 'Python interpreter',
@@ -626,11 +708,25 @@ export function getPluginCatalog() {
       configured: getInterpreterStatus().configured,
     },
     {
+      id: 'execute_node',
+      name: 'Node.js runtime',
+      description: 'Isolated Node.js, npm and npx execution for builds and tests',
+      icon: 'Terminal',
+      configured: Boolean(process.env.VERCEL_NODE_SANDBOX_IMAGE && getInterpreterStatus().configured),
+    },
+    {
       id: 'generate_image',
       name: 'Image generation',
       description: 'Generate and save images with FLUX.1 Schnell',
       icon: 'Image',
       configured: getImageGenerationStatus().configured,
+    },
+    {
+      id: 'get_agent_status',
+      name: 'Agent checkpoints',
+      description: 'Inspect the latest persisted execution checkpoint for this conversation',
+      icon: 'History',
+      configured: true,
     },
     {
       id: 'create_task_plan',

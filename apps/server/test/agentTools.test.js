@@ -206,6 +206,18 @@ test('account-history tools require sign-in and have explicit-request descriptio
   );
 });
 
+
+test('native workspace tools are available without enabling Python execution', () => {
+  const definitions = getToolDefinitions();
+  const names = definitions.map((tool) => tool.function.name);
+  for (const name of ['workspace_list', 'workspace_read', 'workspace_create', 'workspace_edit', 'workspace_delete', 'workspace_search', 'workspace_status', 'workspace_archive']) {
+    assert.ok(names.includes(name), `expected ${name} to be registered`);
+  }
+  const nodeRuntimeConfigured = Boolean(process.env.VERCEL_NODE_SANDBOX_IMAGE && ((process.env.VERCEL_TOKEN && process.env.VERCEL_TEAM_ID && process.env.VERCEL_PROJECT_ID) || process.env.VERCEL_OIDC_TOKEN || (process.env.VERCEL === '1' && process.env.VERCEL_ENV)));
+  assert.equal(names.includes('execute_node'), nodeRuntimeConfigured);
+  assert.match(definitions.find((tool) => tool.function.name === 'execute_python').function.description, /do not start Python merely to write files/i);
+});
+
 test('shared-link lookup returns only the signed-in user’s active shares', async () => {
   const originalFind = Share.find;
   const originalFrontendUrl = process.env.FRONTEND_URL;

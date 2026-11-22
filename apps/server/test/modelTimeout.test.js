@@ -127,3 +127,29 @@ test('model can stream reasoning before returning visible answer text', async ()
     globalThis.fetch = originalFetch;
   }
 });
+
+
+test('model tool selection remains automatic and is not forced to progress or Python', async () => {
+  const originalFetch = globalThis.fetch;
+  let requestBody;
+  globalThis.fetch = async (_url, options) => {
+    requestBody = JSON.parse(options.body);
+    return new Response('data: {\"choices\":[{\"delta\":{\"content\":\"Done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n', { status: 200 });
+  };
+  try {
+    await requestRound({
+      messages: [{ role: 'user', content: 'Build a website' }],
+      tools: [{ type: 'function', function: { name: 'execute_python', parameters: { type: 'object', properties: {} } } }],
+      thinkingEnabled: false,
+      signal: new AbortController().signal,
+      res: { writableEnded: false, write() {} },
+      round: 0,
+      hasVision: false,
+      idleTimeoutMs: 1000,
+      roundTimeoutMs: 1000,
+      heartbeatIntervalMs: 1000,
+    });
+    assert.equal(requestBody.tool_choice, 'auto');
+    assert.equal(requestBody.chat_template_kwargs.enable_thinking, false);
+  } finally { globalThis.fetch = originalFetch; }
+});
