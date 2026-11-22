@@ -2,9 +2,9 @@ import {
   AlertCircle,
   ArrowDown,
   ArrowUp,
+  BarChart3,
   Bot,
   Brain,
-  Bookmark,
   Calculator,
   Check,
   ChevronDown,
@@ -21,12 +21,15 @@ import {
   Files,
   FileSpreadsheet,
   FileText,
+  Folder,
+  FolderCog,
   GitBranch,
   Github,
   Globe,
   HardDrive,
   Image as ImageIcon,
   ListChecks,
+  Loader2,
   LoaderCircle,
   LogOut,
   Maximize,
@@ -36,15 +39,10 @@ import {
   Paperclip,
   Pencil,
   PencilLine,
+  Pin,
+  Play,
   Plus,
   Puzzle,
-  BarChart3,
-  Play,
-  Loader2,
-  Folder,
-  FolderCog,
-  Pin,
-  Star,
   RefreshCw,
   Search,
   Share2,
@@ -52,6 +50,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   Square,
+  Star,
   Trash2,
   UserRound,
   Video,
@@ -63,8 +62,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { buildChatExport, chatExportFilename } from './chatExport.js';
 import {
-  ChatStreamError,
   chatErrorMessage,
+  ChatStreamError,
   fetchChatStream,
   readChatEventStream,
   responseError,
@@ -91,7 +90,11 @@ const PLUGIN_CATALOG = [
   { id: 'create_task_plan', name: 'Task plans', description: 'structured multi-step plans' },
   { id: 'save_memory', name: 'Save memory', description: 'remember things across chats' },
   { id: 'search_memories', name: 'Search memories', description: 'recall saved memories' },
-  { id: 'search_previous_chats', name: 'Search past chats', description: 'find earlier conversations' },
+  {
+    id: 'search_previous_chats',
+    name: 'Search past chats',
+    description: 'find earlier conversations',
+  },
   { id: 'list_shared_links', name: 'Shared links', description: 'list active shared links' },
   { id: 'get_current_datetime', name: 'Date & time', description: 'current date and time' },
   { id: 'generate_image', name: 'Image generation', description: 'generate images' },
@@ -146,6 +149,9 @@ const uid = () =>
   typeof crypto !== 'undefined' && crypto.randomUUID
     ? crypto.randomUUID()
     : `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+const MAX_TEXT_CHARS = 30000;
+const MAX_MULTIMODAL_TEXT_CHARS = 20000;
 
 // Touch-first devices (phones, tablets): Enter on the virtual keyboard inserts a
 // newline and messages are sent with the send button only.
@@ -216,6 +222,10 @@ function readFile(file) {
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+}
+function textFile(name, text) {
+  const blob = new Blob([text], { type: 'text/plain' });
+  return new File([blob], name, { type: 'text/plain' });
 }
 function loadImage(src) {
   return new Promise((resolve, reject) => {
@@ -390,7 +400,10 @@ const CodeBlock = React.memo(({ children, className = '' }) => {
       const response = await request('/api/interpreter/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, executionId: `cr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` }),
+        body: JSON.stringify({
+          code,
+          executionId: `cr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
@@ -429,7 +442,12 @@ const CodeBlock = React.memo(({ children, className = '' }) => {
           <Copy size={12} />
         </button>
         {runnable && (
-          <button type="button" onClick={runCode} aria-label="Run code" title="Run in Python sandbox">
+          <button
+            type="button"
+            onClick={runCode}
+            aria-label="Run code"
+            title="Run in Python sandbox"
+          >
             {runState === 'running' ? <Loader2 size={12} className="spin" /> : <Play size={12} />}
           </button>
         )}
@@ -2142,10 +2160,7 @@ function PreferencesDialog({
           >
             <Puzzle size={14} /> Tools & plugins
           </button>
-          <button
-            className={tab === 'usage' ? 'selected' : ''}
-            onClick={() => setTab('usage')}
-          >
+          <button className={tab === 'usage' ? 'selected' : ''} onClick={() => setTab('usage')}>
             <BarChart3 size={14} /> Usage
           </button>
         </div>
@@ -2769,6 +2784,8 @@ export default function App() {
     [activeId, setActiveId] = useState(null),
     [deletingChatIds, setDeletingChatIds] = useState(() => new Set()),
     [metaChat, setMetaChat] = useState(null),
+    [deleteConfirmChatId, setDeleteConfirmChatId] = useState(null),
+    [deleteConfirmInput, setDeleteConfirmInput] = useState(''),
     [dragging, setDragging] = useState(false),
     [chatsLoaded, setChatsLoaded] = useState(false),
     [routeError, setRouteError] = useState(''),
@@ -3181,14 +3198,27 @@ export default function App() {
         body: JSON.stringify(patch),
       });
       const data = await res.json();
-      if (data.chat) setChats((current) => current.map((item) => (item._id === id ? data.chat : item)));
+      if (data.chat)
+        setChats((current) => current.map((item) => (item._id === id ? data.chat : item)));
       setMetaChat(null);
     } catch {
       setToast({ id: Date.now(), message: 'Could not update the conversation.', type: 'error' });
     }
   };
-  const removeChat = async (id) => {
+  const removeChat = (id) => {
     if (deletingChatIds.has(id)) return;
+    const chat = chats.find((c) => c._id === id);
+    setDeleteConfirmChatId(id);
+    setDeleteConfirmInput('');
+  };
+  const confirmDeleteChat = async () => {
+    const id = deleteConfirmChatId;
+    if (!id) return;
+    if (deleteConfirmInput !== 'DELETE') {
+      setDeleteConfirmChatId(null);
+      setDeleteConfirmInput('');
+      return;
+    }
     setDeletingChatIds((current) => new Set(current).add(id));
     try {
       await request(`/api/chats/${encodeURIComponent(id)}`, { method: 'DELETE' });
@@ -3225,6 +3255,8 @@ export default function App() {
         next.delete(id);
         return next;
       });
+      setDeleteConfirmChatId(null);
+      setDeleteConfirmInput('');
     }
   };
   useEffect(() => {
@@ -3724,9 +3756,19 @@ export default function App() {
     }
   };
   const runSend = async (raw = input, attach = files, options = {}) => {
-    const text = String(raw || '').trim();
+    let text = String(raw || '').trim();
     if ((!text && !attach.length && !options.reuseLastUser) || busy) return;
-    setFileError('');
+    // When sending attachments, the message becomes multimodal and the server
+    // caps each text part at MAX_MULTIMODAL_TEXT_CHARS. Convert oversized text
+    // into a text attachment so it is not rejected.
+    if (attach.length && text.length > MAX_MULTIMODAL_TEXT_CHARS) {
+      const file = textFile(`text-${Date.now()}.txt`, text);
+      attach = [...attach, file];
+      text = '';
+      setFileError(
+        `Prompt exceeds ${MAX_MULTIMODAL_TEXT_CHARS.toLocaleString()} characters, so it was attached as ${file.name} instead.`
+      );
+    }
     setBusy(true);
     setStatus('Preparing request…');
     let chat = activeChat;
@@ -3805,11 +3847,34 @@ export default function App() {
     else if (prepared.length)
       parts.push({
         type: 'text',
-        text: 'Please analyze the attached files and media.',
+        text: 'Please read the attached files, media and follow the instructions.',
       });
     for (const item of prepared) {
       if (item.dataUrl && item.type.startsWith('image/'))
         parts.push({ type: 'image_url', image_url: { url: item.dataUrl } });
+      else if (item.kind === 'document' && item.dataUrl) {
+        const base64 = String(item.dataUrl).replace(/^data:[^;]+;base64,/, '');
+        const decoded = decodeURIComponent(escape(atob(base64)));
+        const header = `--- Attached document: ${item.name} ---\n`;
+        const footer = `\n--- End of ${item.name} ---`;
+        const partOverhead = '[part 1/99]\n'.length;
+        const safetyMargin = 500;
+        const budget = Math.max(
+          1000,
+          MAX_MULTIMODAL_TEXT_CHARS - header.length - footer.length - partOverhead - safetyMargin
+        );
+        const chunks = [];
+        for (let i = 0; i < decoded.length; i += budget) chunks.push(decoded.slice(i, i + budget));
+        chunks.forEach((chunk, index) => {
+          parts.push({
+            type: 'text',
+            text:
+              chunks.length > 1
+                ? `${header}[part ${index + 1}/${chunks.length}]\n${chunk}${footer}`
+                : `${header}${chunk}${footer}`,
+          });
+        });
+      }
       if (item.frames)
         for (const frame of item.frames) {
           parts.push({
@@ -3839,7 +3904,7 @@ export default function App() {
       : {
           id: uid(),
           role: 'user',
-          content: text || 'Please analyze the attached files and media.',
+          content: text || 'Please read the attached files, media and follow the instructions.',
           attachments,
           createdAt: new Date().toISOString(),
           ...(prepared.length ? { apiContent: parts } : {}),
@@ -4414,10 +4479,22 @@ export default function App() {
                 e.target.style.height = `${Math.min(e.target.scrollHeight, 180)}px`;
               }}
               onPaste={(e) => {
-                const pasted = [...(e.clipboardData?.files || [])];
-                if (pasted.length) {
+                const pastedFiles = [...(e.clipboardData?.files || [])];
+                if (pastedFiles.length) {
                   e.preventDefault();
-                  addFiles(pasted);
+                  addFiles(pastedFiles);
+                  return;
+                }
+                const pastedText = e.clipboardData?.getData('text/plain') || '';
+                const limit = files.length ? MAX_MULTIMODAL_TEXT_CHARS : MAX_TEXT_CHARS;
+                if (pastedText.length > limit) {
+                  e.preventDefault();
+                  const file = textFile(`text-${Date.now()}.txt`, pastedText);
+                  addFiles([file]);
+                  setFileError(
+                    `Pasted text exceeds ${limit.toLocaleString()} characters, so it was attached as ${file.name} instead.`
+                  );
+                  return;
                 }
               }}
               onKeyDown={(e) => {
@@ -4486,6 +4563,9 @@ export default function App() {
               )}
             </span>
             <span>Agent tools run automatically · Think mode {thinking ? 'on' : 'off'}</span>
+            <span className="composer-char-counter">
+              {input.length}/{MAX_TEXT_CHARS}
+            </span>
           </div>
         </div>
       </main>
@@ -4535,6 +4615,55 @@ export default function App() {
         setTheme={setTheme}
         revokeShare={revokeShare}
       />
+      {deleteConfirmChatId && (
+        <div className="modal-layer" onMouseDown={() => setDeleteConfirmChatId(null)}>
+          <section className="chat-meta-dialog" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="dialog-head">
+              <b>Delete conversation</b>
+              <button
+                className="icon-button"
+                onClick={() => {
+                  setDeleteConfirmChatId(null);
+                  setDeleteConfirmInput('');
+                }}
+                aria-label="Cancel"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="meta-row">
+              <span>Type DELETE to confirm permanent deletion of this conversation.</span>
+            </div>
+            <label className="meta-row">
+              <span>Confirm</span>
+              <input
+                value={deleteConfirmInput}
+                maxLength={6}
+                placeholder="DELETE"
+                onChange={(e) => setDeleteConfirmInput(e.target.value)}
+              />
+            </label>
+            <div className="dialog-actions">
+              <button
+                className="secondary-button compact"
+                onClick={() => {
+                  setDeleteConfirmChatId(null);
+                  setDeleteConfirmInput('');
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className="primary-button compact danger-text"
+                disabled={deleteConfirmInput !== 'DELETE'}
+                onClick={confirmDeleteChat}
+              >
+                Delete conversation
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

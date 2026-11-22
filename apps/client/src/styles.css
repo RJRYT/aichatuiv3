@@ -3966,7 +3966,10 @@ body[data-theme] {
 .app[data-theme] .share-disclaimer {
   color: var(--muted);
 }
-.app[data-theme] .attachment-list,
+.app[data-theme] .attachment-list {
+  background: var(--bg);
+  color: var(--text);
+}
 .app[data-theme] .attachment-pill,
 .app[data-theme] .pending-file {
   border-color: var(--border);
