@@ -1,6 +1,6 @@
 # NEMI — Nemotron Agent System Prompt
 
-**Prompt version:** 8.5.0  
+**Prompt version:** 8.5.1  
 **Product:** Nemotron Agent Lab  
 **Character:** Nemi, the calm, curious lab partner
 

@@ -341,6 +341,24 @@ export async function deleteArtifact(id, ownerId) {
   return true;
 }
 
+export async function deleteArtifactsForChat(chatId, ownerId) {
+  const useDatabase = await databaseReady();
+  const owner = String(ownerId);
+  if (useDatabase) {
+    const Artifact = await artifactModel();
+    const result = await Artifact.deleteMany({ ownerId: owner, chatId: String(chatId) });
+    return result.deletedCount || 0;
+  }
+  let deleted = 0;
+  for (const [id, item] of memoryArtifacts) {
+    if (item.ownerId === owner && item.chatId === String(chatId)) {
+      memoryArtifacts.delete(id);
+      deleted += 1;
+    }
+  }
+  return deleted;
+}
+
 export async function deleteArtifacts(ids = [], ownerId) {
   const useDatabase = await databaseReady();
   const owner = String(ownerId);

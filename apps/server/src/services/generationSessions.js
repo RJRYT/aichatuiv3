@@ -73,3 +73,18 @@ export async function markAbandonedGenerationSessions() {
   }
   return { interrupted };
 }
+
+export async function deleteGenerationSessionsForChat(chatId, ownerId) {
+  if (databaseReady()) {
+    const result = await GenerationSession.deleteMany({ chatId: String(chatId), ownerId: String(ownerId) });
+    return result.deletedCount || 0;
+  }
+  let deleted = 0;
+  for (const [id, session] of memory) {
+    if (session.chatId === String(chatId) && session.ownerId === String(ownerId)) {
+      memory.delete(id);
+      deleted += 1;
+    }
+  }
+  return deleted;
+}

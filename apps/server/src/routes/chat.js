@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { runNemotronChat, generateChatTitle, cancelChatGeneration } from '../services/nvidia.js';
+import { runNemotronChat, generateChatTitle, cancelChatGeneration, generateSuggestedNextSteps } from '../services/nvidia.js';
 import { getChat, updateChat } from '../services/chatStore.js';
 import {
   ensureBranches,
@@ -12,6 +12,30 @@ import { createGenerationSession, appendGenerationEvent, finishGenerationSession
 
 const router = Router();
 const log = logger.child({ component: 'routes:chat' });
+router.post('/suggestions', async (req, res, next) => {
+  try {
+    const ownerId = String(req.user?._id || '');
+    const chatId = String(req.body?.chatId || '');
+    const messageId = String(req.body?.messageId || '');
+    if (!ownerId || !chatId || !messageId) return res.status(400).json({ error: 'Chat and assistant message IDs are required.' });
+    const chat = await getChat(ownerId, chatId);
+    if (!chat) return res.status(404).json({ error: 'Chat not found.' });
+    ensureBranches(chat);
+    const branchId = String(req.body?.branchId || chat.activeBranchId || 'main');
+    const messages = getBranchMessages(chat, branchId);
+    const assistant = messages?.find((item) => item.id === messageId && item.role === 'assistant');
+    if (!assistant || !assistant.content) return res.status(404).json({ error: 'Completed assistant response not found.' });
+    if (Array.isArray(assistant.suggestedNextSteps) && assistant.suggestedNextSteps.length) return res.json({ suggestions: assistant.suggestedNextSteps, revision: chat.revision || 0 });
+    const index = messages.indexOf(assistant);
+    const previousUser = [...messages.slice(0, index)].reverse().find((item) => item.role === 'user');
+    const suggestions = await generateSuggestedNextSteps({ user: req.user, userPrompt: previousUser?.content, assistantResponse: assistant.content, toolEvents: assistant.toolEvents, agentPlan: assistant.agentPlan });
+    assistant.suggestedNextSteps = suggestions;
+    const saved = await updateChat(ownerId, chatId, { branches: chat.branches, messages: chat.messages, revision: (chat.revision || 0) + 1, expectedRevision: chat.revision || 0 });
+    if (!saved) return res.status(409).json({ error: 'Conversation changed while suggestions were being generated.' });
+    return res.json({ suggestions, revision: saved.revision || 0 });
+  } catch (error) { next(error); }
+});
+
 router.post('/stream', async (req, res, next) => {
   try {
     const ownerId = String(req.user?._id || '');
@@ -203,6 +227,7 @@ router.post('/stream', async (req, res, next) => {
             });
             target.activeVersion = target.versions.length - 1;
             Object.assign(target, target.versions[target.activeVersion]);
+            target.isStreaming = false;
             setBranchMessages(current, branchId, branchMessages);
           }
         } else {
@@ -218,6 +243,7 @@ router.post('/stream', async (req, res, next) => {
             return {
               ...previous,
               ...message,
+              ...(message.completedAt ? { isStreaming: false } : {}),
               createdAt: message.createdAt || previous.createdAt,
               startedAt: message.startedAt || previous.startedAt,
               completedAt: message.completedAt || previous.completedAt,

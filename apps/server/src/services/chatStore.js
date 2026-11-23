@@ -63,6 +63,9 @@ function cleanMessages(messages = []) {
     if (message.toolEvents) safe.toolEvents = message.toolEvents;
     if (Array.isArray(message.agentEvents)) safe.agentEvents = message.agentEvents;
     if (message.startedAt) safe.startedAt = message.startedAt;
+    if (message.completedAt) safe.isStreaming = false;
+    else if (typeof message.isStreaming === 'boolean') safe.isStreaming = message.isStreaming;
+    if (Array.isArray(message.suggestedNextSteps)) safe.suggestedNextSteps = message.suggestedNextSteps.slice(0, 4).map((step) => ({ label: String(step.label || '').slice(0, 55), prompt: String(step.prompt || '').slice(0, 500) })).filter((step) => step.label && step.prompt);
     if (message.completedAt) safe.completedAt = message.completedAt;
     const agentPlan = sanitizeAgentPlan(message.agentPlan);
     if (agentPlan) safe.agentPlan = agentPlan;

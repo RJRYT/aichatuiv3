@@ -1135,36 +1135,7 @@ function toolActivityMessage(name, args = {}) {
 }
 
 function getSuggestedNextSteps(message) {
-  const plan = message.agentPlan;
-  const tasks = Array.isArray(plan?.tasks) ? plan.tasks : [];
-  const failed = tasks.filter((task) => task.status === 'failed');
-  const pending = tasks.filter((task) => task.status === 'pending');
-  const toolFailures = (message.toolEvents || []).filter((event) => event.status === 'error');
-  if (failed.length || toolFailures.length) {
-    return [
-      { label: 'Investigate the blocker', prompt: 'Investigate the remaining failed task or tool error. Inspect the current files and diagnostics, fix the root cause, and verify the correction without repeating failed steps unchanged.' },
-      { label: 'Review completed work', prompt: 'Summarize the completed work, current project state, and the exact remaining blockers.' },
-    ];
-  }
-  if (pending.length) {
-    return [
-      { label: 'Continue the next task', prompt: 'Continue the existing project plan from the next pending task. Inspect the current workspace and persisted progress first, preserve completed work, and verify each task before marking it complete.' },
-      { label: 'Review progress', prompt: 'Review the current project plan and completed milestones. Tell me what is done, what remains, and whether anything needs attention.' },
-    ];
-  }
-  const hasArchive = (message.toolEvents || []).some((event) =>
-    (event.result?.artifacts || []).some((artifact) => /\.zip$/i.test(String(artifact.name || '')))
-  );
-  if (hasArchive) {
-    return [
-      { label: 'Verify the deliverable', prompt: 'Perform a final verification of the generated project archive, its contents, and the project build/tests. Report any checks that cannot be run.' },
-      { label: 'Explain how to run it', prompt: 'Give me the exact installation, configuration, and run/deployment steps for this project.' },
-    ];
-  }
-  return [
-    { label: 'Verify the result', prompt: 'Run the most relevant checks for the changes just completed. Inspect failures and report verified results separately from unverified work.' },
-    { label: 'What should I do next?', prompt: 'Based on the result and current project state, recommend the most useful next step and explain why.' },
-  ];
+  return Array.isArray(message?.suggestedNextSteps) ? message.suggestedNextSteps : [];
 }
 
 function LiveProgress({ progress, now, toolEvents = [] }) {
@@ -1425,7 +1396,7 @@ function Message({
           </div>
         )}
         {!user && !message.isStreaming && content.trim() && onFollowup &&
-          (message.agentPlan || message.toolEvents?.length > 0) && (
+          message.suggestedNextSteps?.length > 0 && (
           <div className="next-step-suggestions" aria-label="Suggested next steps">
             <span className="next-step-heading"><Sparkles size={12} /> Suggested next steps</span>
             <div className="next-step-actions">
@@ -1530,6 +1501,7 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
     [error, setError] = useState(''),
     [search, setSearch] = useState(''),
     [previewFile, setPreviewFile] = useState(null);
+  const [selectedFileIds, setSelectedFileIds] = useState(() => new Set());
   const load = useCallback(async () => {
     if (!open) return;
     setLoading(true);
@@ -1538,6 +1510,7 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
       const response = await request('/api/interpreter/artifacts?limit=100');
       const data = await response.json();
       setFiles(data.files || []);
+      setSelectedFileIds((current) => new Set([...current].filter((id) => (data.files || []).some((file) => file.id === id))));
       setTotal(data.total || 0);
       setTotalBytes(data.totalBytes || 0);
       setQuotaBytes(data.quotaBytes || 50 * 1024 * 1024);
@@ -1566,10 +1539,22 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
         method: 'DELETE',
       });
       if (previewFile?.id === file.id) setPreviewFile(null);
+      setSelectedFileIds((current) => { const next = new Set(current); next.delete(file.id); return next; });
       await load();
     } catch (err) {
       setError(err.message || 'Could not delete file.');
     }
+  };
+  const bulkRemove = async () => {
+    const ids = [...selectedFileIds];
+    if (!ids.length || !window.confirm(`Permanently delete ${ids.length} selected File Library item(s)?`)) return;
+    try {
+      const response = await request('/api/interpreter/artifacts/bulk', { method: 'DELETE', body: JSON.stringify({ ids }) });
+      const result = await response.json();
+      setSelectedFileIds(new Set());
+      if (result.deletedCount !== ids.length) setError(`Deleted ${result.deletedCount} of ${ids.length} selected files.`);
+      await load();
+    } catch (err) { setError(err.message || 'Could not delete selected files.'); }
   };
   const handleDownload = async (file) => {
     setError('');
@@ -1607,6 +1592,10 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
             <RefreshCw size={12} className={loading ? 'spin' : ''} /> Refresh
           </button>
         </div>
+        <div className="library-summary">
+          <label className="library-bulk-select"><input type="checkbox" checked={filtered.length > 0 && filtered.every((file) => selectedFileIds.has(file.id))} onChange={(event) => setSelectedFileIds((current) => { const next = new Set(current); filtered.forEach((file) => event.target.checked ? next.add(file.id) : next.delete(file.id)); return next; })} /> Select visible</label>
+          <button className="secondary-button compact danger-text" disabled={!selectedFileIds.size} onClick={bulkRemove}><Trash2 size={12} /> Delete selected ({selectedFileIds.size})</button>
+        </div>
         <div className="library-search">
           <Search size={15} />
           <input
@@ -1635,6 +1624,7 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
               const Icon = artifactIcon(file);
               return (
                 <div className="library-file" key={file.id}>
+                  <input aria-label={`Select ${file.name}`} type="checkbox" checked={selectedFileIds.has(file.id)} onChange={(event) => setSelectedFileIds((current) => { const next = new Set(current); event.target.checked ? next.add(file.id) : next.delete(file.id); return next; })} />
                   <div className="library-file-icon">
                     <Icon size={17} />
                   </div>
@@ -1834,10 +1824,13 @@ function HistoryDrawer({
   onRename,
   onChatMeta,
   onOpenLibrary,
+  onBulkDelete,
   deletingChatIds = new Set(),
   chatsLoaded = true,
 }) {
   const [folderFilter, setFolderFilter] = useState('');
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedChatIds, setSelectedChatIds] = useState(() => new Set());
   if (!open) return null;
   const visibleChats = (() => {
     if (folderFilter === '__pinned__') return chats.filter((chat) => chat.pinned);
@@ -1859,6 +1852,13 @@ function HistoryDrawer({
         <button className="new-chat-button" onClick={onNew}>
           <Plus size={15} /> New conversation
         </button>
+        <div className="history-bulk-toolbar">
+          <button className="secondary-button compact" onClick={() => { setSelectionMode((value) => !value); setSelectedChatIds(new Set()); }}>{selectionMode ? 'Cancel selection' : 'Select chats'}</button>
+          {selectionMode && <>
+            <button className="secondary-button compact" onClick={() => setSelectedChatIds(new Set(visibleChats.map((chat) => chat._id)))}>Select visible</button>
+            <button className="secondary-button compact danger-text" disabled={!selectedChatIds.size} onClick={() => { onBulkDelete?.([...selectedChatIds]); setSelectedChatIds(new Set()); setSelectionMode(false); }}>Delete ({selectedChatIds.size})</button>
+          </>}
+        </div>
         <button className="library-nav-button" onClick={onOpenLibrary}>
           <Files size={15} /> File Library <span>Generated files</span>
         </button>
@@ -1898,6 +1898,7 @@ function HistoryDrawer({
                 className={`history-item ${chat._id === activeId ? 'active' : ''} ${deletingChatIds.has(chat._id) ? 'deleting' : ''}`}
                 key={chat._id}
               >
+                {selectionMode && <input aria-label={`Select ${chat.title || 'conversation'}`} type="checkbox" checked={selectedChatIds.has(chat._id)} onChange={(event) => setSelectedChatIds((current) => { const next = new Set(current); event.target.checked ? next.add(chat._id) : next.delete(chat._id); return next; })} />}
                 <button
                   className="history-select"
                   disabled={deletingChatIds.has(chat._id)}
@@ -3043,6 +3044,9 @@ export default function App() {
     [metaChat, setMetaChat] = useState(null),
     [deleteConfirmChatId, setDeleteConfirmChatId] = useState(null),
     [deleteConfirmInput, setDeleteConfirmInput] = useState(''),
+    [deleteLibraryFiles, setDeleteLibraryFiles] = useState(false),
+    [deleteSharedSegments, setDeleteSharedSegments] = useState(false),
+    [deletePreview, setDeletePreview] = useState(null),
     [dragging, setDragging] = useState(false),
     [chatsLoaded, setChatsLoaded] = useState(false),
     [routeError, setRouteError] = useState(''),
@@ -3419,8 +3423,34 @@ export default function App() {
     setLiveProgress({ message: 'Reconnecting to the saved generation session…', startedAt: Date.now(), lastActivityAt: Date.now() });
     void (async () => {
       let recoveredError = '';
+      let recoveredMessages = [];
+      let recoveredChat = null;
+      const assistantId = recovery.assistantMessageId || '';
+      let recoveredAssistant = null;
+      let output = '';
+      let toolEvents = [];
+      let agentEvents = [];
+      let agentPlan = null;
       try {
         await selectChat(recovery.chatId);
+        const chatResponse = await request(`/api/chats/${encodeURIComponent(recovery.chatId)}`);
+        const chatPayload = await chatResponse.json();
+        recoveredChat = chatPayload.chat;
+        recoveredMessages = [...(recoveredChat?.messages || [])];
+        recoveredAssistant = recoveredMessages.find((item) => item.id === assistantId && item.role === 'assistant') || [...recoveredMessages].reverse().find((item) => item.role === 'assistant' && item.isStreaming) || null;
+        if (!recoveredAssistant) {
+          recoveredAssistant = { id: assistantId || uid(), role: 'assistant', content: '', isStreaming: true, toolEvents: [], createdAt: new Date().toISOString() };
+          recoveredMessages.push(recoveredAssistant);
+        }
+        output = String(recoveredAssistant.content || '');
+        toolEvents = Array.isArray(recoveredAssistant.toolEvents) ? [...recoveredAssistant.toolEvents] : [];
+        agentEvents = Array.isArray(recoveredAssistant.agentEvents) ? [...recoveredAssistant.agentEvents] : [];
+        agentPlan = recoveredAssistant.agentPlan || null;
+        const publish = () => {
+          recoveredAssistant = { ...recoveredAssistant, content: output, toolEvents, agentEvents, agentPlan, isStreaming: true };
+          recoveredMessages = recoveredMessages.map((item) => item.id === recoveredAssistant.id ? recoveredAssistant : item);
+          if (activeIdRef.current === recovery.chatId) setMessages(recoveredMessages);
+        };
         const streamUrl = api(`/api/chat/stream/${recovery.generationId}/events?after=0`);
         const response = await fetch(streamUrl, { credentials: 'include', headers: { Accept: 'text/event-stream' }, signal: controller.signal });
         if (!response.ok) throw await responseError(response, 'Could not recover the previous generation');
@@ -3429,12 +3459,58 @@ export default function App() {
           reconnect: (after) => fetch(api(`/api/chat/stream/${recovery.generationId}/events?after=${after}`), { credentials: 'include', headers: { Accept: 'text/event-stream' }, signal: controller.signal }),
         })) {
           if (event.type === 'heartbeat') setLiveProgress((current) => ({ ...(current || {}), message: event.message || 'The agent is continuing in the background.', lastActivityAt: Date.now() }));
+          if (event.type === 'status') setStatus(event.status || 'Recovering…');
+          if (event.type === 'chunk') { output += String(event.content || ''); publish(); setLiveProgress(null); }
+          if (event.type === 'final_content' && !event.replayTruncated) { output = String(event.content || ''); publish(); }
+          if (event.type === 'tool_start') {
+            toolEvents = [...toolEvents, { name: event.name, status: 'running', arguments: event.arguments || {}, startedAt: event.startedAt }];
+            publish();
+            setLiveProgress({ message: toolActivityMessage(event.name, event.arguments || {}), startedAt: Date.now(), lastActivityAt: Date.now() });
+          }
+          if (event.type === 'tool_result') {
+            const index = toolEvents.map((item) => item.name).lastIndexOf(event.name);
+            if (index >= 0) toolEvents = toolEvents.map((item, itemIndex) => itemIndex === index ? { ...item, status: event.status || 'completed', result: event.result, error: event.error, completedAt: event.completedAt, durationMs: event.durationMs } : item);
+            publish();
+          }
+          if (event.type === 'agent_event') {
+            const item = event.event || {};
+            agentEvents = [...agentEvents, item];
+            if (item.plan) agentPlan = item.plan;
+            if (item.type === 'progress_update' && item.message) setLiveProgress({ message: item.message, startedAt: Date.now(), lastActivityAt: Date.now() });
+            publish();
+          }
+          if (event.type === 'model_selected') recoveredAssistant = { ...recoveredAssistant, model: event.model || recoveredAssistant.model, routingDecision: event.routing || recoveredAssistant.routingDecision };
+          if (event.type === 'model_switch') recoveredAssistant = { ...recoveredAssistant, model: event.to || recoveredAssistant.model, routingDecision: event.routing || recoveredAssistant.routingDecision };
           if (event.type === 'error') recoveredError = String(event.error || 'The previous generation was interrupted.');
           if (event.type === 'stopped') recoveredError = 'The previous generation was cancelled before completion.';
-          if (event.type === 'status') setStatus(event.status || 'Recovering…');
         }
-        if (activeIdRef.current === recovery.chatId) await selectChat(recovery.chatId);
-        setToast({ id: Date.now(), message: recoveredError ? `Previous generation could not resume: ${recoveredError}` : 'Previous generation recovered and its saved response has been loaded.', type: recoveredError ? 'error' : 'success' });
+        const latestResponse = await request(`/api/chats/${encodeURIComponent(recovery.chatId)}`);
+        const latestPayload = await latestResponse.json();
+        const latestChat = latestPayload.chat;
+        let finalMessages = [...(latestChat?.messages || recoveredMessages)];
+        const persistedAssistant = finalMessages.find((item) => item.id === recoveredAssistant.id);
+        if (recoveredError && !persistedAssistant?.completedAt) {
+          const partial = { ...recoveredAssistant, content: output, toolEvents, agentEvents, agentPlan, isStreaming: false, completedAt: new Date().toISOString(), error: recoveredError };
+          finalMessages = finalMessages.map((item) => item.id === partial.id ? partial : item);
+          if (!finalMessages.some((item) => item.id === partial.id)) finalMessages.push(partial);
+          const saveResponse = await request(`/api/chats/${encodeURIComponent(recovery.chatId)}`, { method: 'PATCH', body: JSON.stringify({ messages: finalMessages, branchId: latestChat.activeBranchId || 'main', expectedRevision: latestChat.revision || 0 }) });
+          const savePayload = await saveResponse.json();
+          if (savePayload.chat) finalMessages = savePayload.chat.messages || finalMessages;
+        }
+        const finalAssistant = finalMessages.find((item) => item.id === recoveredAssistant.id);
+        if (!recoveredError && finalAssistant?.content && !finalAssistant.suggestedNextSteps?.length) {
+          try {
+            const suggestionsResponse = await request('/api/chat/suggestions', { method: 'POST', body: JSON.stringify({ chatId: recovery.chatId, branchId: latestChat.activeBranchId || 'main', messageId: finalAssistant.id }) });
+            const suggestionsPayload = await suggestionsResponse.json();
+            finalMessages = finalMessages.map((item) => item.id === finalAssistant.id ? { ...item, suggestedNextSteps: suggestionsPayload.suggestions || [] } : item);
+            if (Number.isInteger(suggestionsPayload.revision)) latestChat.revision = suggestionsPayload.revision;
+          } catch { /* AI suggestions are optional; never substitute hardcoded suggestions. */ }
+        }
+        if (activeIdRef.current === recovery.chatId) {
+          setMessages(finalMessages);
+          setChats((current) => latestChat ? [latestChat, ...current.filter((item) => item._id !== latestChat._id)] : current);
+        }
+        setToast({ id: Date.now(), message: recoveredError ? `Previous generation ended: ${recoveredError}` : 'Previous generation recovered and its live response was restored.', type: recoveredError ? 'error' : 'success' });
       } catch (error) {
         if (error?.name !== 'AbortError') setToast({ id: Date.now(), message: `Could not recover the previous generation: ${error.message}`, type: 'error' });
       } finally {
@@ -3504,11 +3580,34 @@ export default function App() {
       setToast({ id: Date.now(), message: 'Could not update the conversation.', type: 'error' });
     }
   };
+  const bulkDeleteChats = async (ids) => {
+    const uniqueIds = [...new Set(ids)].filter((id) => chats.some((chat) => chat._id === id));
+    if (!uniqueIds.length || !window.confirm(`Delete ${uniqueIds.length} selected conversation(s) and ALL associated workspace files, library files, shared links, uploads, checkpoints and generation history? This cannot be undone.`)) return;
+    setDeletingChatIds((current) => new Set([...current, ...uniqueIds]));
+    try {
+      const response = await request('/api/chats/bulk', { method: 'DELETE', body: JSON.stringify({ chatIds: uniqueIds }) });
+      const result = await response.json();
+      const deletedIds = (result.results || []).filter((item) => item.ok).map((item) => item.chatId);
+      setChats((current) => current.filter((chat) => !deletedIds.includes(chat._id)));
+      if (deletedIds.includes(activeIdRef.current)) {
+        ++chatLoadSeqRef.current; abortRef.current?.abort(); setBusy(false); setActiveId(null); activeIdRef.current = null; setMessages([]); setBranches([]); setActiveBranchId('main'); setLiveProgress(null); setChatLoading(false); setChatLoadError(''); history.replaceState({}, '', '/');
+        try { localStorage.removeItem('nemotron.activeChatId'); localStorage.removeItem('nemotron.pendingGeneration'); } catch {}
+      }
+      setLibraryRefresh((value) => value + 1); loadShares().catch(() => {});
+      const failed = (result.results || []).filter((item) => !item.ok);
+      setToast({ id: Date.now(), message: failed.length ? `Deleted ${deletedIds.length}; ${failed.length} conversation(s) need cleanup retry.` : `Deleted ${deletedIds.length} conversations and all associated data.`, type: failed.length ? 'error' : 'success' });
+    } catch (error) { setToast({ id: Date.now(), message: error.message || 'Bulk deletion failed.', type: 'error' }); }
+    finally { setDeletingChatIds((current) => { const next = new Set(current); uniqueIds.forEach((id) => next.delete(id)); return next; }); }
+  };
+
   const removeChat = (id) => {
     if (deletingChatIds.has(id)) return;
-    const chat = chats.find((c) => c._id === id);
     setDeleteConfirmChatId(id);
     setDeleteConfirmInput('');
+    setDeleteLibraryFiles(false);
+    setDeleteSharedSegments(false);
+    setDeletePreview(null);
+    request(`/api/chats/${encodeURIComponent(id)}/deletion-preview`).then((response) => response.json()).then((data) => setDeletePreview(data)).catch(() => setDeletePreview(null));
   };
   const confirmDeleteChat = async () => {
     const id = deleteConfirmChatId;
@@ -3520,7 +3619,7 @@ export default function App() {
     }
     setDeletingChatIds((current) => new Set(current).add(id));
     try {
-      await request(`/api/chats/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      await request(`/api/chats/${encodeURIComponent(id)}`, { method: 'DELETE', body: JSON.stringify({ deleteLibraryFiles, deleteSharedSegments }) });
       setChats((current) => current.filter((chat) => chat._id !== id));
       if (activeIdRef.current === id) {
         ++chatLoadSeqRef.current;
@@ -3539,9 +3638,12 @@ export default function App() {
         history.replaceState({}, '', '/');
         try {
           localStorage.removeItem('nemotron.activeChatId');
+          localStorage.removeItem('nemotron.pendingGeneration');
         } catch {}
       }
-      setToast({ id: Date.now(), message: 'Conversation deleted.', type: 'success' });
+      setLibraryRefresh((value) => value + 1);
+      loadShares().catch(() => {});
+      setToast({ id: Date.now(), message: 'Conversation and selected associated data deleted.', type: 'success' });
     } catch (error) {
       setToast({
         id: Date.now(),
@@ -3556,6 +3658,7 @@ export default function App() {
       });
       setDeleteConfirmChatId(null);
       setDeleteConfirmInput('');
+      setDeletePreview(null);
     }
   };
   useEffect(() => {
@@ -3818,7 +3921,7 @@ export default function App() {
     } catch {}
     const controller = new AbortController();
     controller.generationId = crypto.randomUUID();
-    try { localStorage.setItem('nemotron.pendingGeneration', JSON.stringify({ chatId: activeId, generationId: controller.generationId, startedAt: Date.now() })); } catch {}
+    try { localStorage.setItem('nemotron.pendingGeneration', JSON.stringify({ chatId: activeId, generationId: controller.generationId, assistantMessageId: message.id, startedAt: Date.now() })); } catch {}
     abortRef.current = controller;
     try {
       const res = await fetchChatStream(
@@ -3965,7 +4068,14 @@ export default function App() {
       const refreshed = await (
         await request(`/api/chats/${activeId}?branchId=${activeBranchId}`)
       ).json();
-      setMessages(refreshed.chat.messages || []);
+      let refreshedMessages = refreshed.chat.messages || [];
+      try {
+        const suggestionResponse = await request('/api/chat/suggestions', { method: 'POST', body: JSON.stringify({ chatId: activeId, branchId: activeBranchId, messageId: message.id }) });
+        const suggestionPayload = await suggestionResponse.json();
+        refreshedMessages = refreshedMessages.map((item) => item.id === message.id ? { ...item, suggestedNextSteps: suggestionPayload.suggestions || [] } : item);
+        if (Number.isInteger(suggestionPayload.revision)) refreshed.chat.revision = suggestionPayload.revision;
+      } catch { /* Optional AI follow-ups; no static fallback. */ }
+      setMessages(refreshedMessages);
       setChats((current) => [refreshed.chat, ...current.filter((c) => c._id !== activeId)]);
       setStatus('Response regenerated');
     } catch (error) {
@@ -4242,7 +4352,7 @@ export default function App() {
     if (activeIdRef.current === chat._id) setMessages([...nextMessages, assistant]);
     const controller = new AbortController();
     controller.generationId = crypto.randomUUID();
-    try { localStorage.setItem('nemotron.pendingGeneration', JSON.stringify({ chatId: chat._id, generationId: controller.generationId, startedAt: Date.now() })); } catch {}
+    try { localStorage.setItem('nemotron.pendingGeneration', JSON.stringify({ chatId: chat._id, generationId: controller.generationId, assistantMessageId: assistantId, startedAt: Date.now() })); } catch {}
     abortRef.current = controller;
     const started = performance.now();
     setLiveProgress(
@@ -4284,7 +4394,19 @@ export default function App() {
           )
         );
     };
+    let generationExpectedRevision = options.expectedRevision ?? (chat.revision || 0);
     try {
+      // Persist the user turn and streaming assistant placeholder before generation starts.
+      // This makes both visible immediately after a page refresh.
+      const persistedResponse = await request(`/api/chats/${encodeURIComponent(chat._id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ messages: [...nextMessages, assistant], branchId: options.branchId || activeBranchId, expectedRevision: generationExpectedRevision }),
+      });
+      const persisted = await persistedResponse.json();
+      if (persisted?.chat?.revision != null) {
+        generationExpectedRevision = persisted.chat.revision;
+        setChats((current) => [persisted.chat, ...current.filter((item) => item._id !== persisted.chat._id)]);
+      }
       setStatus('Connecting…');
       const res = await fetchChatStream(
         api('/api/chat/stream'),
@@ -4296,7 +4418,7 @@ export default function App() {
             chatId: chat._id,
             generationId: controller.generationId,
             branchId: options.branchId || activeBranchId,
-            expectedRevision: options.expectedRevision ?? (chat.revision || 0),
+            expectedRevision: generationExpectedRevision,
             assistantMessageId: assistantId,
             thinkingEnabled: thinking,
             modelMode: (preferences.activeModel || 'auto') === 'auto' ? 'auto' : 'manual',
@@ -4448,6 +4570,15 @@ export default function App() {
       };
       const saved = [...nextMessages, liveAssistant];
       if (activeIdRef.current === chat._id) setMessages(saved);
+      try {
+        const generatedResponse = await request('/api/chat/suggestions', { method: 'POST', body: JSON.stringify({ chatId: chat._id, branchId: options.branchId || activeBranchId, messageId: assistantId }) });
+        const generated = await generatedResponse.json();
+        liveAssistant = { ...liveAssistant, suggestedNextSteps: generated.suggestions || [] };
+        const withSuggestions = saved.map((item) => item.id === assistantId ? liveAssistant : item);
+        if (activeIdRef.current === chat._id) setMessages(withSuggestions);
+      } catch {
+        // Suggestions are optional; do not show hardcoded fallbacks when AI generation fails.
+      }
       if (typeof indexedDB !== 'undefined') {
         const dbOpen = indexedDB.open('nemotron-agent-lab', 1);
         dbOpen.onsuccess = () =>
@@ -4948,6 +5079,7 @@ export default function App() {
           setDrawer(false);
           setLibraryOpen(true);
         }}
+        onBulkDelete={bulkDeleteChats}
         deletingChatIds={deletingChatIds}
         chatsLoaded={chatsLoaded}
       />
@@ -4996,8 +5128,11 @@ export default function App() {
               </button>
             </div>
             <div className="meta-row">
-              <span>Type DELETE to confirm permanent deletion of this conversation.</span>
+              <span>Chat, messages and workspace data are always deleted. Choose whether to also remove generated library files and shared links.</span>
             </div>
+            {deletePreview && <div className="meta-row"><span>Preview: {deletePreview.messageCount || 0} messages · {deletePreview.workspaceFiles || 0} workspace files · {deletePreview.libraryFiles || 0} library files · {deletePreview.sharedSegments || 0} shared links</span></div>}
+            <label className="meta-row"><input type="checkbox" checked={deleteLibraryFiles} onChange={(event) => setDeleteLibraryFiles(event.target.checked)} /><span>Also delete generated File Library files ({deletePreview?.libraryFiles ?? '…'})</span></label>
+            <label className="meta-row"><input type="checkbox" checked={deleteSharedSegments} onChange={(event) => setDeleteSharedSegments(event.target.checked)} /><span>Also delete shared links and snapshots ({deletePreview?.sharedSegments ?? '…'})</span></label>
             <label className="meta-row">
               <span>Confirm</span>
               <input

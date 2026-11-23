@@ -26,6 +26,52 @@ export function cancelChatGeneration(generationId, ownerId) {
   return true;
 }
 
+export function cancelChatGenerationsForChat(chatId, ownerId) {
+  let cancelled = 0;
+  for (const [generationId, active] of activeChatGenerations) {
+    if (active.ownerId === String(ownerId) && active.chatId === String(chatId)) {
+      if (cancelChatGeneration(generationId, ownerId)) cancelled += 1;
+    }
+  }
+  return cancelled;
+}
+
+export async function generateSuggestedNextSteps({ user, userPrompt, assistantResponse, toolEvents = [], agentPlan = null }) {
+  const apiKey = decryptUserIntegrations(user).nvidia?.apiKey || process.env.NVIDIA_API_KEY;
+  if (!apiKey) throw Object.assign(new Error('NVIDIA API key is not configured.'), { status: 503 });
+  const compactTools = (Array.isArray(toolEvents) ? toolEvents : []).slice(-20).map((event) => ({
+    tool: String(event.name || '').slice(0, 80),
+    status: String(event.status || '').slice(0, 30),
+    error: String(event.error || '').slice(0, 300),
+  }));
+  const response = await fetch(NVIDIA_ENDPOINT, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: MODEL_REGISTRY.bolt.id,
+      messages: [
+        { role: 'system', content: 'Generate 2 to 4 genuinely useful, context-specific next actions after an assistant response. Do not use generic suggestions. Consider unfinished plan tasks, tool failures, and deliverables. Return ONLY valid JSON: {"suggestions":[{"label":"short action title","prompt":"specific actionable user prompt"}]}. Each label must be 3-55 characters; each prompt 20-500 characters. If no meaningful next action exists, return {"suggestions":[]}.' },
+        { role: 'user', content: JSON.stringify({ userPrompt: String(userPrompt || '').slice(0, 5000), assistantResponse: String(assistantResponse || '').slice(0, 9000), toolEvents: compactTools, agentPlan }).slice(0, 16000) },
+      ],
+      temperature: 0.35,
+      top_p: 0.9,
+      max_tokens: 700,
+      stream: false,
+      chat_template_kwargs: { enable_thinking: false },
+    }),
+    signal: AbortSignal.timeout(25000),
+  });
+  if (!response.ok) throw new Error(`Suggested next steps generation failed with HTTP ${response.status}.`);
+  const data = await response.json();
+  const raw = String(data.choices?.[0]?.message?.content || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  const parsed = JSON.parse(raw);
+  return (Array.isArray(parsed.suggestions) ? parsed.suggestions : []).slice(0, 4).map((item) => ({
+    label: String(item.label || '').trim().slice(0, 55),
+    prompt: String(item.prompt || '').trim().slice(0, 500),
+  })).filter((item) => item.label && item.prompt.length >= 20);
+}
+
+
 function sse(res, payload) {
   let outgoing = payload;
   try { outgoing = res.publishEvent?.(payload) || payload; } catch (error) { log.warn('Generation event persistence failed', { error: error.message }); }
@@ -329,7 +375,7 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
   let activeModel = getModel(modelAlias);
   let escalated = false;
   const controller = new AbortController();
-  if (body.generationId) activeChatGenerations.set(String(body.generationId), { ownerId: userId, controller });
+  if (body.generationId) activeChatGenerations.set(String(body.generationId), { ownerId: userId, chatId: String(body.chatId || ''), controller });
   const turnTimer = setTimeout(() => controller.abort(Object.assign(new Error('This chat turn exceeded its 15-minute time limit. Please retry.'), { code: 'CHAT_TURN_TIMEOUT', status: 504 })), CHAT_TURN_TIMEOUT_MS);
   // A browser disconnect is a transport event, not a user cancellation. Keep
   // model/tool execution alive; SSE writes are already guarded by sse().

@@ -162,7 +162,7 @@ Personalization UI order is Color theme, then Agent personality. Base style, Bas
 - Empty model responses are treated as failures; Auto escalates rather than persisting a generic empty-answer fallback as success.
 
 
-## v8.5.0 reliability upgrade
+## v8.5.1 chat lifecycle upgrade
 - Workspace directory markers are excluded from file operations; nested directories are inferred from file paths, path collisions are rejected, and directory deletion is recursive.
 - Python source snapshots use per-execution temporary roots; runtime snapshots filter legacy markers.
 - Workspace ZIPs are extracted into a clean temporary directory and compared against a path/size/SHA-256 manifest before delivery. Project completeness remains unassessed without a project manifest.

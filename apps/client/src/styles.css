@@ -4542,3 +4542,9 @@ body[data-theme] {
   .persona-presentation-grid { grid-template-columns: 1fr; }
   .persona-formatting-toggles { display: grid; gap: 10px; }
 }
+
+/* v8.5.1 bulk selection controls */
+.history-bulk-toolbar { display:flex; flex-wrap:wrap; gap:6px; padding:8px 12px; border-bottom:1px solid var(--border, rgba(127,127,127,.18)); }
+.history-item > input[type="checkbox"], .library-file > input[type="checkbox"] { flex:0 0 auto; accent-color:var(--accent, #6d8cff); }
+.library-bulk-select { display:flex; align-items:center; gap:7px; font-size:12px; }
+.library-bulk-select input { accent-color:var(--accent, #6d8cff); }

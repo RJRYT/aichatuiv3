@@ -1,5 +1,11 @@
 import { Router } from 'express';
 import { createChat, deleteChat, getChat, listChats, updateChat } from '../services/chatStore.js';
+import { Artifact } from '../models/Artifact.js';
+import { WorkspaceFile } from '../models/WorkspaceFile.js';
+import { Share } from '../models/Share.js';
+import { deleteArtifactsForChat } from '../services/interpreter/artifactStore.js';
+import { deleteGenerationSessionsForChat } from '../services/generationSessions.js';
+import { cancelChatGenerationsForChat } from '../services/nvidia.js';
 import {
   ensureBranches,
   getBranchMessages,
@@ -394,17 +400,65 @@ router.patch('/:id/messages/:messageId', async (req, res, next) => {
     next(error);
   }
 });
+async function removeChatResources(ownerId, chatId, { deleteLibraryFiles = false, deleteSharedSegments = false } = {}) {
+  const chat = await getChat(ownerId, chatId);
+  if (!chat) return { found: false };
+  cancelChatGenerationsForChat(chatId, ownerId);
+  // Remove owned resources before deleting the parent chat so failures remain retryable.
+  await deleteSandboxForChat(ownerId, chatId);
+  await deleteWorkspaceForChat(ownerId, chatId);
+  await deleteAgentCheckpointsForChat(ownerId, chatId);
+  await deleteConversationUploads(ownerId, chatId);
+  await deleteGenerationSessionsForChat(chatId, ownerId);
+  let libraryFilesDeleted = 0;
+  let sharedSegmentsDeleted = 0;
+  if (deleteLibraryFiles) libraryFilesDeleted = await deleteArtifactsForChat(chatId, ownerId);
+  if (deleteSharedSegments) {
+    const result = await Share.deleteMany({ ownerId: String(ownerId), chatId: String(chatId) });
+    sharedSegmentsDeleted = result.deletedCount || 0;
+  }
+  const deleted = await deleteChat(ownerId, chatId);
+  if (!deleted) throw Object.assign(new Error('Chat changed during deletion. Retry the cleanup.'), { status: 409 });
+  return { found: true, libraryFilesDeleted, sharedSegmentsDeleted };
+}
+
+router.get('/:id/deletion-preview', async (req, res, next) => {
+  try {
+    const chat = await getChat(owner(req), req.params.id);
+    if (!chat) return res.status(404).json({ error: 'Chat not found.' });
+    const [workspaceFiles, libraryFiles, sharedSegments] = await Promise.all([
+      WorkspaceFile.countDocuments({ ownerId: owner(req), chatId: String(req.params.id) }),
+      Artifact.countDocuments({ ownerId: owner(req), chatId: String(req.params.id) }),
+      Share.countDocuments({ ownerId: owner(req), chatId: String(req.params.id) }),
+    ]);
+    const messageCount = [...(chat.messages || []), ...(chat.branches || []).flatMap((branch) => branch.messages || [])].length;
+    return res.json({ messageCount, workspaceFiles, libraryFiles, sharedSegments });
+  } catch (error) { next(error); }
+});
+
+router.delete('/bulk', async (req, res, next) => {
+  try {
+    const ids = [...new Set((Array.isArray(req.body?.chatIds) ? req.body.chatIds : []).map(String))].slice(0, 100);
+    if (!ids.length) return res.status(400).json({ error: 'Select at least one conversation.' });
+    const results = [];
+    for (const id of ids) {
+      try {
+        const result = await removeChatResources(owner(req), id, { deleteLibraryFiles: true, deleteSharedSegments: true });
+        results.push({ chatId: id, ...result, ok: result.found });
+      } catch (error) { results.push({ chatId: id, ok: false, error: error.message }); }
+    }
+    return res.json({ ok: results.every((item) => item.ok), deletedCount: results.filter((item) => item.ok).length, results });
+  } catch (error) { next(error); }
+});
+
 router.delete('/:id', async (req, res, next) => {
   try {
-    const deleted = await deleteChat(owner(req), req.params.id);
-    if (!deleted) return res.status(404).json({ error: 'Chat not found.' });
-    await deleteSandboxForChat(owner(req), req.params.id);
-    await deleteWorkspaceForChat(owner(req), req.params.id);
-    await deleteAgentCheckpointsForChat(owner(req), req.params.id);
-    await deleteConversationUploads(owner(req), req.params.id);
-    res.json({ ok: true });
-  } catch (error) {
-    next(error);
-  }
+    const result = await removeChatResources(owner(req), req.params.id, {
+      deleteLibraryFiles: req.body?.deleteLibraryFiles === true,
+      deleteSharedSegments: req.body?.deleteSharedSegments === true,
+    });
+    if (!result.found) return res.status(404).json({ error: 'Chat not found.' });
+    return res.json({ ok: true, ...result });
+  } catch (error) { next(error); }
 });
 export default router;

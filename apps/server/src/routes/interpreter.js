@@ -4,6 +4,7 @@ import {
   getArtifact,
   listArtifacts,
   deleteArtifact,
+  deleteArtifacts,
 } from '../services/interpreter/artifactStore.js';
 import { getChat } from '../services/chatStore.js';
 import { getInterpreterStatus } from '../services/interpreter/sandboxManager.js';
@@ -127,6 +128,16 @@ router.get('/artifacts/:id', async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+router.delete('/artifacts/bulk', async (req, res, next) => {
+  try {
+    const ids = [...new Set((Array.isArray(req.body?.ids) ? req.body.ids : []).map(String))].slice(0, 100);
+    if (!ids.length) return res.status(400).json({ error: 'Select at least one file.' });
+    if (ids.some((id) => !/^(?:[a-f0-9]{24}|[a-f0-9-]{36})$/i.test(id))) return res.status(400).json({ error: 'One or more file IDs are invalid.' });
+    const deletedCount = await deleteArtifacts(ids, owner(req));
+    return res.json({ ok: true, deletedCount });
+  } catch (error) { next(error); }
 });
 
 router.delete('/artifacts/:id', async (req, res, next) => {
