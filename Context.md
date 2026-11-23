@@ -168,3 +168,11 @@ Personalization UI order is Color theme, then Agent personality. Base style, Bas
 - Workspace ZIPs are extracted into a clean temporary directory and compared against a path/size/SHA-256 manifest before delivery. Project completeness remains unassessed without a project manifest.
 - Generation sessions persist SSE events in MongoDB and replay after browser disconnection. Explicit cancellation is separate from transport disconnect. Stale sessions are marked interrupted after 120 seconds without persisted updates; in-flight external model requests cannot resume at exact token position.
 - Tool retries are hard-bounded and further dispatch is blocked after exhaustion. Final responses disclose unresolved tool failures.
+
+
+## v8.5.2 chat UI polish
+
+- Suggested next steps appear only on the latest assistant response in the active conversation.
+- Generation elapsed time uses the persisted original start timestamp after refresh and during event replay.
+- Single-chat deletion uses switches for optional library/share cleanup and hides each control when no matching resources exist.
+- Bulk chat deletion continues to remove all associated resources.

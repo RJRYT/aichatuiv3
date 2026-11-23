@@ -1235,6 +1235,7 @@ function Message({
   progressClock,
   thinking,
   onFollowup,
+  isLastAssistant = false,
 }) {
   const [editing, setEditing] = useState(false),
     [promptExpanded, setPromptExpanded] = useState(false),
@@ -1395,7 +1396,7 @@ function Message({
             )}
           </div>
         )}
-        {!user && !message.isStreaming && content.trim() && onFollowup &&
+        {!user && isLastAssistant && !message.isStreaming && content.trim() && onFollowup &&
           message.suggestedNextSteps?.length > 0 && (
           <div className="next-step-suggestions" aria-label="Suggested next steps">
             <span className="next-step-heading"><Sparkles size={12} /> Suggested next steps</span>
@@ -3417,10 +3418,11 @@ export default function App() {
     setPendingRecovery(null);
     const controller = new AbortController();
     controller.generationId = recovery.generationId;
+    const generationStartedAt = Number(recovery.startedAt) || Date.parse(recovery.assistantStartedAt || '') || Date.now();
     abortRef.current = controller;
     setBusy(true);
     setStatus('Recovering previous generation…');
-    setLiveProgress({ message: 'Reconnecting to the saved generation session…', startedAt: Date.now(), lastActivityAt: Date.now() });
+    setLiveProgress({ message: 'Reconnecting to the saved generation session…', startedAt: generationStartedAt, lastActivityAt: Date.now() });
     void (async () => {
       let recoveredError = '';
       let recoveredMessages = [];
@@ -3438,11 +3440,14 @@ export default function App() {
         recoveredChat = chatPayload.chat;
         recoveredMessages = [...(recoveredChat?.messages || [])];
         recoveredAssistant = recoveredMessages.find((item) => item.id === assistantId && item.role === 'assistant') || [...recoveredMessages].reverse().find((item) => item.role === 'assistant' && item.isStreaming) || null;
+        const persistedStartedAt = Date.parse(recoveredAssistant?.startedAt || recoveredAssistant?.createdAt || '');
+        const stableStartedAt = Number(recovery.startedAt) || persistedStartedAt || generationStartedAt;
         if (!recoveredAssistant) {
           recoveredAssistant = { id: assistantId || uid(), role: 'assistant', content: '', isStreaming: true, toolEvents: [], createdAt: new Date().toISOString() };
           recoveredMessages.push(recoveredAssistant);
         }
         output = String(recoveredAssistant.content || '');
+        setLiveProgress((current) => ({ ...(current || {}), startedAt: stableStartedAt, lastActivityAt: Date.now() }));
         toolEvents = Array.isArray(recoveredAssistant.toolEvents) ? [...recoveredAssistant.toolEvents] : [];
         agentEvents = Array.isArray(recoveredAssistant.agentEvents) ? [...recoveredAssistant.agentEvents] : [];
         agentPlan = recoveredAssistant.agentPlan || null;
@@ -3458,14 +3463,14 @@ export default function App() {
           signal: controller.signal,
           reconnect: (after) => fetch(api(`/api/chat/stream/${recovery.generationId}/events?after=${after}`), { credentials: 'include', headers: { Accept: 'text/event-stream' }, signal: controller.signal }),
         })) {
-          if (event.type === 'heartbeat') setLiveProgress((current) => ({ ...(current || {}), message: event.message || 'The agent is continuing in the background.', lastActivityAt: Date.now() }));
+          if (event.type === 'heartbeat') setLiveProgress((current) => ({ ...(current || {}), startedAt: stableStartedAt, message: event.message || 'The agent is continuing in the background.', lastActivityAt: Date.now() }));
           if (event.type === 'status') setStatus(event.status || 'Recovering…');
           if (event.type === 'chunk') { output += String(event.content || ''); publish(); setLiveProgress(null); }
           if (event.type === 'final_content' && !event.replayTruncated) { output = String(event.content || ''); publish(); }
           if (event.type === 'tool_start') {
             toolEvents = [...toolEvents, { name: event.name, status: 'running', arguments: event.arguments || {}, startedAt: event.startedAt }];
             publish();
-            setLiveProgress({ message: toolActivityMessage(event.name, event.arguments || {}), startedAt: Date.now(), lastActivityAt: Date.now() });
+            setLiveProgress({ message: toolActivityMessage(event.name, event.arguments || {}), startedAt: stableStartedAt, lastActivityAt: Date.now() });
           }
           if (event.type === 'tool_result') {
             const index = toolEvents.map((item) => item.name).lastIndexOf(event.name);
@@ -3476,7 +3481,7 @@ export default function App() {
             const item = event.event || {};
             agentEvents = [...agentEvents, item];
             if (item.plan) agentPlan = item.plan;
-            if (item.type === 'progress_update' && item.message) setLiveProgress({ message: item.message, startedAt: Date.now(), lastActivityAt: Date.now() });
+            if (item.type === 'progress_update' && item.message) setLiveProgress({ message: item.message, startedAt: stableStartedAt, lastActivityAt: Date.now() });
             publish();
           }
           if (event.type === 'model_selected') recoveredAssistant = { ...recoveredAssistant, model: event.model || recoveredAssistant.model, routingDecision: event.routing || recoveredAssistant.routingDecision };
@@ -4724,6 +4729,11 @@ export default function App() {
       <LoginScreen providers={auth.providers} error={auth.error} returnTo={location.pathname} />
     );
 
+  const lastAssistantMessageIndex = messages.reduce(
+    (lastIndex, item, index) => item.role === 'assistant' ? index : lastIndex,
+    -1
+  );
+
   return (
     <div className="app agent-lab" data-theme={theme}>
       <header className="topbar">
@@ -4881,6 +4891,7 @@ export default function App() {
                 <React.Fragment key={m.id || `${m.role}-${m.createdAt}`}>
                   <Message
                     message={m}
+                    isLastAssistant={index === lastAssistantMessageIndex}
                     onCopy={copyText}
                     onEdit={editUserMessage}
                     onBranch={createBranchFrom}
@@ -5131,8 +5142,20 @@ export default function App() {
               <span>Chat, messages and workspace data are always deleted. Choose whether to also remove generated library files and shared links.</span>
             </div>
             {deletePreview && <div className="meta-row"><span>Preview: {deletePreview.messageCount || 0} messages · {deletePreview.workspaceFiles || 0} workspace files · {deletePreview.libraryFiles || 0} library files · {deletePreview.sharedSegments || 0} shared links</span></div>}
-            <label className="meta-row"><input type="checkbox" checked={deleteLibraryFiles} onChange={(event) => setDeleteLibraryFiles(event.target.checked)} /><span>Also delete generated File Library files ({deletePreview?.libraryFiles ?? '…'})</span></label>
-            <label className="meta-row"><input type="checkbox" checked={deleteSharedSegments} onChange={(event) => setDeleteSharedSegments(event.target.checked)} /><span>Also delete shared links and snapshots ({deletePreview?.sharedSegments ?? '…'})</span></label>
+            {Number(deletePreview?.libraryFiles || 0) > 0 && (
+              <Toggle
+                label={`Also delete generated File Library files (${deletePreview.libraryFiles})`}
+                value={deleteLibraryFiles}
+                onChange={setDeleteLibraryFiles}
+              />
+            )}
+            {Number(deletePreview?.sharedSegments || 0) > 0 && (
+              <Toggle
+                label={`Also delete shared links and snapshots (${deletePreview.sharedSegments})`}
+                value={deleteSharedSegments}
+                onChange={setDeleteSharedSegments}
+              />
+            )}
             <label className="meta-row">
               <span>Confirm</span>
               <input

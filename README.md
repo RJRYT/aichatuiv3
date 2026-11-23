@@ -1,4 +1,4 @@
-# Nemotron Agent Lab v8.5.1 — MERN Monorepo
+# Nemotron Agent Lab v8.5.2 — MERN Monorepo
 
 A full-stack Agent Lab interface for NVIDIA Nemotron 3.5 Super VL, built with React, Vite, Express, and MongoDB.
 
