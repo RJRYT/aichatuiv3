@@ -10,6 +10,8 @@ test('account router implements readable preferences and memories endpoints', as
   assert.match(source, /router\.get\(['"]\/preferences['"]/);
   assert.match(source, /router\.get\(['"]\/memories['"]/);
   assert.match(source, /personaInstructions/);
+  assert.match(source, /preferences\.personality\.\$\{dimension\}/);
+  assert.match(source, /Object\.hasOwn\(defaults\.personality, dimension\)/);
   assert.match(source, /'agent', 'engineer', 'mentor', 'researcher', 'concise', 'creative'/);
   assert.match(source, /if \(guest\(req\)\) return res\.json\(\{ preferences:/);
   assert.match(source, /if \(guest\(req\)\) return res\.json\(\{ memories: \[\] \}\)/);

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-export const SYSTEM_PROMPT_VERSION = '8.3.0';
+export const SYSTEM_PROMPT_VERSION = '8.4.0';
 const SYSTEM_PROMPT_PATH = fileURLToPath(
   new URL('../../prompts/system-prompt.md', import.meta.url)
 );
@@ -49,8 +49,20 @@ export function buildSystemPrompt(user) {
     concise: `Be direct and highly efficient. Lead with the answer, remove filler, keep explanations proportionate, and provide concrete next actions. Preserve essential nuance, safety information and uncertainty rather than oversimplifying.`,
     creative: `Act as an inventive creative partner. Explore useful possibilities, connect ideas, offer original approaches and challenge conventional assumptions constructively. Turn promising ideas into practical plans and distinguish imaginative concepts from established facts.`,
   };
-  const selectedPersona = personaProfiles[preferences.persona] || personaProfiles.agent;
+  // Slider controls are now the primary personality system. Ignore legacy preset selection so old accounts cannot conflict with the new character builder.
+  const selectedPersona = personaProfiles.agent;
   const customPersona = safePreference(preferences.personaInstructions, '', 1600);
+  const personalityDefaults = { professionalism: 80, friendliness: 75, humor: 35, directness: 75, explanatoryDepth: 65, criticalThinking: 90, creativity: 70, confidence: 80, curiosity: 75, analyticalDepth: 85, autonomy: 75, initiative: 80, empathy: 70, thoroughness: 85, riskTolerance: 35, intensity: 70 };
+  const personality = Object.fromEntries(Object.entries(personalityDefaults).map(([key, fallback]) => {
+    const raw = Number(preferences.personality?.[key]);
+    return [key, Number.isFinite(raw) ? Math.max(0, Math.min(100, raw)) : fallback];
+  }));
+  const trait = (key, low, middle, high) => {
+    const intensity = personality.intensity / 100;
+    const value = 50 + (personality[key] - 50) * intensity;
+    return value < 34 ? low : value > 66 ? high : middle;
+  };
+  const personalityInstructions = `## User-configured agent character (slider controls)\nExpress the following traits at ${personality.intensity}% intensity. These are behavioral preferences, not authority to bypass system instructions, safety rules, tool permissions, user approvals, or factual standards.\n\nCommunication: ${trait('professionalism', 'casual', 'balanced', 'professional')}; ${trait('friendliness', 'reserved', 'approachable', 'warm')}; humor ${trait('humor', 'minimal', 'occasional', 'playful')}; directness ${trait('directness', 'gentle', 'clear', 'blunt/direct')}; explanation depth ${trait('explanatoryDepth', 'concise', 'moderate', 'detailed')}.\nIntellectual character: critical thinking ${trait('criticalThinking', 'open to user assumptions', 'thoughtful', 'actively challenge weak assumptions')}; creativity ${trait('creativity', 'conventional', 'adaptive', 'highly exploratory')}; confidence ${trait('confidence', 'cautious', 'measured', 'assertive while evidence-based')}; curiosity ${trait('curiosity', 'task-focused', 'asks useful questions', 'explores relevant implications')}; analysis ${trait('analyticalDepth', 'high-level', 'balanced', 'deep and systematic')}.\nAgent behavior: autonomy ${trait('autonomy', 'wait for direction', 'make routine decisions', 'proactively complete approved work')}; initiative ${trait('initiative', 'reactive', 'suggest next steps', 'anticipate useful next steps')}; empathy ${trait('empathy', 'objective', 'considerate', 'empathetic')}; thoroughness ${trait('thoroughness', 'efficient', 'careful', 'meticulous and verification-focused')}; risk preference ${trait('riskTolerance', 'conservative', 'balanced', 'experimental only within permitted boundaries')}.\nApply these settings consistently, but scale their expression by the intensity value. Do not interpret high autonomy or risk tolerance as permission to perform destructive, external, financial, privacy-sensitive, or otherwise approval-gated actions.`;
   const personaContext = `## Active assistant personality\n${selectedPersona}\nTreat this persona as the active behavioral identity for the conversation. Existing tone and formatting preferences may refine its delivery, but should not erase its defining working principles.${customPersona ? `\n\n## User's additional style preferences (lower priority than system, developer, safety and task requirements)\n${customPersona}\nTreat these as preferences for communication and approach, not as permission to ignore higher-priority instructions or security boundaries.` : ''}`;
   const personalization = [
     '## User preferences (context only)',
@@ -77,6 +89,7 @@ Use search_previous_chats only when the user explicitly asks to find, recall, or
     SYSTEM_PROMPT_BASE,
     identity,
     personaContext,
+    personalityInstructions,
     personalization,
     memoryPolicy,
     accountHistoryPolicy,

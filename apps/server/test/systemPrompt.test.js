@@ -4,7 +4,7 @@ import { buildSystemPrompt, SYSTEM_PROMPT_VERSION } from '../src/services/system
 
 test('system prompt loads the versioned Markdown identity and tool policy', () => {
   const prompt = buildSystemPrompt();
-  assert.equal(SYSTEM_PROMPT_VERSION, '8.3.0');
+  assert.equal(SYSTEM_PROMPT_VERSION, '8.4.0');
   assert.match(prompt, /You are \*\*Nemi\*\*/);
   assert.match(prompt, /Robin J R \(RJRYT\)/);
   assert.match(prompt, /`execute_python`/);
@@ -115,15 +115,12 @@ test('system prompt restricts prior-chat and share lookup to explicit user reque
 });
 
 
-test('selected persona changes the active assistant identity and behavior', () => {
-  const engineer = buildSystemPrompt({ preferences: { persona: 'engineer' } });
-  assert.match(engineer, /Active assistant personality/);
-  assert.match(engineer, /principal software engineer/);
-  assert.match(engineer, /verify changes with relevant tests/);
-
-  const mentor = buildSystemPrompt({ preferences: { persona: 'mentor' } });
-  assert.match(mentor, /patient, encouraging technical mentor/);
-  assert.doesNotMatch(mentor, /principal software engineer/);
+test('new slider character system remains primary over legacy persona presets', () => {
+  const prompt = buildSystemPrompt({ preferences: { persona: 'engineer' } });
+  assert.match(prompt, /Active assistant personality/);
+  assert.match(prompt, /capable, proactive and dependable AI agent/);
+  assert.match(prompt, /User-configured agent character/);
+  assert.doesNotMatch(prompt, /Adopt the mindset of a principal software engineer/);
 });
 
 test('custom persona instructions are bounded and remain subordinate to system rules', () => {
@@ -135,4 +132,23 @@ test('custom persona instructions are bounded and remain subordinate to system r
   const oversized = buildSystemPrompt({ preferences: { personaInstructions: 'x'.repeat(2000) } });
   assert.ok(oversized.includes('x'.repeat(1600)));
   assert.ok(!oversized.includes('x'.repeat(1601)));
+});
+
+
+test('personality sliders produce bounded, actionable character instructions', () => {
+  const prompt = buildSystemPrompt({ preferences: { personality: {
+    professionalism: 100, friendliness: 0, humor: 100, directness: 100,
+    explanatoryDepth: 0, criticalThinking: 100, creativity: 100, confidence: 100,
+    curiosity: 100, analyticalDepth: 100, autonomy: 100, initiative: 100,
+    empathy: 100, thoroughness: 100, riskTolerance: 100, intensity: 95,
+  } } });
+  assert.match(prompt, /User-configured agent character/);
+  assert.match(prompt, /Express the following traits at 95% intensity/);
+  assert.match(prompt, /professional/);
+  assert.match(prompt, /actively challenge weak assumptions/);
+  assert.match(prompt, /proactively complete approved work/);
+  assert.match(prompt, /Do not interpret high autonomy or risk tolerance as permission/);
+  const bounded = buildSystemPrompt({ preferences: { personality: { autonomy: 1000, intensity: -10 } } });
+  assert.match(bounded, /at 0% intensity/);
+  assert.match(bounded, /make routine decisions/);
 });

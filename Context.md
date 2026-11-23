@@ -138,3 +138,12 @@ For this v8 upgrade, dependency installation could not complete in the build env
 - Users may add up to 1,600 characters of custom personality guidance. It is saved in `User.preferences.personaInstructions` and injected into `buildSystemPrompt` as lower-priority preference context.
 - Persona choices are persisted in `User.preferences.persona`; existing accounts use the `agent` default without migration.
 - Developer Mode credential inputs now have theme-aware field styling and accessible focus states.
+
+
+## v8.4.0 personality builder
+
+- Replaced preset-first personality UI with 3 groups: Communication Style, Intellectual Character, and Agent Behavior.
+- Slider values are persisted under `User.preferences.personality`: professionalism, friendliness, humor, directness, explanatoryDepth, criticalThinking, creativity, confidence, curiosity, analyticalDepth, autonomy, initiative, empathy, thoroughness, riskTolerance, and intensity.
+- `buildSystemPrompt` translates slider values into bounded behavioral guidance. Intensity interpolates each trait toward neutral at 0%; 100% expresses the configured trait fully.
+- UI includes quick starts, live summary, reset, optional custom instructions, up to 12 local saved profiles, and JSON import/export.
+- High autonomy and risk tolerance do not bypass tool policy, approvals, or safety boundaries.

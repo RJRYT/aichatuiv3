@@ -35,6 +35,7 @@ const defaults = {
   activeModel: 'auto',
   persona: 'agent',
   personaInstructions: '',
+  personality: { professionalism: 80, friendliness: 75, humor: 35, directness: 75, explanatoryDepth: 65, criticalThinking: 90, creativity: 70, confidence: 80, curiosity: 75, analyticalDepth: 85, autonomy: 75, initiative: 80, empathy: 70, thoroughness: 85, riskTolerance: 35, intensity: 70 },
 };
 function guest(req) {
   return String(req.user?._id || '').startsWith('guest:');
@@ -91,9 +92,9 @@ router.get('/profile', async (req, res) => {
   res.json({ user });
 });
 router.get('/preferences', async (req, res) => {
-  if (guest(req)) return res.json({ preferences: { ...defaults } });
+  if (guest(req)) return res.json({ preferences: { ...defaults, personality: { ...defaults.personality } } });
   const user = await User.findById(req.user._id).select('preferences').lean();
-  res.json({ preferences: { ...defaults, ...(user?.preferences || {}) } });
+  res.json({ preferences: { ...defaults, ...(user?.preferences || {}), personality: { ...defaults.personality, ...(user?.preferences?.personality || {}) } } });
 });
 router.get('/memories', async (req, res) => {
   if (guest(req)) return res.json({ memories: [] });
@@ -113,6 +114,16 @@ router.patch('/preferences', async (req, res) => {
       next['preferences.personaInstructions'] = value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').trim().slice(0, 1600);
       continue;
     }
+    if (key === 'personality') {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+      for (const [dimension, raw] of Object.entries(value)) {
+        if (!Object.hasOwn(defaults.personality, dimension)) continue;
+        const numeric = Number(raw);
+        if (!Number.isFinite(numeric)) continue;
+        next[`preferences.personality.${dimension}`] = Math.max(0, Math.min(100, Math.round(numeric / 5) * 5));
+      }
+      continue;
+    }
     if (key === 'warmth' || key === 'enthusiasm') {
       const numeric = Number(value);
       if (!Number.isFinite(numeric) || numeric < 1 || numeric > 5) continue;
@@ -125,11 +136,19 @@ router.patch('/preferences', async (req, res) => {
     if (['baseStyle', 'tone', 'emoji'].includes(key) && typeof value !== 'string') continue;
     next[`preferences.${key}`] = value;
   }
-  if (guest(req)) return res.json({ preferences: { ...defaults, ...Object.fromEntries(Object.entries(next).map(([key, value]) => [key.replace(/^preferences\./, ''), value])) } });
+  if (guest(req)) {
+    const guestPreferences = { ...defaults, personality: { ...defaults.personality } };
+    for (const [path, value] of Object.entries(next)) {
+      const parts = path.replace(/^preferences\./, '').split('.');
+      if (parts[0] === 'personality' && parts[1]) guestPreferences.personality[parts[1]] = value;
+      else guestPreferences[parts[0]] = value;
+    }
+    return res.json({ preferences: guestPreferences });
+  }
   const user = await User.findByIdAndUpdate(req.user._id, { $set: next }, { new: true })
     .select('preferences')
     .lean();
-  res.json({ preferences: { ...defaults, ...user.preferences } });
+  res.json({ preferences: { ...defaults, ...user.preferences, personality: { ...defaults.personality, ...(user.preferences?.personality || {}) } } });
 });
 router.post('/memories', async (req, res) => {
   const userId = String(req.user._id);

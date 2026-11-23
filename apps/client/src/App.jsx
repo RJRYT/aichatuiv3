@@ -83,6 +83,7 @@ const DEFAULT_PREFERENCES = {
   activeModel: 'auto',
   persona: 'agent',
   personaInstructions: '',
+  personality: { professionalism: 80, friendliness: 75, humor: 35, directness: 75, explanatoryDepth: 65, criticalThinking: 90, creativity: 70, confidence: 80, curiosity: 75, analyticalDepth: 85, autonomy: 75, initiative: 80, empathy: 70, thoroughness: 85, riskTolerance: 35, intensity: 70 },
 };
 const PLUGIN_CATALOG = [
   { id: 'execute_python', name: 'Python sandbox', description: 'execute code in an isolated environment', configurable: true },
@@ -2105,6 +2106,16 @@ function ChatMetaDialog({ chat, onClose, onSave }) {
     </div>
   );
 }
+function buildPersonalityPreview(values = {}) {
+  const value = (key, fallback = 50) => Number(values[key] ?? fallback);
+  const choose = (v, low, mid, high) => v < 34 ? low : v > 66 ? high : mid;
+  const tone = `${choose(value('professionalism', 80), 'casual', 'balanced', 'professional')} and ${choose(value('friendliness', 75), 'reserved', 'approachable', 'warm')}`;
+  const communication = `${choose(value('directness', 75), 'gentle', 'clear', 'direct')}, ${choose(value('explanatoryDepth', 65), 'concise', 'well-explained', 'detailed')}${value('humor', 35) > 66 ? ', with a playful sense of humor' : value('humor', 35) < 34 ? ', with a serious tone' : ''}`;
+  const thinking = `${choose(value('criticalThinking', 90), 'open-minded', 'thoughtful', 'strongly critical')} and ${choose(value('creativity', 70), 'practical', 'adaptable', 'creative')}, with ${choose(value('analyticalDepth', 85), 'high-level', 'balanced', 'deep')} analysis`;
+  const behavior = `${choose(value('autonomy', 75), 'instruction-led', 'self-directed', 'proactive within permissions')}, ${choose(value('initiative', 80), 'reactive', 'engaged', 'initiative-taking')}, and ${choose(value('thoroughness', 85), 'efficient', 'careful', 'meticulous')}`;
+  return `Nemi communicates in a ${tone} manner: ${communication}. It approaches problems with ${thinking}. Its working style is ${behavior}. It maintains ${choose(value('empathy', 70), 'objective', 'considerate', 'empathetic')} interactions and ${choose(value('confidence', 80), 'cautious', 'measured', 'confident')} recommendations. Risk preference is ${choose(value('riskTolerance', 35), 'conservative', 'balanced', 'experimental')}. Personality traits are expressed at ${value('intensity', 70)}% intensity.`;
+}
+
 function PreferencesDialog({
   open,
   onClose,
@@ -2145,6 +2156,11 @@ function PreferencesDialog({
   const [integrationBusy, setIntegrationBusy] = useState('');
   const [integrationMessage, setIntegrationMessage] = useState('');
   const [personaDraft, setPersonaDraft] = useState(preferences.personaInstructions || '');
+  const defaultPersonality = DEFAULT_PREFERENCES.personality;
+  const [personalityDraft, setPersonalityDraft] = useState({ ...defaultPersonality, ...(preferences.personality || {}) });
+  const [personalityProfiles, setPersonalityProfiles] = useState([]);
+  const [profileNameDraft, setProfileNameDraft] = useState('');
+  const [personalityMessage, setPersonalityMessage] = useState('');
   const usernameValid = /^[a-z0-9_]{3,24}$/.test(username);
   useEffect(() => {
     setPersonaDraft(preferences.personaInstructions || '');
@@ -2154,6 +2170,19 @@ function PreferencesDialog({
     const timer = setTimeout(() => update('personaInstructions', personaDraft), 550);
     return () => clearTimeout(timer);
   }, [personaDraft, open, preferences.personaInstructions]);
+  useEffect(() => {
+    if (!open) return;
+    setPersonalityDraft({ ...defaultPersonality, ...(preferences.personality || {}) });
+    try {
+      const saved = JSON.parse(localStorage.getItem('nemotron.personalityProfiles') || '[]');
+      setPersonalityProfiles(Array.isArray(saved) ? saved.slice(0, 12) : []);
+    } catch { setPersonalityProfiles([]); }
+  }, [open]);
+  useEffect(() => {
+    if (!open || JSON.stringify(personalityDraft) === JSON.stringify({ ...defaultPersonality, ...(preferences.personality || {}) })) return undefined;
+    const timer = setTimeout(() => setPreferences((current) => ({ ...current, personality: personalityDraft })), 450);
+    return () => clearTimeout(timer);
+  }, [personalityDraft, open]);
   useEffect(() => {
     if (open) {
       setTab('profile');
@@ -2646,35 +2675,83 @@ function PreferencesDialog({
           </div>
         ) : tab === 'personalization' ? (
           <div className="preference-grid">
-            <section className="persona-section">
+            <section className="persona-section personality-builder">
               <div className="persona-heading">
                 <div>
                   <b>Agent personality</b>
-                  <p>Choose how Nemi thinks, communicates, and approaches work. This affects its system instructions across conversations.</p>
+                  <p>Build Nemi's character with independent controls. Changes are applied to the actual system instructions, not just the preview.</p>
                 </div>
-                <span className="persona-active">{({ agent: 'Nemi Agent', engineer: 'Principal Engineer', mentor: 'Patient Mentor', researcher: 'Research Analyst', concise: 'Direct & Concise', creative: 'Creative Partner' })[preferences.persona || 'agent']}</span>
+                <span className="persona-active">Custom character</span>
               </div>
-              <div className="persona-preset-grid">
+              <div className="personality-quickstarts">
+                <span>Quick starts</span>
                 {[
-                  { id: 'agent', name: 'Nemi Agent', description: 'Proactive, capable, reliable and outcome-focused.' },
-                  { id: 'engineer', name: 'Principal Engineer', description: 'Thinks architecturally, challenges assumptions and verifies implementations.' },
-                  { id: 'mentor', name: 'Patient Mentor', description: 'Explains clearly, teaches progressively and encourages learning.' },
-                  { id: 'researcher', name: 'Research Analyst', description: 'Evidence-led, curious, precise and transparent about uncertainty.' },
-                  { id: 'concise', name: 'Direct & Concise', description: 'Prioritizes answers, decisions and actionable steps without fluff.' },
-                  { id: 'creative', name: 'Creative Partner', description: 'Explores ideas, connects concepts and proposes original approaches.' },
-                ].map((persona) => (
-                  <button type="button" key={persona.id} className={`persona-preset ${preferences.persona === persona.id || (!preferences.persona && persona.id === 'agent') ? 'selected' : ''}`} onClick={() => update('persona', persona.id)} aria-pressed={(preferences.persona || 'agent') === persona.id}>
-                    <span className="persona-preset-title">{persona.name}</span>
-                    <span className="persona-preset-description">{persona.description}</span>
-                    {(preferences.persona || 'agent') === persona.id && <Check size={14} />}
-                  </button>
-                ))}
+                  ['Balanced', { professionalism: 70, friendliness: 70, humor: 40, directness: 65, explanatoryDepth: 55, criticalThinking: 65, creativity: 60, confidence: 65, curiosity: 60, analyticalDepth: 65, autonomy: 60, initiative: 60, empathy: 70, thoroughness: 70, riskTolerance: 35, intensity: 65 }],
+                  ['Engineering', { professionalism: 90, friendliness: 55, humor: 15, directness: 85, explanatoryDepth: 75, criticalThinking: 95, creativity: 65, confidence: 75, curiosity: 75, analyticalDepth: 95, autonomy: 80, initiative: 85, empathy: 55, thoroughness: 95, riskTolerance: 25, intensity: 85 }],
+                  ['Mentor', { professionalism: 65, friendliness: 90, humor: 45, directness: 55, explanatoryDepth: 95, criticalThinking: 75, creativity: 70, confidence: 70, curiosity: 85, analyticalDepth: 75, autonomy: 55, initiative: 70, empathy: 95, thoroughness: 80, riskTolerance: 25, intensity: 75 }],
+                  ['Researcher', { professionalism: 85, friendliness: 55, humor: 10, directness: 75, explanatoryDepth: 85, criticalThinking: 100, creativity: 70, confidence: 65, curiosity: 95, analyticalDepth: 100, autonomy: 65, initiative: 75, empathy: 50, thoroughness: 95, riskTolerance: 20, intensity: 85 }],
+                ].map(([name, values]) => <button type="button" key={name} onClick={() => { setPersonalityDraft({ ...defaultPersonality, ...values }); setPersonalityMessage(`${name} quick start applied. You can still adjust every slider.`); }}>{name}</button>)}
               </div>
+              {[
+                { id: 'communication', title: 'Communication style', description: 'How Nemi speaks and presents information.', dimensions: [
+                  ['professionalism', 'Professionalism', 'Casual', 'Formal'], ['friendliness', 'Friendliness', 'Reserved', 'Warm'], ['humor', 'Humor', 'Serious', 'Playful'], ['directness', 'Directness', 'Gentle', 'Blunt'], ['explanatoryDepth', 'Explanatory depth', 'Concise', 'Detailed'],
+                ] },
+                { id: 'intellectual', title: 'Intellectual character', description: 'How Nemi reasons, questions, and explores ideas.', dimensions: [
+                  ['criticalThinking', 'Critical thinking', 'Agreeable', 'Challenges assumptions'], ['creativity', 'Creativity', 'Conventional', 'Innovative'], ['confidence', 'Confidence', 'Cautious', 'Assertive'], ['curiosity', 'Curiosity', 'Task-focused', 'Exploratory'], ['analyticalDepth', 'Analytical depth', 'High-level', 'Deep analysis'],
+                ] },
+                { id: 'behavior', title: 'Agent behavior', description: 'How Nemi takes initiative and handles work.', dimensions: [
+                  ['autonomy', 'Autonomy', 'Wait for direction', 'Proactive within permissions'], ['initiative', 'Initiative', 'Reactive', 'Takes initiative'], ['empathy', 'Empathy', 'Objective', 'Empathetic'], ['thoroughness', 'Thoroughness', 'Lightweight', 'Meticulous'], ['riskTolerance', 'Risk tolerance', 'Conservative', 'Experimental'],
+                ] },
+              ].map((group) => (
+                <div className="personality-group" key={group.id}>
+                  <div className="personality-group-heading"><b>{group.title}</b><small>{group.description}</small></div>
+                  <div className="personality-slider-grid">
+                    {group.dimensions.map(([key, label, low, high]) => (
+                      <label className="personality-slider" key={key}>
+                        <span className="personality-slider-title"><b>{label}</b><output>{personalityDraft[key] ?? defaultPersonality[key]}%</output></span>
+                        <input type="range" min="0" max="100" step="5" value={personalityDraft[key] ?? defaultPersonality[key]} onChange={(event) => setPersonalityDraft((current) => ({ ...current, [key]: Number(event.target.value) }))} />
+                        <span className="personality-slider-ends"><small>{low}</small><small>{high}</small></span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              <div className="personality-intensity">
+                <div className="personality-group-heading"><b>Personality intensity</b><small>Controls how strongly these traits shape the agent's behavior.</small></div>
+                <label className="personality-slider">
+                  <span className="personality-slider-title"><b>Trait expression</b><output>{personalityDraft.intensity ?? 70}%</output></span>
+                  <input type="range" min="0" max="100" step="5" value={personalityDraft.intensity ?? 70} onChange={(event) => setPersonalityDraft((current) => ({ ...current, intensity: Number(event.target.value) }))} />
+                  <span className="personality-slider-ends"><small>Subtle</small><small>Strong character</small></span>
+                </label>
+              </div>
+              <div className="personality-preview">
+                <div><b>Live personality preview</b><small>Illustrative summary of the current controls</small></div>
+                <p>{buildPersonalityPreview(personalityDraft)}</p>
+              </div>
+              <div className="personality-profile-tools">
+                <label>Save profile<input value={profileNameDraft} maxLength={32} onChange={(event) => setProfileNameDraft(event.target.value)} placeholder="e.g. Principal Engineer" /></label>
+                <button type="button" className="secondary-button" disabled={!profileNameDraft.trim()} onClick={() => {
+                  const next = [...personalityProfiles.filter((item) => item.name !== profileNameDraft.trim()), { name: profileNameDraft.trim(), values: personalityDraft }].slice(-12);
+                  setPersonalityProfiles(next); localStorage.setItem('nemotron.personalityProfiles', JSON.stringify(next)); setProfileNameDraft(''); setPersonalityMessage('Personality profile saved on this device.');
+                }}>Save profile</button>
+                <button type="button" className="secondary-button" onClick={() => { setPersonalityDraft({ ...defaultPersonality }); setPersonalityMessage('Personality controls reset to defaults.'); }}>Reset controls</button>
+                <button type="button" className="secondary-button" onClick={() => {
+                  const blob = new Blob([JSON.stringify({ version: 1, personality: personalityDraft }, null, 2)], { type: 'application/json' });
+                  const url = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'nemi-personality.json'; anchor.click(); URL.revokeObjectURL(url);
+                }}>Export</button>
+                <label className="personality-import">Import<input type="file" accept="application/json,.json" onChange={async (event) => {
+                  try { const file = event.target.files?.[0]; if (!file) return; const parsed = JSON.parse(await file.text()); const source = parsed.personality || parsed; const next = Object.fromEntries(Object.keys(defaultPersonality).map((key) => { const numeric = Number(source[key] ?? defaultPersonality[key]); return [key, Number.isFinite(numeric) ? Math.max(0, Math.min(100, Math.round(numeric / 5) * 5)) : defaultPersonality[key]]; })); setPersonalityDraft(next); setPersonalityMessage('Personality profile imported.'); }
+                  catch { setPersonalityMessage('Could not import that personality file.'); } finally { event.target.value = ''; }
+                }} /></label>
+              </div>
+              {personalityProfiles.length > 0 && <div className="personality-saved-profiles"><b>Saved profiles</b>{personalityProfiles.map((profile) => <div key={profile.name}><button type="button" onClick={() => { setPersonalityDraft({ ...defaultPersonality, ...profile.values }); setPersonalityMessage(`${profile.name} loaded.`); }}>{profile.name}</button><button type="button" aria-label={`Delete ${profile.name}`} onClick={() => { const next = personalityProfiles.filter((item) => item.name !== profile.name); setPersonalityProfiles(next); localStorage.setItem('nemotron.personalityProfiles', JSON.stringify(next)); }}>×</button></div>)}</div>}
+              <small className="personality-message">Slider changes auto-save to your account. Named profiles are stored locally on this device.</small>
+              {personalityMessage && <small className="personality-message">{personalityMessage}</small>}
               <label className="persona-custom-label">
-                Custom personality instructions <span>Optional · up to 1,600 characters</span>
-                <textarea maxLength={1600} rows={3} value={personaDraft} onChange={(event) => setPersonaDraft(event.target.value)} onBlur={() => { if (personaDraft !== (preferences.personaInstructions || '')) update('personaInstructions', personaDraft); }} placeholder="Example: Be a rigorous senior engineering partner. Identify risks early, explain trade-offs, verify important claims, and prefer maintainable solutions over quick hacks." />
+                Additional personality instructions <span>Optional · up to 1,600 characters</span>
+                <textarea maxLength={1600} rows={3} value={personaDraft} onChange={(event) => setPersonaDraft(event.target.value)} onBlur={() => { if (personaDraft !== (preferences.personaInstructions || '')) update('personaInstructions', personaDraft); }} placeholder="Example: Challenge weak assumptions, explain important trade-offs, and verify implementations before declaring completion." />
               </label>
-              <small className="persona-character-count">{personaDraft.length}/1600 · Custom instructions refine the selected personality; they cannot override safety or system rules.</small>
+              <small className="persona-character-count">{personaDraft.length}/1600 · Custom instructions cannot override safety, permissions, or system rules.</small>
             </section>
             <div className="theme-picker-section">
               <div className="theme-picker-heading">
