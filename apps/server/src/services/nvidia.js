@@ -303,7 +303,7 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
     sse(res, { type: 'status', status: 'Selecting model' });
     const routingHeartbeat = setInterval(() => sse(res, { type: 'heartbeat', phase: 'router', message: 'Choosing the best Nemotron model for this task.' }), 4000);
     try {
-      routingDecision = await routeModel({ messages: input, apiKey: nvidiaApiKey });
+      routingDecision = await routeModel({ messages: body.messages, apiKey: nvidiaApiKey });
       modelAlias = routingDecision.alias;
     } finally { clearInterval(routingHeartbeat); }
   }

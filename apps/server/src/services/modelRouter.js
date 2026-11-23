@@ -17,6 +17,27 @@ function contentText(parts = []) {
   return parts.filter((part) => part?.type === 'text').map((part) => part.text || '').join(' ');
 }
 
+
+function isContextualFollowUp(message = {}) {
+  const text = messageText(message).trim();
+  if (!text || text.length > 320) return false;
+  return /\b(it|this|that|these|those|same|above|previous|earlier|the file|the result|the output|the code|the project|next step|continue|proceed|retry|try again|yes|sure|please|do it|go ahead|sounds good|also|now|check|test|run|open|download|modify|update|fix|improve|explain|verify|validate)\b/i.test(text);
+}
+
+export function previousTurnModel(messages = []) {
+  const latestUserIndex = messages.map((message) => message.role).lastIndexOf('user');
+  if (latestUserIndex < 0) return null;
+  const latestUser = messages[latestUserIndex];
+  if (!isContextualFollowUp(latestUser)) return null;
+  for (let index = latestUserIndex - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== 'assistant') continue;
+    const alias = String(message.model?.alias || message.modelAlias || message.model?.modelAlias || '').toLowerCase();
+    return MODEL_REGISTRY[alias] ? alias : null;
+  }
+  return null;
+}
+
 function routingContextText(messages = []) {
   const userMessages = messages.filter((message) => message.role === 'user').slice(-6);
   if (!userMessages.length) return '';
@@ -29,7 +50,8 @@ function routingContextText(messages = []) {
 export function requiresAgentExecution(text = '') {
   return /\b(build|implement|debug|refactor|research|deploy|test|modify|fix|write files|repository|codebase|project|run tests|execute code|install dependencies|compile|review code|audit code|inspect code|analyze code|analyse code|use tools|search (?:the )?web|search on (?:the )?web|web search|search online|look up|browse|fetch|open (?:the )?url|visit (?:the )?website|check online|latest|current version|up[- ]to[- ]date|recent release|today)\b/i.test(text)
     || /\b(create|write|generate|save)\s+(?:a|an|the)?\s*(?:(?:python|javascript|typescript|node(?:\.js)?|react)?\s*)?(?:file|folder|project|app|application|website|repo|repository|component|module|package|script|code|document|spreadsheet|presentation|image|picture|illustration|diagram|logo|icon)\b/i.test(text)
-    || /\bsave\s+(?:it|this|the result|the output)\s+(?:as|to)\s+(?:a\s+)?file\b/i.test(text);
+    || /\bsave\s+(?:it|this|the result|the output)\s+(?:as|to)\s+(?:a\s+)?file\b/i.test(text)
+    || (/\b(create|make|generate)\s+(?:one|it)\b/i.test(text) && /\b(html|file|script|document|website|app|project)\b/i.test(text));
 }
 
 export function requiresToolCapableModel(messages = []) {
@@ -55,6 +77,25 @@ export function ruleBasedRoute(messages = []) {
 
 export async function routeModel({ messages, apiKey, signal }) {
   const fallback = ruleBasedRoute(messages);
+  const continuationAlias = previousTurnModel(messages);
+  // Preserve the model that performed the previous turn for contextual follow-ups.
+  if (continuationAlias && continuationAlias !== 'bolt') {
+    const previousModel = getModel(continuationAlias);
+    const latest = latestUserMessage(messages);
+    const latestContent = Array.isArray(latest.content) ? latest.content : [];
+    const hasImage = latestContent.some((part) => part?.type === 'image_url');
+    const hasAudio = latestContent.some((part) => part?.type === 'audio_url' || part?.type === 'input_audio');
+    if ((!hasImage || previousModel.supportsVision) && (!hasAudio || previousModel.supportsAudio)) {
+      return {
+        alias: continuationAlias,
+        taskType: 'conversation_continuation',
+        complexity: 'medium',
+        reason: `Continuing the previous turn with ${previousModel.name}; the latest message refers to the existing task or its output.`,
+        confidence: 0.94,
+        source: 'conversation-continuity',
+      };
+    }
+  }
   if (!apiKey) return fallback;
   const latest = latestUserMessage(messages);
   const context = routingContextText(messages);

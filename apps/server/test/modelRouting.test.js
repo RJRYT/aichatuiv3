@@ -126,3 +126,52 @@ test('AI router cannot override a recent tool requirement by selecting Bolt', as
     assert.equal(result.source, 'capability-guard');
   } finally { globalThis.fetch = oldFetch; }
 });
+
+
+test('contextual follow-ups retain the model used for the previous assistant response', async () => {
+  const { routeModel, previousTurnModel } = await import('../src/services/modelRouter.js');
+  const messages = [
+    { role: 'user', content: 'Build a standalone HTML simulation and save the file.' },
+    { role: 'assistant', content: 'Created the HTML file.', model: { alias: 'surge' } },
+    { role: 'user', content: 'Can you check whether the file works?' },
+  ];
+  assert.equal(previousTurnModel(messages), 'surge');
+  const result = await routeModel({ messages, apiKey: 'unused-for-continuation' });
+  assert.equal(result.alias, 'surge');
+  assert.equal(result.source, 'conversation-continuity');
+});
+
+test('follow-up references to generated output preserve Surge even when the prompt is short', async () => {
+  const { routeModel } = await import('../src/services/modelRouter.js');
+  const messages = [
+    { role: 'user', content: 'Create an HTML file with an interactive chart.' },
+    { role: 'assistant', content: 'The file is ready.', model: { alias: 'surge' } },
+    { role: 'user', content: 'How do I download it?' },
+  ];
+  const result = await routeModel({ messages, apiKey: 'unused-for-continuation' });
+  assert.equal(result.alias, 'surge');
+  assert.equal(result.source, 'conversation-continuity');
+});
+
+test('a standalone new question does not inherit the previous model', async () => {
+  const { routeModel, previousTurnModel } = await import('../src/services/modelRouter.js');
+  const messages = [
+    { role: 'user', content: 'Build an HTML file.' },
+    { role: 'assistant', content: 'The file is ready.', model: { alias: 'surge' } },
+    { role: 'user', content: 'What is the capital of Japan?' },
+  ];
+  assert.equal(previousTurnModel(messages), null);
+  const result = await routeModel({ messages, apiKey: '' });
+  assert.equal(result.alias, 'bolt');
+});
+
+test('a previous Bolt response cannot keep a tool-requiring continuation on Bolt', async () => {
+  const { routeModel } = await import('../src/services/modelRouter.js');
+  const messages = [
+    { role: 'user', content: 'Explain what an HTML file is.' },
+    { role: 'assistant', content: 'It is a markup document.', model: { alias: 'bolt' } },
+    { role: 'user', content: 'Now create one and save it.' },
+  ];
+  const result = await routeModel({ messages, apiKey: '' });
+  assert.equal(result.alias, 'surge');
+});
