@@ -147,3 +147,8 @@ For this v8 upgrade, dependency installation could not complete in the build env
 - `buildSystemPrompt` translates slider values into bounded behavioral guidance. Intensity interpolates each trait toward neutral at 0%; 100% expresses the configured trait fully.
 - UI includes quick starts, live summary, reset, optional custom instructions, up to 12 local saved profiles, and JSON import/export.
 - High autonomy and risk tolerance do not bypass tool policy, approvals, or safety boundaries.
+
+
+## v8.4.1 unified persona settings
+
+Personalization UI order is Color theme, then Agent personality. Base style, Base tone, Warmth, Enthusiasm, Emoji usage, Visual answers when useful, Use headers, and Use lists are now controls inside Agent personality and are injected as actionable character/presentation instructions. Named personality profiles and JSON import/export include these presentation preferences.

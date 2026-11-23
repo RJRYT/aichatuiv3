@@ -4493,3 +4493,52 @@ body[data-theme] {
 .personality-quickstarts > span { margin-right: 4px; color: var(--muted, #999); font-size: 10px; }
 .personality-quickstarts button { padding: 6px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--panel); color: var(--text); font-size: 10px; cursor: pointer; }
 .personality-quickstarts button:hover { border-color: var(--accent); }
+
+/* v8.4.1: unified personality communication controls */
+.persona-presentation-controls {
+  display: grid;
+  gap: 12px;
+  padding: 13px;
+  border: 1px solid var(--border, rgba(255,255,255,.12));
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--panel, #101510) 76%, transparent);
+}
+.persona-presentation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+}
+.persona-presentation-grid > label:not(.personality-slider) {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text, inherit);
+  font-size: 11px;
+}
+.persona-presentation-grid select {
+  width: 100%;
+  min-height: 36px;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  border: 1px solid var(--border, rgba(255,255,255,.14));
+  border-radius: 8px;
+  background: var(--panel, #0d140f);
+  color: var(--text, #e4ece4);
+  font: inherit;
+  font-size: 11px;
+}
+.persona-presentation-grid select:focus {
+  outline: none;
+  border-color: var(--accent, #8abf72);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #8abf72) 14%, transparent);
+}
+.persona-formatting-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px 18px;
+  padding-top: 3px;
+}
+@media (max-width: 650px) {
+  .persona-presentation-grid { grid-template-columns: 1fr; }
+  .persona-formatting-toggles { display: grid; gap: 10px; }
+}

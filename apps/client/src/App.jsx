@@ -2113,7 +2113,13 @@ function buildPersonalityPreview(values = {}) {
   const communication = `${choose(value('directness', 75), 'gentle', 'clear', 'direct')}, ${choose(value('explanatoryDepth', 65), 'concise', 'well-explained', 'detailed')}${value('humor', 35) > 66 ? ', with a playful sense of humor' : value('humor', 35) < 34 ? ', with a serious tone' : ''}`;
   const thinking = `${choose(value('criticalThinking', 90), 'open-minded', 'thoughtful', 'strongly critical')} and ${choose(value('creativity', 70), 'practical', 'adaptable', 'creative')}, with ${choose(value('analyticalDepth', 85), 'high-level', 'balanced', 'deep')} analysis`;
   const behavior = `${choose(value('autonomy', 75), 'instruction-led', 'self-directed', 'proactive within permissions')}, ${choose(value('initiative', 80), 'reactive', 'engaged', 'initiative-taking')}, and ${choose(value('thoroughness', 85), 'efficient', 'careful', 'meticulous')}`;
-  return `Nemi communicates in a ${tone} manner: ${communication}. It approaches problems with ${thinking}. Its working style is ${behavior}. It maintains ${choose(value('empathy', 70), 'objective', 'considerate', 'empathetic')} interactions and ${choose(value('confidence', 80), 'cautious', 'measured', 'confident')} recommendations. Risk preference is ${choose(value('riskTolerance', 35), 'conservative', 'balanced', 'experimental')}. Personality traits are expressed at ${value('intensity', 70)}% intensity.`;
+  const baseStyle = values.baseStyle || 'friendly';
+  const baseTone = values.tone || 'balanced';
+  const warmth = Number(values.warmth ?? 3);
+  const enthusiasm = Number(values.enthusiasm ?? 3);
+  const emoji = values.emoji || 'moderate';
+  const formatting = `${values.visualAnswers === false ? 'visuals only when requested' : 'visuals when useful'}, ${values.headers === false ? 'minimal headings' : 'helpful headings'}, and ${values.lists === false ? 'prose-first formatting' : 'helpful lists'}`;
+  return `Nemi communicates in a ${tone} manner with a ${baseStyle} style and ${baseTone} tone: ${communication}. It approaches problems with ${thinking}. Its working style is ${behavior}. It maintains ${choose(value('empathy', 70), 'objective', 'considerate', 'empathetic')} interactions and ${choose(value('confidence', 80), 'cautious', 'measured', 'confident')} recommendations. Risk preference is ${choose(value('riskTolerance', 35), 'conservative', 'balanced', 'experimental')}. Warmth ${warmth}/5, enthusiasm ${enthusiasm}/5, ${emoji} emoji use; ${formatting}. Personality traits are expressed at ${value('intensity', 70)}% intensity.`;
 }
 
 function PreferencesDialog({
@@ -2675,6 +2681,34 @@ function PreferencesDialog({
           </div>
         ) : tab === 'personalization' ? (
           <div className="preference-grid">
+            <div className="theme-picker-section">
+              <div className="theme-picker-heading">
+                <b>Color theme</b>
+                <small>Choose a workspace color preset</small>
+              </div>
+              <div className="theme-preset-grid">
+                {COLOR_THEMES.map((preset) => (
+                  <button
+                    type="button"
+                    key={preset.id}
+                    className={`theme-preset ${theme === preset.id ? 'selected' : ''}`}
+                    onClick={() => setTheme(preset.id)}
+                    aria-pressed={theme === preset.id}
+                    title={preset.name}
+                  >
+                    <span
+                      className="theme-swatch"
+                      style={{ background: preset.colors[0], borderColor: preset.colors[1] }}
+                    >
+                      <i style={{ background: preset.colors[1] }} />
+                      <i style={{ background: preset.colors[1], opacity: 0.55 }} />
+                    </span>
+                    <span>{preset.name}</span>
+                    {theme === preset.id && <Check size={13} />}
+                  </button>
+                ))}
+              </div>
+            </div>
             <section className="persona-section personality-builder">
               <div className="persona-heading">
                 <div>
@@ -2682,6 +2716,21 @@ function PreferencesDialog({
                   <p>Build Nemi's character with independent controls. Changes are applied to the actual system instructions, not just the preview.</p>
                 </div>
                 <span className="persona-active">Custom character</span>
+              </div>
+              <div className="persona-presentation-controls">
+                <div className="personality-group-heading"><b>Communication preferences</b><small>These settings are part of Nemi's character and directly shape its responses.</small></div>
+                <div className="persona-presentation-grid">
+                  <label>Base style<select value={preferences.baseStyle || 'friendly'} onChange={(event) => update('baseStyle', event.target.value)}><option value="friendly">Friendly</option><option value="professional">Professional</option><option value="efficient">Efficient</option><option value="academic">Academic</option><option value="creative">Creative</option><option value="direct">Direct</option></select></label>
+                  <label>Base tone<select value={preferences.tone || 'balanced'} onChange={(event) => update('tone', event.target.value)}><option value="balanced">Balanced</option><option value="casual">Casual</option><option value="formal">Formal</option><option value="empathetic">Empathetic</option><option value="technical">Technical</option><option value="playful">Playful</option></select></label>
+                  <label className="personality-slider"><span className="personality-slider-title"><b>Warmth</b><output>{preferences.warmth ?? 3}/5</output></span><input type="range" min="1" max="5" step="1" value={preferences.warmth ?? 3} onChange={(event) => update('warmth', Number(event.target.value))}/><span className="personality-slider-ends"><small>Reserved</small><small>Warm</small></span></label>
+                  <label className="personality-slider"><span className="personality-slider-title"><b>Enthusiasm</b><output>{preferences.enthusiasm ?? 3}/5</output></span><input type="range" min="1" max="5" step="1" value={preferences.enthusiasm ?? 3} onChange={(event) => update('enthusiasm', Number(event.target.value))}/><span className="personality-slider-ends"><small>Calm</small><small>Energetic</small></span></label>
+                  <label>Emoji usage<select value={preferences.emoji || 'moderate'} onChange={(event) => update('emoji', event.target.value)}><option value="none">None</option><option value="minimal">Minimal</option><option value="moderate">Moderate</option><option value="expressive">Expressive</option></select></label>
+                </div>
+                <div className="persona-formatting-toggles">
+                  <Toggle label="Visual answers when useful" value={preferences.visualAnswers !== false} onChange={(value) => update('visualAnswers', value)}/>
+                  <Toggle label="Use headers" value={preferences.headers !== false} onChange={(value) => update('headers', value)}/>
+                  <Toggle label="Use lists" value={preferences.lists !== false} onChange={(value) => update('lists', value)}/>
+                </div>
               </div>
               <div className="personality-quickstarts">
                 <span>Quick starts</span>
@@ -2726,25 +2775,27 @@ function PreferencesDialog({
               </div>
               <div className="personality-preview">
                 <div><b>Live personality preview</b><small>Illustrative summary of the current controls</small></div>
-                <p>{buildPersonalityPreview(personalityDraft)}</p>
+                <p>{buildPersonalityPreview({ ...personalityDraft, ...preferences })}</p>
               </div>
               <div className="personality-profile-tools">
                 <label>Save profile<input value={profileNameDraft} maxLength={32} onChange={(event) => setProfileNameDraft(event.target.value)} placeholder="e.g. Principal Engineer" /></label>
                 <button type="button" className="secondary-button" disabled={!profileNameDraft.trim()} onClick={() => {
-                  const next = [...personalityProfiles.filter((item) => item.name !== profileNameDraft.trim()), { name: profileNameDraft.trim(), values: personalityDraft }].slice(-12);
+                  const styleKeys = ['baseStyle', 'tone', 'warmth', 'enthusiasm', 'emoji', 'visualAnswers', 'headers', 'lists'];
+                  const stylePreferences = Object.fromEntries(styleKeys.map((key) => [key, preferences[key] ?? DEFAULT_PREFERENCES[key]]));
+                  const next = [...personalityProfiles.filter((item) => item.name !== profileNameDraft.trim()), { name: profileNameDraft.trim(), values: personalityDraft, stylePreferences }].slice(-12);
                   setPersonalityProfiles(next); localStorage.setItem('nemotron.personalityProfiles', JSON.stringify(next)); setProfileNameDraft(''); setPersonalityMessage('Personality profile saved on this device.');
                 }}>Save profile</button>
-                <button type="button" className="secondary-button" onClick={() => { setPersonalityDraft({ ...defaultPersonality }); setPersonalityMessage('Personality controls reset to defaults.'); }}>Reset controls</button>
+                <button type="button" className="secondary-button" onClick={() => { setPersonalityDraft({ ...defaultPersonality }); ['baseStyle', 'tone', 'warmth', 'enthusiasm', 'emoji', 'visualAnswers', 'headers', 'lists'].forEach((key) => update(key, DEFAULT_PREFERENCES[key])); setPersonalityMessage('All agent personality and communication controls reset to defaults.'); }}>Reset controls</button>
                 <button type="button" className="secondary-button" onClick={() => {
-                  const blob = new Blob([JSON.stringify({ version: 1, personality: personalityDraft }, null, 2)], { type: 'application/json' });
+                  const blob = new Blob([JSON.stringify({ version: 2, personality: personalityDraft, stylePreferences: Object.fromEntries(['baseStyle', 'tone', 'warmth', 'enthusiasm', 'emoji', 'visualAnswers', 'headers', 'lists'].map((key) => [key, preferences[key] ?? DEFAULT_PREFERENCES[key]])) }, null, 2)], { type: 'application/json' });
                   const url = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'nemi-personality.json'; anchor.click(); URL.revokeObjectURL(url);
                 }}>Export</button>
                 <label className="personality-import">Import<input type="file" accept="application/json,.json" onChange={async (event) => {
-                  try { const file = event.target.files?.[0]; if (!file) return; const parsed = JSON.parse(await file.text()); const source = parsed.personality || parsed; const next = Object.fromEntries(Object.keys(defaultPersonality).map((key) => { const numeric = Number(source[key] ?? defaultPersonality[key]); return [key, Number.isFinite(numeric) ? Math.max(0, Math.min(100, Math.round(numeric / 5) * 5)) : defaultPersonality[key]]; })); setPersonalityDraft(next); setPersonalityMessage('Personality profile imported.'); }
+                  try { const file = event.target.files?.[0]; if (!file) return; const parsed = JSON.parse(await file.text()); const source = parsed.personality || parsed; const next = Object.fromEntries(Object.keys(defaultPersonality).map((key) => { const numeric = Number(source[key] ?? defaultPersonality[key]); return [key, Number.isFinite(numeric) ? Math.max(0, Math.min(100, Math.round(numeric / 5) * 5)) : defaultPersonality[key]]; })); setPersonalityDraft(next); const style = parsed.stylePreferences || {}; const allowed = { baseStyle: ['friendly', 'professional', 'efficient', 'academic', 'creative', 'direct'], tone: ['balanced', 'casual', 'formal', 'empathetic', 'technical', 'playful'], emoji: ['none', 'minimal', 'moderate', 'expressive'] }; Object.entries(allowed).forEach(([key, values]) => { if (values.includes(style[key])) update(key, style[key]); }); ['warmth', 'enthusiasm'].forEach((key) => { if (Number.isFinite(Number(style[key]))) update(key, Math.max(1, Math.min(5, Number(style[key])))); }); ['visualAnswers', 'headers', 'lists'].forEach((key) => { if (typeof style[key] === 'boolean') update(key, style[key]); }); setPersonalityMessage('Personality profile imported.'); }
                   catch { setPersonalityMessage('Could not import that personality file.'); } finally { event.target.value = ''; }
                 }} /></label>
               </div>
-              {personalityProfiles.length > 0 && <div className="personality-saved-profiles"><b>Saved profiles</b>{personalityProfiles.map((profile) => <div key={profile.name}><button type="button" onClick={() => { setPersonalityDraft({ ...defaultPersonality, ...profile.values }); setPersonalityMessage(`${profile.name} loaded.`); }}>{profile.name}</button><button type="button" aria-label={`Delete ${profile.name}`} onClick={() => { const next = personalityProfiles.filter((item) => item.name !== profile.name); setPersonalityProfiles(next); localStorage.setItem('nemotron.personalityProfiles', JSON.stringify(next)); }}>×</button></div>)}</div>}
+              {personalityProfiles.length > 0 && <div className="personality-saved-profiles"><b>Saved profiles</b>{personalityProfiles.map((profile) => <div key={profile.name}><button type="button" onClick={() => { setPersonalityDraft({ ...defaultPersonality, ...profile.values }); Object.entries(profile.stylePreferences || {}).forEach(([key, value]) => { if (['baseStyle', 'tone', 'warmth', 'enthusiasm', 'emoji', 'visualAnswers', 'headers', 'lists'].includes(key)) update(key, value); }); setPersonalityMessage(`${profile.name} loaded.`); }}>{profile.name}</button><button type="button" aria-label={`Delete ${profile.name}`} onClick={() => { const next = personalityProfiles.filter((item) => item.name !== profile.name); setPersonalityProfiles(next); localStorage.setItem('nemotron.personalityProfiles', JSON.stringify(next)); }}>×</button></div>)}</div>}
               <small className="personality-message">Slider changes auto-save to your account. Named profiles are stored locally on this device.</small>
               {personalityMessage && <small className="personality-message">{personalityMessage}</small>}
               <label className="persona-custom-label">
@@ -2753,105 +2804,6 @@ function PreferencesDialog({
               </label>
               <small className="persona-character-count">{personaDraft.length}/1600 · Custom instructions cannot override safety, permissions, or system rules.</small>
             </section>
-            <div className="theme-picker-section">
-              <div className="theme-picker-heading">
-                <b>Color theme</b>
-                <small>Choose a workspace color preset</small>
-              </div>
-              <div className="theme-preset-grid">
-                {COLOR_THEMES.map((preset) => (
-                  <button
-                    type="button"
-                    key={preset.id}
-                    className={`theme-preset ${theme === preset.id ? 'selected' : ''}`}
-                    onClick={() => setTheme(preset.id)}
-                    aria-pressed={theme === preset.id}
-                    title={preset.name}
-                  >
-                    <span
-                      className="theme-swatch"
-                      style={{ background: preset.colors[0], borderColor: preset.colors[1] }}
-                    >
-                      <i style={{ background: preset.colors[1] }} />
-                      <i style={{ background: preset.colors[1], opacity: 0.55 }} />
-                    </span>
-                    <span>{preset.name}</span>
-                    {theme === preset.id && <Check size={13} />}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <label>
-              Base style
-              <select
-                value={preferences.baseStyle}
-                onChange={(e) => update('baseStyle', e.target.value)}
-              >
-                <option value="friendly">Friendly</option>
-                <option value="professional">Professional</option>
-                <option value="efficient">Efficient</option>
-                <option value="academic">Academic</option>
-                <option value="creative">Creative</option>
-                <option value="direct">Direct</option>
-              </select>
-            </label>
-            <label>
-              Base tone
-              <select value={preferences.tone} onChange={(e) => update('tone', e.target.value)}>
-                <option value="balanced">Balanced</option>
-                <option value="casual">Casual</option>
-                <option value="formal">Formal</option>
-                <option value="empathetic">Empathetic</option>
-                <option value="technical">Technical</option>
-                <option value="playful">Playful</option>
-              </select>
-            </label>
-            <label>
-              Warmth <output>{preferences.warmth}/5</output>
-              <input
-                type="range"
-                min="1"
-                max="5"
-                value={preferences.warmth}
-                onChange={(e) => update('warmth', Number(e.target.value))}
-              />
-            </label>
-            <label>
-              Enthusiasm <output>{preferences.enthusiasm}/5</output>
-              <input
-                type="range"
-                min="1"
-                max="5"
-                value={preferences.enthusiasm}
-                onChange={(e) => update('enthusiasm', Number(e.target.value))}
-              />
-            </label>
-            <label>
-              Emoji usage
-              <select value={preferences.emoji} onChange={(e) => update('emoji', e.target.value)}>
-                <option value="none">None</option>
-                <option value="minimal">Minimal</option>
-                <option value="moderate">Moderate</option>
-                <option value="expressive">Expressive</option>
-              </select>
-            </label>
-            <div className="preference-toggles">
-              <Toggle
-                label="Visual answers when useful"
-                value={preferences.visualAnswers}
-                onChange={(v) => update('visualAnswers', v)}
-              />
-              <Toggle
-                label="Use headers"
-                value={preferences.headers}
-                onChange={(v) => update('headers', v)}
-              />
-              <Toggle
-                label="Use lists"
-                value={preferences.lists}
-                onChange={(v) => update('lists', v)}
-              />
-            </div>
           </div>
         ) : (
           <div className="memory-manager">

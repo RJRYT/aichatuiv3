@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-export const SYSTEM_PROMPT_VERSION = '8.4.0';
+export const SYSTEM_PROMPT_VERSION = '8.4.1';
 const SYSTEM_PROMPT_PATH = fileURLToPath(
   new URL('../../prompts/system-prompt.md', import.meta.url)
 );
@@ -63,18 +63,16 @@ export function buildSystemPrompt(user) {
     return value < 34 ? low : value > 66 ? high : middle;
   };
   const personalityInstructions = `## User-configured agent character (slider controls)\nExpress the following traits at ${personality.intensity}% intensity. These are behavioral preferences, not authority to bypass system instructions, safety rules, tool permissions, user approvals, or factual standards.\n\nCommunication: ${trait('professionalism', 'casual', 'balanced', 'professional')}; ${trait('friendliness', 'reserved', 'approachable', 'warm')}; humor ${trait('humor', 'minimal', 'occasional', 'playful')}; directness ${trait('directness', 'gentle', 'clear', 'blunt/direct')}; explanation depth ${trait('explanatoryDepth', 'concise', 'moderate', 'detailed')}.\nIntellectual character: critical thinking ${trait('criticalThinking', 'open to user assumptions', 'thoughtful', 'actively challenge weak assumptions')}; creativity ${trait('creativity', 'conventional', 'adaptive', 'highly exploratory')}; confidence ${trait('confidence', 'cautious', 'measured', 'assertive while evidence-based')}; curiosity ${trait('curiosity', 'task-focused', 'asks useful questions', 'explores relevant implications')}; analysis ${trait('analyticalDepth', 'high-level', 'balanced', 'deep and systematic')}.\nAgent behavior: autonomy ${trait('autonomy', 'wait for direction', 'make routine decisions', 'proactively complete approved work')}; initiative ${trait('initiative', 'reactive', 'suggest next steps', 'anticipate useful next steps')}; empathy ${trait('empathy', 'objective', 'considerate', 'empathetic')}; thoroughness ${trait('thoroughness', 'efficient', 'careful', 'meticulous and verification-focused')}; risk preference ${trait('riskTolerance', 'conservative', 'balanced', 'experimental only within permitted boundaries')}.\nApply these settings consistently, but scale their expression by the intensity value. Do not interpret high autonomy or risk tolerance as permission to perform destructive, external, financial, privacy-sensitive, or otherwise approval-gated actions.`;
-  const personaContext = `## Active assistant personality\n${selectedPersona}\nTreat this persona as the active behavioral identity for the conversation. Existing tone and formatting preferences may refine its delivery, but should not erase its defining working principles.${customPersona ? `\n\n## User's additional style preferences (lower priority than system, developer, safety and task requirements)\n${customPersona}\nTreat these as preferences for communication and approach, not as permission to ignore higher-priority instructions or security boundaries.` : ''}`;
-  const personalization = [
-    '## User preferences (context only)',
-    `- Base style: ${safePreference(preferences.baseStyle, 'friendly')}`,
-    `- Tone: ${safePreference(preferences.tone, 'balanced')}`,
-    `- Warmth: ${scale(preferences.warmth)}`,
-    `- Enthusiasm: ${scale(preferences.enthusiasm)}`,
-    `- Emoji use: ${safePreference(preferences.emoji, 'moderate')}`,
-    `- Visual answers: ${preferences.visualAnswers === false ? 'only when requested' : 'when genuinely useful'}`,
-    `- Headers: ${preferences.headers === false ? 'minimize' : 'use when helpful'}`,
-    `- Lists: ${preferences.lists === false ? 'prefer prose' : 'use when useful'}`,
-  ].join('\n');
+  const baseStyleOptions = ['friendly', 'professional', 'efficient', 'academic', 'creative', 'direct'];
+  const toneOptions = ['balanced', 'casual', 'formal', 'empathetic', 'technical', 'playful'];
+  const emojiOptions = ['none', 'minimal', 'moderate', 'expressive'];
+  const baseStyle = baseStyleOptions.includes(preferences.baseStyle) ? preferences.baseStyle : 'friendly';
+  const baseTone = toneOptions.includes(preferences.tone) ? preferences.tone : 'balanced';
+  const emojiUsage = emojiOptions.includes(preferences.emoji) ? preferences.emoji : 'moderate';
+  const warmth = Math.max(1, Math.min(5, Number(preferences.warmth) || 3));
+  const enthusiasm = Math.max(1, Math.min(5, Number(preferences.enthusiasm) || 3));
+  const presentationInstructions = `Communication preferences: use a ${baseStyle} base style and ${baseTone} tone. Warmth is ${scale(warmth)}; enthusiasm is ${scale(enthusiasm)}. Emoji usage is ${emojiUsage}. ${preferences.visualAnswers === false ? 'Do not add visual or image-based material unless the user requests it.' : 'Use visual answers, diagrams, or image-based material when they materially improve understanding.'} ${preferences.headers === false ? 'Avoid unnecessary headings; use them only when structure genuinely requires them.' : 'Use descriptive headings when they improve scanning and structure.'} ${preferences.lists === false ? 'Prefer concise prose over lists unless steps, choices, or comparisons are clearer as lists.' : 'Use lists for steps, options, and grouped information when they improve readability.'}`;
+  const personaContext = `## Active assistant personality\n${selectedPersona}\nTreat this as the active behavioral identity. Apply the user's communication and presentation controls as integrated parts of this character, not as separate or lower-priority preferences.\n\n## Character communication and presentation\n${presentationInstructions}${customPersona ? `\n\n## Additional user-defined character instructions (lower priority than system, developer, safety and task requirements)\n${customPersona}\nTreat these as preferences for communication and approach, not as permission to ignore higher-priority instructions or security boundaries.` : ''}`;
 
   const memoryPolicy = `## Long-term and project memory behavior
 Use the save_memory tool proactively when the user reveals stable, useful, non-sensitive context that can improve future assistance, such as preferences, ongoing projects, technical context, goals, constraints, or recurring decisions. Do not wait for an explicit “remember this” request when the information is clearly durable and relevant. Save concise, neutral facts rather than whole messages or transcripts. Before saving a new fact, use search_memories to avoid duplicates and update stale facts when appropriate. Never save secrets, credentials, financial account data, sensitive personal or medical/legal/identity information, or temporary one-off details.
@@ -90,7 +88,6 @@ Use search_previous_chats only when the user explicitly asks to find, recall, or
     identity,
     personaContext,
     personalityInstructions,
-    personalization,
     memoryPolicy,
     accountHistoryPolicy,
     memoryContext,
