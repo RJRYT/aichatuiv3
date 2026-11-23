@@ -53,26 +53,11 @@ function cleanMessages(messages = []) {
         return attachment;
       });
     if (message.usage) safe.usage = message.usage;
-    if (message.usageByModel && typeof message.usageByModel === 'object')
-      safe.usageByModel = message.usageByModel;
-    if (message.modelCallsByModel && typeof message.modelCallsByModel === 'object')
-      safe.modelCallsByModel = message.modelCallsByModel;
-    if (message.model && typeof message.model === 'object')
-      safe.model = {
-        alias: String(message.model.alias || '').slice(0, 30),
-        name: String(message.model.name || '').slice(0, 40),
-        id: String(message.model.id || '').slice(0, 120),
-      };
+    if (message.usageByModel && typeof message.usageByModel === 'object') safe.usageByModel = message.usageByModel;
+    if (message.modelCallsByModel && typeof message.modelCallsByModel === 'object') safe.modelCallsByModel = message.modelCallsByModel;
+    if (message.model && typeof message.model === 'object') safe.model = { alias: String(message.model.alias || '').slice(0, 30), name: String(message.model.name || '').slice(0, 40), id: String(message.model.id || '').slice(0, 120) };
     if (message.modelMode) safe.modelMode = message.modelMode === 'manual' ? 'manual' : 'auto';
-    if (message.routingDecision && typeof message.routingDecision === 'object')
-      safe.routingDecision = {
-        alias: String(message.routingDecision.alias || '').slice(0, 30),
-        taskType: String(message.routingDecision.taskType || '').slice(0, 60),
-        complexity: String(message.routingDecision.complexity || '').slice(0, 20),
-        source: String(message.routingDecision.source || '').slice(0, 30),
-        reason: String(message.routingDecision.reason || '').slice(0, 240),
-        confidence: Number(message.routingDecision.confidence) || 0,
-      };
+    if (message.routingDecision && typeof message.routingDecision === 'object') safe.routingDecision = { alias: String(message.routingDecision.alias || '').slice(0, 30), taskType: String(message.routingDecision.taskType || '').slice(0, 60), complexity: String(message.routingDecision.complexity || '').slice(0, 20), source: String(message.routingDecision.source || '').slice(0, 30), reason: String(message.routingDecision.reason || '').slice(0, 240), confidence: Number(message.routingDecision.confidence) || 0 };
     if (message.durationMs != null && Number.isFinite(Number(message.durationMs)))
       safe.durationMs = Math.max(0, Number(message.durationMs));
     if (message.toolEvents) safe.toolEvents = message.toolEvents;

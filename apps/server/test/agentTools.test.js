@@ -11,13 +11,7 @@ import {
   storeArtifact,
 } from '../src/services/interpreter/artifactStore.js';
 import { readFile } from 'node:fs/promises';
-import {
-  getToolDefinitions,
-  getPluginCatalog,
-  isPluginEnabled,
-  isToolUserConfigurable,
-  runTool,
-} from '../src/services/tools.js';
+import { getToolDefinitions, getPluginCatalog, isPluginEnabled, isToolUserConfigurable, runTool } from '../src/services/tools.js';
 import { Share } from '../src/models/Share.js';
 
 test('task planner validates dependencies and emits plan/task events', () => {
@@ -212,32 +206,16 @@ test('account-history tools require sign-in and have explicit-request descriptio
   );
 });
 
+
 test('native workspace tools are available without enabling Python execution', () => {
   const definitions = getToolDefinitions();
   const names = definitions.map((tool) => tool.function.name);
-  for (const name of [
-    'workspace_list',
-    'workspace_read',
-    'workspace_create',
-    'workspace_edit',
-    'workspace_delete',
-    'workspace_search',
-    'workspace_status',
-    'workspace_archive',
-  ]) {
+  for (const name of ['workspace_list', 'workspace_read', 'workspace_create', 'workspace_edit', 'workspace_delete', 'workspace_search', 'workspace_status', 'workspace_archive']) {
     assert.ok(names.includes(name), `expected ${name} to be registered`);
   }
-  const nodeRuntimeConfigured = Boolean(
-    process.env.VERCEL_NODE_SANDBOX_IMAGE &&
-    ((process.env.VERCEL_TOKEN && process.env.VERCEL_TEAM_ID && process.env.VERCEL_PROJECT_ID) ||
-      process.env.VERCEL_OIDC_TOKEN ||
-      (process.env.VERCEL === '1' && process.env.VERCEL_ENV))
-  );
+  const nodeRuntimeConfigured = Boolean(process.env.VERCEL_NODE_SANDBOX_IMAGE && ((process.env.VERCEL_TOKEN && process.env.VERCEL_TEAM_ID && process.env.VERCEL_PROJECT_ID) || process.env.VERCEL_OIDC_TOKEN || (process.env.VERCEL === '1' && process.env.VERCEL_ENV)));
   assert.equal(names.includes('execute_node'), nodeRuntimeConfigured);
-  assert.match(
-    definitions.find((tool) => tool.function.name === 'execute_python').function.description,
-    /do not start Python merely to write files/i
-  );
+  assert.match(definitions.find((tool) => tool.function.name === 'execute_python').function.description, /do not start Python merely to write files/i);
 });
 
 test('shared-link lookup returns only the signed-in user’s active shares', async () => {
@@ -280,19 +258,14 @@ test('shared-link lookup returns only the signed-in user’s active shares', asy
   }
 });
 
+
 test('only high-impact tools expose permission switches; low-risk tools stay enabled', () => {
   assert.equal(isToolUserConfigurable('execute_python'), true);
   assert.equal(isToolUserConfigurable('workspace_delete'), true);
   assert.equal(isToolUserConfigurable('github_search'), false);
   assert.equal(isToolUserConfigurable('npm_search'), false);
-  assert.equal(
-    isPluginEnabled({ pluginPermissions: { github_search: false } }, 'github_search'),
-    true
-  );
-  assert.equal(
-    isPluginEnabled({ pluginPermissions: { execute_python: false } }, 'execute_python'),
-    false
-  );
+  assert.equal(isPluginEnabled({ pluginPermissions: { github_search: false } }, 'github_search'), true);
+  assert.equal(isPluginEnabled({ pluginPermissions: { execute_python: false } }, 'execute_python'), false);
   const catalog = getPluginCatalog();
   assert.equal(catalog.find((item) => item.id === 'github_search').configurable, false);
   assert.equal(catalog.find((item) => item.id === 'github_search').defaultEnabled, true);

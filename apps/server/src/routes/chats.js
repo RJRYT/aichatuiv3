@@ -24,28 +24,13 @@ router.get('/usage', async (req, res, next) => {
     res.set('Cache-Control', 'private, no-store');
     const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 90);
     const indexSince = new Date(Date.now() - (days + 2) * 86400000);
-    const index = (await listChats(owner(req))).filter(
-      (item) => new Date(item.updatedAt || item.createdAt || 0) >= indexSince
-    );
+    const index = (await listChats(owner(req))).filter((item) => new Date(item.updatedAt || item.createdAt || 0) >= indexSince);
     // listChats intentionally returns only lightweight index rows. Hydrate each chat before
     // calculating usage; otherwise branch messages are absent and the dashboard reports zero.
-    const chats = (
-      await Promise.all(index.map((item) => getChat(owner(req), String(item._id))))
-    ).filter(Boolean);
+    const chats = (await Promise.all(index.map((item) => getChat(owner(req), String(item._id))))).filter(Boolean);
     const analytics = aggregateUsageFromChats(chats, days);
-    res.json({
-      usage: {
-        days,
-        ...analytics,
-        folders: [
-          ...new Set(chats.map((chat) => String(chat.folder || '')).filter(Boolean)),
-        ].sort(),
-        tagCounts: {},
-      },
-    });
-  } catch (error) {
-    next(error);
-  }
+    res.json({ usage: { days, ...analytics, folders: [...new Set(chats.map((chat) => String(chat.folder || '')).filter(Boolean))].sort(), tagCounts: {} } });
+  } catch (error) { next(error); }
 });
 router.get('/', async (req, res, next) => {
   try {

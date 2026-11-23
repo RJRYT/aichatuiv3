@@ -101,3 +101,4 @@ export function inspectZipBuffer(buffer) {
   }
   return { valid: true, entries: files, fileCount: files.length };
 }
+

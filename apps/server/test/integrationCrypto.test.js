@@ -1,10 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  encryptCredentials,
-  decryptCredentials,
-  maskSecret,
-} from '../src/services/integrations/crypto.js';
+import { encryptCredentials, decryptCredentials, maskSecret } from '../src/services/integrations/crypto.js';
 
 test('personal integration credentials are encrypted and round-trip through AES-256-GCM', () => {
   const previous = process.env.USER_INTEGRATIONS_ENCRYPTION_KEY;

@@ -131,3 +131,10 @@ For this v8 upgrade, dependency installation could not complete in the build env
 - Hidden Developer Mode is revealed by clicking the Personalization heading seven times.
 - Tool permissions are configurable only for Python, Node.js, web search, image generation, workspace deletion and ZIP packaging. Core tools and low-risk lookups are always enabled.
 - Usage endpoint `/api/chats/usage` hydrates full chats rather than relying on index rows. Historical v8.1 usage values may undercount agent turns with multiple model rounds.
+
+## v8.3.0 personality customization
+
+- Personalization settings now include behavior-focused assistant personas: Nemi Agent (default), Principal Engineer, Patient Mentor, Research Analyst, Direct & Concise, and Creative Partner.
+- Users may add up to 1,600 characters of custom personality guidance. It is saved in `User.preferences.personaInstructions` and injected into `buildSystemPrompt` as lower-priority preference context.
+- Persona choices are persisted in `User.preferences.persona`; existing accounts use the `agent` default without migration.
+- Developer Mode credential inputs now have theme-aware field styling and accessible focus states.

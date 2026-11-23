@@ -9,6 +9,8 @@ test('account router implements readable preferences and memories endpoints', as
   const source = await readFile(routeFile, 'utf8');
   assert.match(source, /router\.get\(['"]\/preferences['"]/);
   assert.match(source, /router\.get\(['"]\/memories['"]/);
+  assert.match(source, /personaInstructions/);
+  assert.match(source, /'agent', 'engineer', 'mentor', 'researcher', 'concise', 'creative'/);
   assert.match(source, /if \(guest\(req\)\) return res\.json\(\{ preferences:/);
   assert.match(source, /if \(guest\(req\)\) return res\.json\(\{ memories: \[\] \}\)/);
 });

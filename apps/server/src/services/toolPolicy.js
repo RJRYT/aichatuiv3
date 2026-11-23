@@ -14,7 +14,6 @@ export function isToolUserConfigurable(toolId) {
 export function isPluginEnabled(user, pluginId) {
   if (!isToolUserConfigurable(pluginId)) return true;
   const permissions = user?.pluginPermissions;
-  if (!permissions || typeof permissions !== 'object' || permissions[pluginId] === undefined)
-    return true;
+  if (!permissions || typeof permissions !== 'object' || permissions[pluginId] === undefined) return true;
   return permissions[pluginId] !== false;
 }

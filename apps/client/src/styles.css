@@ -4360,3 +4360,98 @@ body[data-theme] {
 .usage-model-row span { display: flex; gap: 8px; align-items: center; }
 .usage-model-row small { color: var(--muted, #999); }
 @media (max-width: 620px) { .integration-fields { grid-template-columns: 1fr; } .integration-card-head { flex-direction: column; } .model-selector { max-width: 140px; min-width: 105px; } }
+
+/* v8.3 personality controls and developer credential fields */
+.persona-section {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 12px;
+  padding: 15px;
+  border: 1px solid var(--border, rgba(255,255,255,.12));
+  border-radius: 13px;
+  background: var(--surface-2, rgba(255,255,255,.025));
+}
+.persona-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.persona-heading > div { display: grid; gap: 5px; }
+.persona-heading b { font-size: 13px; color: var(--text, inherit); }
+.persona-heading p { margin: 0; max-width: 620px; color: var(--muted, #999); font-size: 11px; line-height: 1.55; }
+.persona-active {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border: 1px solid color-mix(in srgb, var(--accent, #8abf72) 42%, transparent);
+  border-radius: 999px;
+  color: var(--accent2, #a6d58c);
+  font-size: 10px;
+}
+.persona-preset-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.persona-preset {
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-height: 82px;
+  padding: 11px;
+  text-align: left;
+  border: 1px solid var(--border, rgba(255,255,255,.12));
+  border-radius: 10px;
+  color: var(--text, inherit);
+  background: var(--panel, rgba(255,255,255,.025));
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease, transform .15s ease;
+}
+.persona-preset:hover { border-color: var(--accent, #8abf72); transform: translateY(-1px); }
+.persona-preset.selected { border-color: var(--accent, #8abf72); background: color-mix(in srgb, var(--accent, #8abf72) 9%, var(--panel, transparent)); }
+.persona-preset-title { padding-right: 16px; font-size: 11px; font-weight: 700; }
+.persona-preset-description { color: var(--muted, #999); font-size: 10px; line-height: 1.45; }
+.persona-preset > svg { position: absolute; top: 10px; right: 9px; color: var(--accent2, #a6d58c); }
+.persona-custom-label { display: grid; gap: 7px; color: var(--text, inherit); font-size: 11px; font-weight: 600; }
+.persona-custom-label > span { color: var(--muted, #999); font-size: 10px; font-weight: 400; }
+.persona-custom-label textarea {
+  width: 100%; min-height: 78px; resize: vertical; padding: 10px 11px;
+  border: 1px solid var(--border, rgba(255,255,255,.14)); border-radius: 9px;
+  background: var(--panel, #0d140f); color: var(--text, #e4ece4);
+  font: inherit; font-size: 11px; line-height: 1.55; outline: none;
+}
+.persona-custom-label textarea:focus { border-color: var(--accent, #8abf72); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #8abf72) 14%, transparent); }
+.persona-custom-label textarea::placeholder { color: var(--muted, #89948b); opacity: .8; }
+.persona-character-count { color: var(--muted, #999); font-size: 10px; }
+.integration-fields input {
+  display: block;
+  box-sizing: border-box;
+  min-height: 39px;
+  padding: 9px 11px;
+  border: 1px solid var(--border, rgba(255,255,255,.14));
+  border-radius: 9px;
+  outline: none;
+  background: var(--panel, #0d140f);
+  color: var(--text, #e4ece4);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,.08);
+  transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+}
+.integration-fields input:focus {
+  border-color: var(--accent, #8abf72);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #8abf72) 15%, transparent);
+}
+.integration-fields input::placeholder { color: var(--muted, #89948b); opacity: .8; }
+.integration-fields input:disabled { opacity: .55; cursor: not-allowed; }
+.integration-fields input:-webkit-autofill,
+.integration-fields input:-webkit-autofill:hover,
+.integration-fields input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--text, #e4ece4);
+  -webkit-box-shadow: 0 0 0 1000px var(--panel, #0d140f) inset;
+  transition: background-color 9999s ease-out;
+}
+@media (max-width: 760px) { .persona-preset-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 480px) {
+  .persona-preset-grid { grid-template-columns: 1fr; }
+  .persona-heading { flex-direction: column; }
+  .persona-active { align-self: flex-start; }
+}
