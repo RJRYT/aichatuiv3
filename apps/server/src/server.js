@@ -18,6 +18,7 @@ import { requireAuth } from './services/auth.js';
 import { getPluginCatalog } from './services/tools.js';
 import { publicModelCatalog } from './services/modelRegistry.js';
 import { closeSandboxManager } from './services/interpreter/sandboxManager.js';
+import { markAbandonedGenerationSessions } from './services/generationSessions.js';
 import logger from './utils/logger.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
@@ -133,6 +134,12 @@ if (
   throw new Error('Set a unique SESSION_SECRET of at least 32 characters in production.');
 }
 await connectDatabase();
+try {
+  const recovery = await markAbandonedGenerationSessions();
+  if (recovery.interrupted) log.warn('Recovered interrupted generation sessions after server restart', recovery);
+} catch (error) {
+  log.error('Could not reconcile generation sessions during startup', { error: error.message });
+}
 const httpServer = app.listen(port, () =>
   log.info(`Nemotron Agent Lab API listening on http://localhost:${port}`)
 );

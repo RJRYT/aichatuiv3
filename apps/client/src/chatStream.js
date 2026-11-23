@@ -42,123 +42,94 @@ export async function fetchChatStream(url, options, controller, timeoutMs = 110_
 }
 
 export async function* readChatEventStream(
-  response,
-  { idleTimeoutMs = 100_000, turnTimeoutMs = 16 * 60_000, now = Date.now, signal } = {}
+  initialResponse,
+  { idleTimeoutMs = 0, turnTimeoutMs = 20 * 60_000, now = Date.now, signal, reconnect, maxReconnects = 20 } = {}
 ) {
-  if (!response?.body?.getReader)
-    throw new ChatStreamError('The server returned an empty response stream.', {
-      code: 'CHAT_STREAM_EMPTY',
-    });
+  if (!initialResponse?.body?.getReader)
+    throw new ChatStreamError('The server returned an empty response stream.', { code: 'CHAT_STREAM_EMPTY' });
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
   const startedAt = now();
-  let lastDataAt = startedAt;
-  let isTerminal = false;
+  const decoder = new TextDecoder();
+  const seen = new Set();
+  let response = initialResponse;
+  let lastEventId = 0;
+  let reconnects = 0;
+  let terminal = false;
   let buffer = '';
 
   const parseBlock = (block) => {
-    const data = block
-      .split(/\r?\n/)
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice(5).trimStart())
-      .join('\n');
+    const data = block.split(/\r?\n/).filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trimStart()).join('\n');
     if (!data) return null;
-    try {
-      return JSON.parse(data);
-    } catch {
-      throw new ChatStreamError('The server sent an unreadable response event.', {
-        code: 'CHAT_STREAM_INVALID_EVENT',
-      });
-    }
+    try { return JSON.parse(data); }
+    catch { throw new ChatStreamError('The server sent an unreadable response event.', { code: 'CHAT_STREAM_INVALID_EVENT' }); }
   };
 
-  let onAbort;
-  try {
-    while (true) {
-      const currentTime = now();
-      const elapsedMs = currentTime - startedAt;
-      const idleRemainingMs = idleTimeoutMs - (currentTime - lastDataAt);
-      const turnRemainingMs = turnTimeoutMs - elapsedMs;
-      const timeoutMs = Math.min(idleRemainingMs, turnRemainingMs);
-      if (timeoutMs <= 0) {
-        const code = turnRemainingMs <= 0 ? 'CHAT_STREAM_TURN_TIMEOUT' : 'CHAT_STREAM_IDLE_TIMEOUT';
-        const message =
-          code === 'CHAT_STREAM_TURN_TIMEOUT'
-            ? 'The response exceeded the client time limit. Please retry.'
-            : 'The server stopped sending updates. Please retry.';
-        throw new ChatStreamError(message, { code });
-      }
-
-      let timeoutId;
-      const timeout = new Promise((_, reject) => {
-        timeoutId = setTimeout(() => {
-          const code =
-            turnRemainingMs <= idleRemainingMs
-              ? 'CHAT_STREAM_TURN_TIMEOUT'
-              : 'CHAT_STREAM_IDLE_TIMEOUT';
-          const message =
-            code === 'CHAT_STREAM_TURN_TIMEOUT'
-              ? 'The response exceeded the client time limit. Please retry.'
-              : 'The server stopped sending updates. Please retry.';
-          reject(new ChatStreamError(message, { code }));
-        }, timeoutMs);
-      });
-      let result;
-      try {
-        const reads = [reader.read(), timeout];
-        if (signal) {
-          if (signal.aborted)
-            throw signal.reason || new DOMException('The operation was aborted.', 'AbortError');
-          const aborted = new Promise((_, reject) => {
-            onAbort = () =>
-              reject(signal.reason || new DOMException('The operation was aborted.', 'AbortError'));
-            signal.addEventListener('abort', onAbort, { once: true });
-          });
-          reads.push(aborted);
-        }
-        result = await Promise.race(reads);
-      } finally {
-        clearTimeout(timeoutId);
-        if (onAbort) signal.removeEventListener('abort', onAbort);
-        onAbort = undefined;
-      }
-      if (result.value?.byteLength) lastDataAt = now();
-      buffer += decoder.decode(result.value || new Uint8Array(), { stream: !result.done });
-      const blocks = buffer.split(/\r?\n\r?\n/);
-      buffer = blocks.pop() || '';
-      for (const block of blocks) {
-        const event = parseBlock(block);
-        if (!event) continue;
-        if (TERMINAL_EVENT_TYPES.has(event.type)) isTerminal = true;
-        yield event;
-      }
-      if (result.done) {
-        if (buffer.trim()) {
-          const event = parseBlock(buffer);
-          if (event) {
-            if (TERMINAL_EVENT_TYPES.has(event.type)) isTerminal = true;
-            yield event;
-          }
-        }
-        if (!isTerminal)
-          throw new ChatStreamError(
-            'The server closed the response before finishing the request.',
-            {
-              code: 'CHAT_STREAM_INCOMPLETE',
-            }
-          );
-        return;
-      }
-    }
-  } catch (error) {
+  while (!terminal) {
+    if (signal?.aborted) throw signal.reason || new DOMException('The operation was aborted.', 'AbortError');
+    if (now() - startedAt >= turnTimeoutMs) throw new ChatStreamError('The response exceeded the client time limit. The generation may still be running; reconnect to recover its events.', { code: 'CHAT_STREAM_TURN_TIMEOUT' });
+    const reader = response.body.getReader();
+    let disconnected = false;
     try {
-      await reader.cancel(error);
-    } catch {}
-    throw error;
-  } finally {
-    if (onAbort) signal.removeEventListener('abort', onAbort);
-    reader.releaseLock();
+      while (true) {
+        if (signal?.aborted) throw signal.reason || new DOMException('The operation was aborted.', 'AbortError');
+        const remaining = Math.max(1, turnTimeoutMs - (now() - startedAt));
+        let timer;
+        const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new ChatStreamError('The response exceeded the client time limit. The generation may still be running; reconnect to recover its events.', { code: 'CHAT_STREAM_TURN_TIMEOUT' })), remaining); });
+        let result;
+        try { result = await Promise.race([reader.read(), timeout]); }
+        finally { clearTimeout(timer); }
+        buffer += decoder.decode(result.value || new Uint8Array(), { stream: !result.done });
+        const blocks = buffer.split(/\r?\n\r?\n/);
+        buffer = blocks.pop() || '';
+        for (const block of blocks) {
+          const event = parseBlock(block);
+          if (!event) continue;
+          const id = Number(event.eventId || 0);
+          if (id && seen.has(id)) continue;
+          if (id) { seen.add(id); lastEventId = Math.max(lastEventId, id); }
+          if (TERMINAL_EVENT_TYPES.has(event.type)) terminal = true;
+          yield event;
+        }
+        if (result.done) {
+          if (buffer.trim()) {
+            const event = parseBlock(buffer);
+            if (event) {
+              const id = Number(event.eventId || 0);
+              if (!id || !seen.has(id)) {
+                if (id) { seen.add(id); lastEventId = Math.max(lastEventId, id); }
+                if (TERMINAL_EVENT_TYPES.has(event.type)) terminal = true;
+                yield event;
+              }
+            }
+          }
+          if (!terminal) disconnected = true;
+          break;
+        }
+      }
+    } catch (error) {
+      if (error?.name === 'AbortError' || signal?.aborted) throw error;
+      disconnected = true;
+    } finally {
+      try { await reader.cancel(); } catch {}
+      try { reader.releaseLock(); } catch {}
+    }
+    if (terminal) return;
+    if (!disconnected) continue;
+    if (typeof reconnect !== 'function') {
+      throw new ChatStreamError('The server closed the response before finishing the request.', { code: 'CHAT_STREAM_INCOMPLETE' });
+    }
+    if (reconnects >= maxReconnects) {
+      throw new ChatStreamError('The connection was interrupted. The generation may still be running; reopen this chat to recover persisted events.', { code: 'CHAT_STREAM_DISCONNECTED' });
+    }
+    reconnects += 1;
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(resolve, Math.min(1000 + reconnects * 500, 5000));
+      if (signal) signal.addEventListener('abort', () => { clearTimeout(timer); reject(signal.reason || new DOMException('The operation was aborted.', 'AbortError')); }, { once: true });
+    });
+    const next = await reconnect(lastEventId);
+    if (!next?.ok || !next.body?.getReader) throw new ChatStreamError('Could not reconnect to the active generation session.', { code: 'CHAT_STREAM_RECONNECT_FAILED' });
+    response = next;
+    buffer = '';
   }
 }
 

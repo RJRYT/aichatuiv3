@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { runNemotronChat, generateChatTitle } from '../services/nvidia.js';
+import { runNemotronChat, generateChatTitle, cancelChatGeneration } from '../services/nvidia.js';
 import { getChat, updateChat } from '../services/chatStore.js';
 import {
   ensureBranches,
@@ -7,6 +7,8 @@ import {
   setBranchMessages,
 } from '../services/conversationBranches.js';
 import logger from '../utils/logger.js';
+import { randomUUID } from 'node:crypto';
+import { createGenerationSession, appendGenerationEvent, finishGenerationSession, getGenerationEvents, getGenerationSession } from '../services/generationSessions.js';
 
 const router = Router();
 const log = logger.child({ component: 'routes:chat' });
@@ -109,6 +111,35 @@ router.post('/stream', async (req, res, next) => {
       log.error('NVIDIA_API_KEY missing on backend');
       return res.status(503).json({ error: 'NVIDIA_API_KEY is missing on the backend.' });
     }
+    const generationId = String(req.body?.generationId || randomUUID());
+    if (!/^[a-f0-9-]{36}$/i.test(generationId)) return res.status(400).json({ error: 'Invalid generation ID.' });
+    await createGenerationSession({ generationId, ownerId, chatId });
+    let eventId = 0;
+    let persistenceQueue = Promise.resolve();
+    res.publishEvent = (payload) => {
+      const event = { ...payload, eventId: ++eventId, generationId };
+      // Keep the durable replay log comfortably below MongoDB's document limit.
+      // The live SSE receives the full event; the final chat record remains the
+      // source of truth for complete content and tool results.
+      let persisted = { ...event };
+      for (const field of ['content', 'message', 'error']) {
+        if (typeof persisted[field] === 'string' && Buffer.byteLength(persisted[field], 'utf8') > 1200) {
+          persisted[field] = `${persisted[field].slice(0, 1200)}\n[Replay event truncated; consult the saved chat/tool result.]`;
+          persisted.replayTruncated = true;
+        }
+      }
+      if (Buffer.byteLength(JSON.stringify(persisted), 'utf8') > 2048) {
+        const compact = { type: event.type, eventId: event.eventId, generationId, replayTruncated: true };
+        for (const field of ['name', 'status', 'round', 'phase']) {
+          if (typeof event[field] === 'string' || typeof event[field] === 'number') compact[field] = event[field];
+        }
+        if (typeof event.message === 'string') compact.message = event.message.slice(0, 300);
+        if (typeof event.error === 'string') compact.error = event.error.slice(0, 300);
+        persisted = compact;
+      }
+      persistenceQueue = persistenceQueue.then(() => appendGenerationEvent(generationId, ownerId, persisted));
+      return event;
+    };
     res.status(200);
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -227,9 +258,57 @@ router.post('/stream', async (req, res, next) => {
         return saved;
       },
     });
+    await persistenceQueue;
+    await finishGenerationSession(generationId, ownerId, res.generationFinalStatus || 'completed');
   } catch (error) {
+    const generationId = String(req.body?.generationId || '');
+    if (generationId) await finishGenerationSession(generationId, String(req.user?._id || ''), 'failed', error.message).catch(() => {});
     next(error);
   }
+});
+router.post('/stream/:generationId/cancel', async (req, res, next) => {
+  try {
+    const ownerId = String(req.user?._id || '');
+    const generationId = String(req.params.generationId || '');
+    const session = await getGenerationSession(generationId, ownerId);
+    if (!session) return res.status(404).json({ error: 'Generation session not found.' });
+    if (session.status !== 'running') return res.json({ cancelled: false, status: session.status });
+    const cancelled = cancelChatGeneration(generationId, ownerId);
+    if (!cancelled) return res.status(409).json({ error: 'The generation is no longer active in this server process.', status: session.status });
+    return res.json({ cancelled: true, status: 'cancelling' });
+  } catch (error) { next(error); }
+});
+router.get('/stream/:generationId/events', async (req, res, next) => {
+  try {
+    const ownerId = String(req.user?._id || '');
+    const generationId = String(req.params.generationId || '');
+    const session = await getGenerationSession(generationId, ownerId);
+    if (!session) return res.status(404).json({ error: 'Generation session not found.' });
+    res.status(200);
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+    let after = Math.max(0, Number(req.query.after) || 0);
+    let closed = false;
+    let lastHeartbeatAt = Date.now();
+    res.on('close', () => { closed = true; });
+    while (!closed) {
+      const batch = await getGenerationEvents(generationId, ownerId, after);
+      if (!batch) break;
+      for (const event of batch.events) {
+        after = Math.max(after, Number(event.eventId) || after);
+        if (!res.destroyed && !res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`);
+      }
+      if (Date.now() - lastHeartbeatAt >= 15000 && !res.destroyed && !res.writableEnded) { res.write(': keep-alive\n\n'); lastHeartbeatAt = Date.now(); }
+      if (batch.status !== 'running') {
+        if (!res.destroyed && !res.writableEnded) res.end();
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 750));
+    }
+  } catch (error) { next(error); }
 });
 router.post('/title', async (req, res, next) => {
   try {

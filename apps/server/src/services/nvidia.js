@@ -17,10 +17,20 @@ const MODEL_STREAM_IDLE_TIMEOUT_MS = 90_000;
 const MODEL_ROUND_TIMEOUT_MS = 10 * 60_000;
 const CHAT_TURN_TIMEOUT_MS = 15 * 60_000;
 const MODEL_HEARTBEAT_INTERVAL_MS = 20_000;
+const activeChatGenerations = new Map();
+
+export function cancelChatGeneration(generationId, ownerId) {
+  const active = activeChatGenerations.get(String(generationId));
+  if (!active || active.ownerId !== String(ownerId)) return false;
+  active.controller.abort(Object.assign(new Error('Generation cancelled by the user.'), { name: 'AbortError', code: 'USER_CANCELLED' }));
+  return true;
+}
 
 function sse(res, payload) {
+  let outgoing = payload;
+  try { outgoing = res.publishEvent?.(payload) || payload; } catch (error) { log.warn('Generation event persistence failed', { error: error.message }); }
   if (!res.writableEnded && !res.destroyed) {
-    try { res.write(`data: ${JSON.stringify(payload)}\n\n`); }
+    try { res.write(`data: ${JSON.stringify(outgoing)}\n\n`); }
     catch (error) { log.debug('SSE write skipped after connection close', { error: error.message }); }
   }
 }
@@ -319,8 +329,11 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
   let activeModel = getModel(modelAlias);
   let escalated = false;
   const controller = new AbortController();
+  if (body.generationId) activeChatGenerations.set(String(body.generationId), { ownerId: userId, controller });
   const turnTimer = setTimeout(() => controller.abort(Object.assign(new Error('This chat turn exceeded its 15-minute time limit. Please retry.'), { code: 'CHAT_TURN_TIMEOUT', status: 504 })), CHAT_TURN_TIMEOUT_MS);
-  const onClose = () => { if (!res.writableEnded) controller.abort(); };
+  // A browser disconnect is a transport event, not a user cancellation. Keep
+  // model/tool execution alive; SSE writes are already guarded by sse().
+  const onClose = () => { log.debug('Chat SSE client disconnected; generation remains active', { userId, chatId: body.chatId }); };
   res.on('close', onClose);
 
   let finalUsage = null, finalText = '', rounds = 0, executionToolCalls = 0;
@@ -335,6 +348,7 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
   const toolEvents = [], agentEvents = [];
   const agentState = { plan: normalizeActivePlan(body.activePlan) };
   const failuresByTool = new Map();
+  const exhaustedTools = new Set();
   let checkpoint = null;
   try {
     if (user?._id && body.chatId) checkpoint = await createAgentCheckpoint({ ownerId: userId, chatId: String(body.chatId), plan: agentState.plan });
@@ -462,16 +476,20 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
         }
         if (countsTowardExecutionLimit(name)) executionToolCalls++;
 
-        const toolStartedAt = new Date().toISOString();
-        const toolStartedMs = Date.now();
         const safeArgs = safeToolArguments(name, args);
-        sse(res, { type: 'tool_start', name, arguments: safeArgs, round, startedAt: toolStartedAt });
-        emitAgentEvent('tool_started', { name, label: name.replaceAll('_', ' '), arguments: safeArgs, round });
         const attempt = (failuresByTool.get(name) || 0) + 1;
         let outcome;
-        if (attempt > MAX_RECOVERY_ATTEMPTS_PER_TOOL) {
-          outcome = { ok: false, error: `${name} has reached its bounded retry limit for this run. Choose a different approach or explain the remaining limitation.` };
-        } else {
+        if (exhaustedTools.has(name) || attempt > MAX_RECOVERY_ATTEMPTS_PER_TOOL) {
+          exhaustedTools.add(name);
+          const message = `${name} has reached its bounded retry limit (${MAX_RECOVERY_ATTEMPTS_PER_TOOL}) for this run. Further calls are blocked; choose a different recovery strategy or report the blocker.`;
+          messages.push({ role: 'tool', tool_call_id: call.id, name, content: JSON.stringify({ ok: false, error: message, retryExhausted: true }) });
+          emitAgentEvent('self_correction', { tool: name, attempt: MAX_RECOVERY_ATTEMPTS_PER_TOOL, maxAttempts: MAX_RECOVERY_ATTEMPTS_PER_TOOL, status: 'retry_limit_reached', message });
+          continue;
+        }
+        const toolStartedAt = new Date().toISOString();
+        const toolStartedMs = Date.now();
+        sse(res, { type: 'tool_start', name, arguments: safeArgs, round, startedAt: toolStartedAt, attempt });
+        emitAgentEvent('tool_started', { name, label: name.replaceAll('_', ' '), arguments: safeArgs, round, attempt });
           const toolHeartbeat = setInterval(() => sse(res, {
             type: 'heartbeat', phase: 'tool', name,
             message: `Still working: ${name.replaceAll('_', ' ')} is running.`,
@@ -494,13 +512,12 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
           } finally {
             clearInterval(toolHeartbeat);
           }
-        }
         const toolCompleted = Boolean(outcome.ok) &&
           (name !== 'execute_python' || outcome.result?.status === 'completed') &&
           (name !== 'generate_image' || outcome.result?.status === 'completed') &&
           (name !== 'execute_node' || outcome.result?.status === 'completed');
         if (toolCompleted) failuresByTool.delete(name);
-        else failuresByTool.set(name, attempt);
+        else { failuresByTool.set(name, attempt); if (attempt >= MAX_RECOVERY_ATTEMPTS_PER_TOOL) exhaustedTools.add(name); }
 
         const errorText = outcome.ok
           ? name === 'execute_python' && outcome.result?.status !== 'completed'
@@ -573,10 +590,15 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
     finalText = String(finalText || '').trim();
     if (!finalText) finalText = 'I could not produce a final response. The conversation and completed tool results have been preserved; please retry or resume the task.';
     finalText = finalText.replace(/<attachment>\s*[^<]*?\s*<\/attachment>/gi, '').replace(/\n{3,}/g, '\n\n').trim();
-    if (agentEvents.length || agentState.plan) emitAgentEvent('agent_completed', { status: 'completed', message: 'The response is ready.' });
+    const unresolvedToolFailures = toolEvents.filter((event) => event.status === 'error' && failuresByTool.has(event.name));
+    if (unresolvedToolFailures.length) {
+      finalText = `${finalText}\n\nExecution note: ${unresolvedToolFailures.length} tool operation(s) did not complete successfully. The task must not be considered fully verified; review the recorded errors and remaining work.`.trim();
+    }
+    if (agentEvents.length || agentState.plan) emitAgentEvent('agent_completed', { status: unresolvedToolFailures.length ? 'completed_with_errors' : 'completed', message: unresolvedToolFailures.length ? 'The response is ready with unresolved tool errors.' : 'The response is ready.', unresolvedToolFailures: unresolvedToolFailures.length });
+    res.generationFinalStatus = unresolvedToolFailures.length ? 'completed_with_errors' : 'completed';
     try {
       await checkpointWriteQueue;
-      if (checkpoint?.runId) await finishAgentCheckpoint(userId, checkpoint.runId, completedNaturally ? 'completed' : 'interrupted');
+      if (checkpoint?.runId) await finishAgentCheckpoint(userId, checkpoint.runId, unresolvedToolFailures?.length ? 'failed' : (completedNaturally ? 'completed' : 'interrupted'), unresolvedToolFailures?.length ? `${unresolvedToolFailures.length} tool operation(s) failed.` : '');
     }
     catch (checkpointError) { log.warn('Agent checkpoint finalization failed', { userId, runId: checkpoint?.runId, error: checkpointError.message }); }
 
@@ -598,13 +620,14 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
       if (checkpoint?.runId) await finishAgentCheckpoint(userId, checkpoint.runId, error.name === 'AbortError' ? 'interrupted' : 'failed', error.message);
     }
     catch (checkpointError) { log.warn('Agent checkpoint error state could not be persisted', { userId, runId: checkpoint?.runId, error: checkpointError.message }); }
+    res.generationFinalStatus = error.code === 'USER_CANCELLED' ? 'cancelled' : error.name === 'AbortError' ? 'interrupted' : 'failed';
     if (error.name === 'AbortError' && controller.signal.reason?.code !== 'CHAT_TURN_TIMEOUT') sse(res, { type: 'stopped' });
     else {
       log.error('Chat generation failed', { userId, error: error instanceof Error ? { message: error.message, stack: error.stack, status: error.status } : String(error) });
       sse(res, { type: 'error', status: error.status || 502, error: error.message || 'NVIDIA request failed.' });
     }
   } finally {
-    clearTimeout(turnTimer); res.off('close', onClose); if (!res.writableEnded) res.end();
+    clearTimeout(turnTimer); res.off('close', onClose); if (body.generationId) activeChatGenerations.delete(String(body.generationId)); if (!res.writableEnded) res.end();
   }
 }
 

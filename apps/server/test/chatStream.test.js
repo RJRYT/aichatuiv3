@@ -129,3 +129,19 @@ test('chat stream converts low-level network failures into actionable messages',
     'The server stopped sending updates. Please retry.'
   );
 });
+
+test('chat event stream reconnects and replays only events after the last event ID', async () => {
+  const encoder = new TextEncoder();
+  const response = (text) => new Response(new ReadableStream({ start(controller) { controller.enqueue(encoder.encode(text)); controller.close(); } }), { status: 200 });
+  let requestedAfter = null;
+  const events = [];
+  const first = response('data: {"type":"chunk","content":"A","eventId":1}\n\n');
+  const reconnect = async (after) => {
+    requestedAfter = after;
+    return response('data: {"type":"chunk","content":"B","eventId":2}\n\ndata: {"type":"done","eventId":3}\n\n');
+  };
+  for await (const event of readChatEventStream(first, { reconnect, turnTimeoutMs: 5000 })) events.push(event);
+  assert.equal(requestedAfter, 1);
+  assert.deepEqual(events.map((event) => event.eventId), [1, 2, 3]);
+  assert.deepEqual(events.filter((event) => event.type === 'chunk').map((event) => event.content), ['A', 'B']);
+});

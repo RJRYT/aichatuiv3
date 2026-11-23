@@ -72,6 +72,9 @@ test('workspace archive creates a stored ZIP with a verified manifest', async ()
     const result = await archiveWorkspace(ownerId, String(chat._id), 'site.zip');
     artifactId = result.artifact.id;
     assert.equal(result.verified, true);
+    assert.equal(result.archiveValid, true);
+    assert.equal(result.contentVerified, true);
+    assert.equal(result.projectComplete, null);
     assert.equal(result.fileCount, 3);
     const artifact = await getArtifact(artifactId, ownerId);
     assert.equal(artifact.mimeType, 'application/zip');
@@ -108,6 +111,26 @@ test('workspace export creates a downloadable artifact for a single deliverable'
     if (artifactId) await deleteArtifacts([artifactId], ownerId);
     await deleteChat(ownerId, String(chat._id));
     __resetWorkspaceMemoryForTests();
+    if (oldMongo === undefined) delete process.env.MONGODB_URI; else process.env.MONGODB_URI = oldMongo;
+  }
+});
+
+
+test('workspace derives directories and rejects file/directory path collisions', async () => {
+  const oldMongo = process.env.MONGODB_URI; delete process.env.MONGODB_URI; __resetWorkspaceMemoryForTests();
+  const chat = await createChat(ownerId, 'Directory semantics test');
+  try {
+    await createWorkspaceFile(ownerId, String(chat._id), 'packages/backend/src/app.js', 'export default 1;');
+    const listing = await listWorkspaceFiles(ownerId, String(chat._id));
+    assert.ok(listing.directories.some((entry) => entry.path === 'packages' && entry.type === 'directory'));
+    assert.ok(listing.directories.some((entry) => entry.path === 'packages/backend/src'));
+    await assert.rejects(createWorkspaceFile(ownerId, String(chat._id), 'packages', 'not a directory'), /directory already exists/i);
+    await assert.rejects(readWorkspaceFile(ownerId, String(chat._id), 'packages'), /is a directory/i);
+    const removed = await deleteWorkspaceFile(ownerId, String(chat._id), 'packages');
+    assert.equal(removed.recursive, true);
+    assert.equal((await listWorkspaceFiles(ownerId, String(chat._id))).fileCount, 0);
+  } finally {
+    await deleteChat(ownerId, String(chat._id)); __resetWorkspaceMemoryForTests();
     if (oldMongo === undefined) delete process.env.MONGODB_URI; else process.env.MONGODB_URI = oldMongo;
   }
 });

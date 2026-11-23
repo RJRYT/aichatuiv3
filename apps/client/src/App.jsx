@@ -3055,6 +3055,7 @@ export default function App() {
   const [busy, setBusy] = useState(false),
     [status, setStatus] = useState('Ready'),
     [toast, setToast] = useState(null),
+    [pendingRecovery, setPendingRecovery] = useState(null),
     [liveProgress, setLiveProgress] = useState(null),
     [progressClock, setProgressClock] = useState(Date.now()),
     [drawer, setDrawer] = useState(false),
@@ -3076,6 +3077,7 @@ export default function App() {
     chatLoadSeqRef = useRef(0),
     initialRouteHandledRef = useRef(false),
     loadStartedRef = useRef(false),
+    recoveryStartedRef = useRef(false),
     authFeedbackRef = useRef(null);
   const activeChat = useMemo(() => chats.find((c) => c._id === activeId), [chats, activeId]);
   const activePlan = useMemo(() => latestActivePlan(messages), [messages]);
@@ -3253,12 +3255,12 @@ export default function App() {
     try {
       const pending = localStorage.getItem('nemotron.pendingGeneration');
       if (pending) {
-        localStorage.removeItem('nemotron.pendingGeneration');
-        setToast({
-          id: Date.now(),
-          message: 'A previous generation was interrupted. You can retry it when ready.',
-          type: 'error',
-        });
+        const parsed = JSON.parse(pending);
+        if (parsed?.chatId && parsed?.generationId) setPendingRecovery(parsed);
+        else {
+          localStorage.removeItem('nemotron.pendingGeneration');
+          setToast({ id: Date.now(), message: 'A previous generation ended before a recovery session could be created. You can retry it when ready.', type: 'error' });
+        }
       }
     } catch {}
     loadAccount();
@@ -3404,6 +3406,46 @@ export default function App() {
       if (sequence === chatLoadSeqRef.current) setChatLoading(false);
     }
   };
+  useEffect(() => {
+    if (!chatsLoaded || !pendingRecovery || recoveryStartedRef.current) return;
+    recoveryStartedRef.current = true;
+    const recovery = pendingRecovery;
+    setPendingRecovery(null);
+    const controller = new AbortController();
+    controller.generationId = recovery.generationId;
+    abortRef.current = controller;
+    setBusy(true);
+    setStatus('Recovering previous generation…');
+    setLiveProgress({ message: 'Reconnecting to the saved generation session…', startedAt: Date.now(), lastActivityAt: Date.now() });
+    void (async () => {
+      let recoveredError = '';
+      try {
+        await selectChat(recovery.chatId);
+        const streamUrl = api(`/api/chat/stream/${recovery.generationId}/events?after=0`);
+        const response = await fetch(streamUrl, { credentials: 'include', headers: { Accept: 'text/event-stream' }, signal: controller.signal });
+        if (!response.ok) throw await responseError(response, 'Could not recover the previous generation');
+        for await (const event of readChatEventStream(response, {
+          signal: controller.signal,
+          reconnect: (after) => fetch(api(`/api/chat/stream/${recovery.generationId}/events?after=${after}`), { credentials: 'include', headers: { Accept: 'text/event-stream' }, signal: controller.signal }),
+        })) {
+          if (event.type === 'heartbeat') setLiveProgress((current) => ({ ...(current || {}), message: event.message || 'The agent is continuing in the background.', lastActivityAt: Date.now() }));
+          if (event.type === 'error') recoveredError = String(event.error || 'The previous generation was interrupted.');
+          if (event.type === 'stopped') recoveredError = 'The previous generation was cancelled before completion.';
+          if (event.type === 'status') setStatus(event.status || 'Recovering…');
+        }
+        if (activeIdRef.current === recovery.chatId) await selectChat(recovery.chatId);
+        setToast({ id: Date.now(), message: recoveredError ? `Previous generation could not resume: ${recoveredError}` : 'Previous generation recovered and its saved response has been loaded.', type: recoveredError ? 'error' : 'success' });
+      } catch (error) {
+        if (error?.name !== 'AbortError') setToast({ id: Date.now(), message: `Could not recover the previous generation: ${error.message}`, type: 'error' });
+      } finally {
+        if (abortRef.current === controller) abortRef.current = null;
+        try { localStorage.removeItem('nemotron.pendingGeneration'); } catch {}
+        setBusy(false);
+        setLiveProgress(null);
+      }
+    })();
+  }, [chatsLoaded, pendingRecovery]);
+
   const saveMessages = async (id, next, title) => {
     const res = await request(`/api/chats/${id}`, {
       method: 'PATCH',
@@ -3775,6 +3817,8 @@ export default function App() {
       );
     } catch {}
     const controller = new AbortController();
+    controller.generationId = crypto.randomUUID();
+    try { localStorage.setItem('nemotron.pendingGeneration', JSON.stringify({ chatId: activeId, generationId: controller.generationId, startedAt: Date.now() })); } catch {}
     abortRef.current = controller;
     try {
       const res = await fetchChatStream(
@@ -3785,6 +3829,7 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             chatId: activeId,
+            generationId: controller.generationId,
             branchId: activeBranchId,
             expectedRevision: activeChat?.revision || 0,
             preserveExistingMessageId: message.id,
@@ -3807,7 +3852,7 @@ export default function App() {
       if (!res.ok) throw await responseError(res, 'Could not regenerate the response');
       let regeneratedOutput = '',
         regenerationToolEvents = [];
-      for await (const event of readChatEventStream(res, { signal: controller.signal })) {
+      for await (const event of readChatEventStream(res, { signal: controller.signal, reconnect: (after) => fetch(api(`/api/chat/stream/${controller.generationId}/events?after=${after}`), { credentials: 'include', headers: { Accept: 'text/event-stream' }, signal: controller.signal }) })) {
         if (event.type === 'status') setStatus(event.status || 'Working');
         if (event.type === 'heartbeat')
           setLiveProgress((current) => ({
@@ -4196,6 +4241,8 @@ export default function App() {
       };
     if (activeIdRef.current === chat._id) setMessages([...nextMessages, assistant]);
     const controller = new AbortController();
+    controller.generationId = crypto.randomUUID();
+    try { localStorage.setItem('nemotron.pendingGeneration', JSON.stringify({ chatId: chat._id, generationId: controller.generationId, startedAt: Date.now() })); } catch {}
     abortRef.current = controller;
     const started = performance.now();
     setLiveProgress(
@@ -4247,6 +4294,7 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             chatId: chat._id,
+            generationId: controller.generationId,
             branchId: options.branchId || activeBranchId,
             expectedRevision: options.expectedRevision ?? (chat.revision || 0),
             assistantMessageId: assistantId,
@@ -4268,7 +4316,7 @@ export default function App() {
         controller
       );
       if (!res.ok) throw await responseError(res, 'The server could not complete your request');
-      for await (const event of readChatEventStream(res, { signal: controller.signal })) {
+      for await (const event of readChatEventStream(res, { signal: controller.signal, reconnect: (after) => fetch(api(`/api/chat/stream/${controller.generationId}/events?after=${after}`), { credentials: 'include', headers: { Accept: 'text/event-stream' }, signal: controller.signal }) })) {
         if (event.type === 'status') setStatus(event.status || 'Working');
         if (event.type === 'heartbeat')
           setLiveProgress((current) => ({
@@ -4567,7 +4615,7 @@ export default function App() {
             <button
               className="icon-button stop-button"
               title="Stop"
-              onClick={() => abortRef.current?.abort()}
+              onClick={() => { const generationId = abortRef.current?.generationId; if (generationId) void fetch(api(`/api/chat/stream/${generationId}/cancel`), { method: 'POST', credentials: 'include' }).catch(() => {}); abortRef.current?.abort(); }}
             >
               <Square size={14} />
             </button>

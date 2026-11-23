@@ -51,6 +51,7 @@ export function inspectZipBuffer(buffer) {
     return { valid: false, reason: 'ZIP central directory is empty or out of bounds.' };
   }
   const files = [];
+  const seenNames = new Set();
   let cursor = centralOffset;
   try {
     for (let index = 0; index < entries; index++) {
@@ -69,6 +70,8 @@ export function inspectZipBuffer(buffer) {
       const name = buffer.toString('utf8', cursor + 46, cursor + 46 + nameLength);
       cursor = end;
       if (!name || name.endsWith('/')) continue;
+      if (seenNames.has(name)) return { valid: false, reason: `ZIP contains a duplicate entry: ${name}.` };
+      seenNames.add(name);
       if (name.startsWith('/') || name.split(/[\\/]/).includes('..')) {
         return { valid: false, reason: 'ZIP contains an unsafe file path.' };
       }
@@ -94,6 +97,13 @@ export function inspectZipBuffer(buffer) {
     }
   } catch (error) {
     return { valid: false, reason: `ZIP decompression failed: ${error.message}` };
+  }
+  for (const name of seenNames) {
+    const parts = name.split('/');
+    for (let index = 1; index < parts.length; index++) {
+      const parent = parts.slice(0, index).join('/');
+      if (seenNames.has(parent)) return { valid: false, reason: `ZIP path collision: ${parent} is both a file and a parent directory.` };
+    }
   }
   if (!files.length) return { valid: false, reason: 'ZIP contains no files.' };
   if (!files.some((entry) => entry.uncompressedSize > 0)) {

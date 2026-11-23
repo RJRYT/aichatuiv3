@@ -60,7 +60,7 @@ const tools = [
     function: {
       name: 'execute_python',
       description:
-        'Execute CPython 3.14 code in an isolated Vercel Sandbox microVM. Use for Python-specific execution, computation, data processing, automation, document generation, image processing, charts, and Python application testing. A read-only snapshot of non-secret project files is mounted under /tmp/nemotron-source when a workspace exists. For ordinary source-file creation, reading, editing, searching, and project organization, use native workspace tools instead; do not start Python merely to write files. Uploaded files are mounted under uploads/. Generated files are collected into the user File Library. Inspect execution status, stdout, stderr, exit code and artifact metadata. Never claim success unless execution completed.',
+        'Execute CPython 3.14 code in an isolated Vercel Sandbox microVM. Use for Python-specific execution, computation, data processing, automation, document generation, image processing, charts, and Python application testing. A non-secret snapshot of the current project workspace is materialized into the sandbox working directory when a workspace exists. Changes to eligible text files and deletions are synchronized back to the durable workspace; binary outputs are saved to the File Library. For ordinary source-file creation, reading, editing, searching, and project organization, use native workspace tools instead; do not start Python merely to write files. Uploaded files are mounted under uploads/. Generated files are collected into the user File Library. Inspect execution status, stdout, stderr, exit code and artifact metadata. Never claim success unless execution completed.',
       parameters: {
         type: 'object',
         properties: {
@@ -82,7 +82,7 @@ const tools = [
     type: 'function',
     function: {
       name: 'execute_node',
-      description: 'Run an isolated Node.js, npm, or npx command against a snapshot of the current conversation workspace. Use for JavaScript syntax checks, Node.js scripts, dependency installation, Vite/React builds, and Node tests. This runs in a separate sandbox, never in the application server. Requires a configured Node sandbox image.',
+      description: 'Run an isolated Node.js, npm, or npx command against a clean snapshot of the current conversation workspace. Changes to eligible UTF-8 text files and deletions are synchronized back to the durable workspace; generated binary files are saved to the File Library. Use for JavaScript syntax checks, Node.js scripts, dependency installation, Vite/React builds, and Node tests. This runs in a separate sandbox, never in the application server. Requires a configured Node sandbox image.',
       parameters: {
         type: 'object',
         properties: {

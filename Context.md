@@ -160,3 +160,11 @@ Personalization UI order is Color theme, then Agent personality. Base style, Bas
 - Latest/current information, browsing, web search, explicit tool requests and research are guarded away from Bolt to tool-capable models.
 - Manual Bolt mode rejects tasks that require tools with a clear capability message.
 - Empty model responses are treated as failures; Auto escalates rather than persisting a generic empty-answer fallback as success.
+
+
+## v8.5.0 reliability upgrade
+- Workspace directory markers are excluded from file operations; nested directories are inferred from file paths, path collisions are rejected, and directory deletion is recursive.
+- Python source snapshots use per-execution temporary roots; runtime snapshots filter legacy markers.
+- Workspace ZIPs are extracted into a clean temporary directory and compared against a path/size/SHA-256 manifest before delivery. Project completeness remains unassessed without a project manifest.
+- Generation sessions persist SSE events in MongoDB and replay after browser disconnection. Explicit cancellation is separate from transport disconnect. Stale sessions are marked interrupted after 120 seconds without persisted updates; in-flight external model requests cannot resume at exact token position.
+- Tool retries are hard-bounded and further dispatch is blocked after exhaustion. Final responses disclose unresolved tool failures.

@@ -5,11 +5,17 @@ import { getChat } from '../chatStore.js';
 import { guessMimeType, storeArtifact } from '../interpreter/artifactStore.js';
 import { inspectZipBuffer } from '../archiveValidation.js';
 import { deflateRawSync } from 'node:zlib';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import nodePath from 'node:path';
 
 const memoryFiles = new Map();
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_WORKSPACE_BYTES = 20 * 1024 * 1024;
 const MAX_WORKSPACE_FILES = 500;
+// Legacy workspace directories were stored as 1-byte placeholder file records.
+const LEGACY_DIRECTORY_MARKER_SHA256 = 'd10b36aa74a59bcf4a88185837f658afaf3646eff2bb16c3928d0e9335e945d2';
+const isLegacyDirectoryMarker = (file) => Number(file?.size) === 1 && file?.sha256 === LEGACY_DIRECTORY_MARKER_SHA256;
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 
 function databaseReady() {
@@ -47,29 +53,39 @@ async function assertWorkspace(ownerId, chatId) {
 }
 
 async function findFile(ownerId, chatId, path) {
-  if (databaseReady()) {
-    return WorkspaceFile.findOne({ ownerId: String(ownerId), chatId: String(chatId), path }).lean();
-  }
-  return memoryFiles.get(key(ownerId, chatId, path)) || null;
+  const record = databaseReady()
+    ? await WorkspaceFile.findOne({ ownerId: String(ownerId), chatId: String(chatId), path }).lean()
+    : memoryFiles.get(key(ownerId, chatId, path)) || null;
+  return record && !isLegacyDirectoryMarker(record) ? record : null;
 }
 
 async function listRecords(ownerId, chatId) {
   if (databaseReady()) {
-    return WorkspaceFile.find({ ownerId: String(ownerId), chatId: String(chatId) })
-      .select('path size revision sha256 createdAt updatedAt')
-      .sort({ path: 1 }).lean();
+    return (await WorkspaceFile.find({ ownerId: String(ownerId), chatId: String(chatId) })
+      .select('path content size revision sha256 createdAt updatedAt')
+      .sort({ path: 1 }).lean()).filter((file) => !isLegacyDirectoryMarker(file));
   }
-  return [...memoryFiles.values()].filter((file) => file.ownerId === String(ownerId) && file.chatId === String(chatId));
+  return [...memoryFiles.values()].filter((file) => file.ownerId === String(ownerId) && file.chatId === String(chatId) && !isLegacyDirectoryMarker(file));
 }
 
 export async function listWorkspaceFiles(ownerId, chatId, prefix = '') {
   await assertWorkspace(ownerId, chatId);
   const normalizedPrefix = prefix ? normalizeWorkspacePath(prefix).replace(/\/$/, '') : '';
   const files = await listRecords(ownerId, chatId);
+  const visibleFiles = files.filter((file) => !normalizedPrefix || file.path.startsWith(`${normalizedPrefix}/`) || file.path === normalizedPrefix);
+  const directories = new Set();
+  for (const file of visibleFiles) {
+    const parts = file.path.split('/');
+    for (let index = 1; index < parts.length; index++) {
+      const directory = parts.slice(0, index).join('/');
+      if (!normalizedPrefix || directory === normalizedPrefix || directory.startsWith(`${normalizedPrefix}/`)) directories.add(directory);
+    }
+  }
   return {
-    files: files.filter((file) => !normalizedPrefix || file.path === normalizedPrefix || file.path.startsWith(`${normalizedPrefix}/`))
-      .map(({ path, size, revision, sha256, updatedAt }) => ({ path, size, revision, sha256, updatedAt })),
+    files: visibleFiles.map(({ path, size, revision, sha256, updatedAt }) => ({ path, type: 'file', size, revision, sha256, updatedAt })),
+    directories: [...directories].sort().map((path) => ({ path, type: 'directory' })),
     fileCount: files.length,
+    directoryCount: directories.size,
     totalBytes: files.reduce((sum, file) => sum + Number(file.size || 0), 0),
   };
 }
@@ -78,7 +94,11 @@ export async function readWorkspaceFile(ownerId, chatId, rawPath, options = {}) 
   await assertWorkspace(ownerId, chatId);
   const path = normalizeWorkspacePath(rawPath);
   const file = await findFile(ownerId, chatId, path);
-  if (!file) throw new Error(`Workspace file not found: ${path}`);
+  if (!file) {
+    const records = await listRecords(ownerId, chatId);
+    if (records.some((item) => item.path.startsWith(`${path}/`))) throw new Error(`Workspace path is a directory, not a file: ${path}`);
+    throw new Error(`Workspace file not found: ${path}`);
+  }
   const allLines = String(file.content || '').split(/\r?\n/);
   const full = Boolean(options.full);
   const startLine = full ? 1 : Math.max(1, Number(options.startLine) || 1);
@@ -99,8 +119,22 @@ export async function createWorkspaceFile(ownerId, chatId, rawPath, content, { o
   const size = Buffer.byteLength(text, 'utf8');
   if (size > MAX_FILE_BYTES) throw new Error('A workspace file cannot exceed 1 MB.');
   const existing = await findFile(ownerId, chatId, path);
+  const currentRecords = await listRecords(ownerId, chatId);
+  if (currentRecords.some((item) => item.path.startsWith(`${path}/`))) throw new Error(`Cannot create file at ${path}: a directory already exists at this path.`);
+  // Remove an orphaned legacy marker at this exact path before creating a real file.
+  if (!existing) {
+    if (databaseReady()) {
+      const legacy = await WorkspaceFile.findOne({ ownerId: String(ownerId), chatId: String(chatId), path }).lean();
+      if (legacy && isLegacyDirectoryMarker(legacy)) await WorkspaceFile.deleteOne({ ownerId: String(ownerId), chatId: String(chatId), path });
+    } else {
+      const legacy = memoryFiles.get(key(ownerId, chatId, path));
+      if (legacy && isLegacyDirectoryMarker(legacy)) memoryFiles.delete(key(ownerId, chatId, path));
+    }
+  }
+  const parentFile = path.split('/').slice(0, -1).map((_, index, parts) => parts.slice(0, index + 1).join('/')).find((parent) => currentRecords.some((item) => item.path === parent));
+  if (parentFile) throw new Error(`Cannot create ${path}: parent path ${parentFile} is a file, not a directory.`);
   if (existing && !overwrite) throw new Error(`Workspace file already exists: ${path}. Use workspace_edit or explicitly enable overwrite.`);
-  const files = await listRecords(ownerId, chatId);
+  const files = currentRecords;
   const total = files.reduce((sum, file) => sum + Number(file.size || 0), 0) - Number(existing?.size || 0) + size;
   if (!existing && files.length >= MAX_WORKSPACE_FILES) throw new Error('Workspace file limit reached (500 files).');
   if (total > MAX_WORKSPACE_BYTES) throw new Error('Workspace storage limit reached (20 MB).');
@@ -146,10 +180,11 @@ export async function deleteWorkspaceFile(ownerId, chatId, rawPath) {
   await assertWorkspace(ownerId, chatId);
   const path = normalizeWorkspacePath(rawPath);
   const existing = await findFile(ownerId, chatId, path);
-  if (!existing) return { deleted: false, path };
-  if (databaseReady()) await WorkspaceFile.deleteOne({ ownerId: String(ownerId), chatId: String(chatId), path });
-  else memoryFiles.delete(key(ownerId, chatId, path));
-  return { deleted: true, path };
+  const descendants = (await listRecords(ownerId, chatId)).filter((item) => item.path.startsWith(`${path}/`));
+  if (!existing && !descendants.length) return { deleted: false, path };
+  if (databaseReady()) await WorkspaceFile.deleteMany({ ownerId: String(ownerId), chatId: String(chatId), path: { $in: [path, ...descendants.map((item) => item.path)] } });
+  else { memoryFiles.delete(key(ownerId, chatId, path)); for (const item of descendants) memoryFiles.delete(key(ownerId, chatId, item.path)); }
+  return { deleted: true, path, deletedCount: descendants.length + (existing ? 1 : 0), recursive: descendants.length > 0 };
 }
 
 export async function searchWorkspaceFiles(ownerId, chatId, query, prefix = '') {
@@ -230,22 +265,66 @@ export async function exportWorkspaceFile(ownerId, chatId, rawPath, requestedNam
   };
 }
 
+
+async function verifyArchiveExtraction(archive, expectedFiles) {
+  const verification = inspectZipBuffer(archive);
+  if (!verification.valid) throw new Error(`Workspace archive verification failed: ${verification.reason}`);
+  const expected = new Map(expectedFiles.map((file) => [file.path, { sha256: sha256(Buffer.from(file.content, 'utf8')), size: Buffer.byteLength(file.content, 'utf8') }]));
+  const actual = new Map((verification.entries || []).map((entry) => [entry.name, { sha256: sha256(entry.content), size: entry.uncompressedSize }]));
+  if (expected.size !== actual.size || [...expected].some(([path, value]) => actual.get(path)?.sha256 !== value.sha256 || actual.get(path)?.size !== value.size)) {
+    throw new Error('Workspace archive verification failed: extracted ZIP entries do not match the workspace manifest.');
+  }
+  const tempRoot = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'nemotron-zip-verify-'));
+  try {
+    for (const entry of verification.entries) {
+      const segments = entry.name.replaceAll('\\', '/').split('/');
+      if (!entry.name || entry.name.startsWith('/') || segments.some((part) => !part || part === '.' || part === '..')) throw new Error(`Workspace archive contains an unsafe path: ${entry.name}`);
+      const target = nodePath.resolve(tempRoot, ...segments);
+      if (!target.startsWith(`${tempRoot}${nodePath.sep}`)) throw new Error(`Workspace archive path escaped verification directory: ${entry.name}`);
+      await fs.mkdir(nodePath.dirname(target), { recursive: true });
+      await fs.writeFile(target, entry.content, { flag: 'wx' });
+    }
+    const extracted = new Map();
+    for (const [relativePath, expectedValue] of expected) {
+      const target = nodePath.resolve(tempRoot, ...relativePath.split('/'));
+      const bytes = await fs.readFile(target);
+      const digest = sha256(bytes);
+      if (bytes.byteLength !== expectedValue.size || digest !== expectedValue.sha256) throw new Error(`Extracted archive file failed verification: ${relativePath}`);
+      extracted.set(relativePath, digest);
+    }
+    if (extracted.size !== expected.size) throw new Error('Extracted archive contains an unexpected file count.');
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+  return { archiveValid: true, contentVerified: true, fileCount: expected.size };
+}
+
 export async function archiveWorkspace(ownerId, chatId, name = 'project.zip') {
   await assertWorkspace(ownerId, chatId);
   const records = (await listRecords(ownerId, chatId)).filter((item) => !isSensitiveWorkspacePath(item.path));
   if (!records.length) throw new Error('The workspace contains no non-secret files to archive.');
+  const filePaths = new Set(records.map((item) => item.path));
+  for (const filePath of filePaths) {
+    const parts = filePath.split('/');
+    for (let index = 1; index < parts.length; index++) {
+      const parent = parts.slice(0, index).join('/');
+      if (filePaths.has(parent)) throw new Error(`Cannot archive workspace: path collision; ${parent} is both a file and a parent directory.`);
+    }
+  }
   const files = [];
   for (const item of records) {
     const full = await findFile(ownerId, chatId, item.path);
-    files.push({ path: item.path, content: full.content });
+    if (!full || isLegacyDirectoryMarker(full)) continue;
+    files.push({ path: item.path, content: full.content, sha256: full.sha256, size: full.size });
   }
+  if (!files.length) throw new Error('The workspace contains no real files to archive after removing legacy directory markers.');
   const archive = createZip(files);
-  const verification = inspectZipBuffer(archive);
-  if (!verification.valid || verification.fileCount !== files.length) throw new Error(`Workspace archive verification failed: ${verification.reason || 'file count mismatch'}`);
+  const verification = await verifyArchiveExtraction(archive, files);
+  if (!verification.archiveValid || !verification.contentVerified || verification.fileCount !== files.length) throw new Error('Workspace archive verification failed: extracted manifest mismatch.');
   const safeName = String(name || 'project.zip').replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 120);
   const filename = safeName.toLowerCase().endsWith('.zip') ? safeName : `${safeName}.zip`;
   const artifact = await storeArtifact({ ownerId, chatId, name: filename, relativePath: filename, content: archive, mimeType: 'application/zip' });
-  return { archived: true, verified: true, artifact, artifacts: [artifact], fileCount: files.length, totalBytes: archive.length, workspaceFiles: files.map((file) => file.path) };
+  return { archived: true, verified: true, archiveValid: true, contentVerified: true, projectComplete: null, projectCompleteness: 'not_assessed_no_project_manifest', deliveryReady: Boolean(artifact?.id || artifact?.downloadUrl), artifact, artifacts: [artifact], fileCount: files.length, totalBytes: archive.length, workspaceFiles: files.map((file) => file.path), manifest: files.map(({ path, size, sha256 }) => ({ path, size, sha256 })) };
 }
 
 

@@ -4,6 +4,7 @@ import { storeArtifact, guessMimeType } from './artifactStore.js';
 import { listConversationUploadMetadata, getConversationUploads } from './uploadStore.js';
 import { EXECUTION_LIMITS, getVercelSandboxConfig } from './executionSchemas.js';
 import logger from '../../utils/logger.js';
+import { createWorkspaceFile, deleteWorkspaceFile } from '../workspace/workspaceManager.js';
 
 const log = logger.child({ component: 'vercel-sandbox' });
 const active = new Map();
@@ -272,10 +273,35 @@ function safeRelativePath(value) {
   if (
     !normalized ||
     normalized.startsWith('/') ||
+    /^[a-zA-Z]:/.test(normalized) ||
+    /[\u0000-\u001f<>:\"|?*]/.test(normalized) ||
     normalized.split('/').some((part) => !part || part === '.' || part === '..')
   )
     return null;
   return normalized;
+}
+
+function validateWorkspaceSnapshot(workspaceFiles = []) {
+  const files = Array.isArray(workspaceFiles) ? workspaceFiles.slice(0, 500) : [];
+  const paths = new Set();
+  let totalBytes = 0;
+  for (const file of files) {
+    if (Number(file?.size) === 1 && file?.sha256 === 'd10b36aa74a59bcf4a88185837f658afaf3646eff2bb16c3928d0e9335e945d2') continue;
+    const relative = safeRelativePath(file?.path);
+    if (!relative) throw new Error('Workspace snapshot contains an unsafe relative path.');
+    if (['.venv', 'uploads', 'node_modules', '.npm', '.nemotron-artifacts.json', '.nemotron-inputs.json'].includes(relative.split('/')[0])) throw new Error(`Workspace snapshot uses a reserved runtime path: ${relative}`);
+    if (paths.has(relative)) throw new Error(`Workspace snapshot contains a duplicate path: ${relative}`);
+    const parts = relative.split('/');
+    for (let index = 1; index < parts.length; index++) {
+      const parent = parts.slice(0, index).join('/');
+      if (paths.has(parent)) throw new Error(`Workspace snapshot path collision: ${parent} is both a file and a parent directory.`);
+    }
+    if ([...paths].some((existing) => existing.startsWith(`${relative}/`))) throw new Error(`Workspace snapshot path collision: ${relative} is both a file and a parent directory.`);
+    paths.add(relative);
+    totalBytes += Buffer.byteLength(String(file.content || ''), 'utf8');
+    if (totalBytes > 20 * 1024 * 1024) throw new Error('Workspace snapshot exceeds the 20 MB runtime transfer limit.');
+  }
+  return files.filter((file) => !(Number(file?.size) === 1 && file?.sha256 === 'd10b36aa74a59bcf4a88185837f658afaf3646eff2bb16c3928d0e9335e945d2'));
 }
 
 function safeArtifactName(relativePath) {
@@ -303,6 +329,7 @@ ignored={'.git','.venv','venv','node_modules','__pycache__','.cache','uploads','
 sensitive_names={'.env','id_rsa','id_ed25519','authorized_keys','known_hosts','credentials.json','service-account.json'}
 total=0
 skipped=0
+seen=set()
 for root, dirs, files in os.walk('.', topdown=True, followlinks=False):
     dirs[:] = [d for d in dirs if d not in ignored and not os.path.islink(os.path.join(root,d))]
     for filename in files:
@@ -314,13 +341,12 @@ for root, dirs, files in os.walk('.', topdown=True, followlinks=False):
             rel=os.path.relpath(full,'.').replace(os.sep,'/')
             if rel in (manifest_path,'.nemotron-inputs.json') or rel.startswith('../') or rel == '..':
                 continue
+            seen.add(rel)
             lower_name=filename.lower()
             if lower_name in sensitive_names or lower_name.startswith('.env.') or lower_name.endswith(('.pem','.key','.p12','.pfx')):
                 skipped += 1
                 continue
-            if info.st_size <= 0:
-                continue
-            if info.st_size > 10485760:
+            if info.st_size > 20971520:
                 skipped += 1
                 continue
             digest=hashlib.sha256()
@@ -330,14 +356,53 @@ for root, dirs, files in os.walk('.', topdown=True, followlinks=False):
             checksum=digest.hexdigest()
             if known.get(rel) == checksum:
                 continue
-            if len(items) >= 8 or total + info.st_size > 10485760:
+            if len(items) >= 500 or total + info.st_size > 20971520:
                 skipped += 1
                 continue
             items.append({'path':rel,'size':info.st_size,'sha256':checksum})
             total += info.st_size
         except (OSError, ValueError):
             skipped += 1
-print('__NEMOTRON_FILE_INDEX__:' + json.dumps({'files':items,'known':known,'skipped':skipped}, separators=(',',':')))
+deleted=[name for name in known if name not in seen]
+print('__NEMOTRON_FILE_INDEX__:' + json.dumps({'files':items,'known':known,'deleted':deleted,'skipped':skipped}, separators=(',',':')))
+`;
+
+const NODE_FILE_SCANNER = String.raw`
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const prefix = '__NEMOTRON_FILE_INDEX__:';
+let known = {};
+try { known = JSON.parse(fs.readFileSync('.nemotron-artifacts.json', 'utf8')); if (!known || typeof known !== 'object' || Array.isArray(known)) known = {}; } catch {}
+const ignored = new Set(['.git','.venv','venv','node_modules','__pycache__','.cache','uploads','.ssh','.aws','.config']);
+const sensitive = new Set(['.env','id_rsa','id_ed25519','authorized_keys','known_hosts','credentials.json','service-account.json']);
+const items = [], seen = new Set(); let total = 0, skipped = 0;
+function walk(directory) {
+  let entries = [];
+  try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { skipped++; return; }
+  for (const entry of entries) {
+    const full = path.join(directory, entry.name);
+    if (entry.isSymbolicLink()) continue;
+    if (entry.isDirectory()) { if (!ignored.has(entry.name)) walk(full); continue; }
+    if (!entry.isFile()) continue;
+    const relative = path.relative('.', full).split(path.sep).join('/');
+    if (relative === '.nemotron-artifacts.json' || relative === '.nemotron-inputs.json' || relative.startsWith('../')) continue;
+    seen.add(relative);
+    const lower = entry.name.toLowerCase();
+    if (sensitive.has(lower) || lower.startsWith('.env.') || /\.(pem|key|p12|pfx)$/i.test(lower)) { skipped++; continue; }
+    try {
+      const stat = fs.lstatSync(full);
+      if (stat.size > 20971520) { skipped++; continue; }
+      const digest = crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');
+      if (known[relative] === digest) continue;
+      if (items.length >= 500 || total + stat.size > 20971520) { skipped++; continue; }
+      items.push({ path: relative, size: stat.size, sha256: digest }); total += stat.size;
+    } catch { skipped++; }
+  }
+}
+walk('.');
+const deleted = Object.keys(known).filter((name) => !seen.has(name));
+console.log(prefix + JSON.stringify({ files: items, known, deleted, skipped }));
 `;
 
 async function ensureSandboxDirectory(sandbox, directoryPath, signal) {
@@ -493,10 +558,11 @@ async function collectWorkspaceArtifacts({
   executionId,
   signal,
   archiveOnly = false,
+  scannerRuntime = 'python',
 }) {
   const indexResult = await sandbox.runCommand({
-    cmd: 'python3',
-    args: ['-c', FILE_SCANNER],
+    cmd: scannerRuntime === 'node' ? 'node' : 'python3',
+    args: scannerRuntime === 'node' ? ['-e', NODE_FILE_SCANNER] : ['-c', FILE_SCANNER],
     cwd: workspacePath,
     timeoutMs: 20_000,
     signal,
@@ -509,6 +575,12 @@ async function collectWorkspaceArtifacts({
   const warnings = [];
   const known = index.known && typeof index.known === 'object' ? index.known : {};
   let totalBytes = 0;
+  if (!archiveOnly && chatId) {
+    for (const deletedPath of (index.deleted || []).slice(0, 500)) {
+      try { await deleteWorkspaceFile(userId, chatId, deletedPath); delete known[deletedPath]; }
+      catch (error) { warnings.push(`${deletedPath}: workspace deletion sync failed: ${error.message}`); }
+    }
+  }
   for (const entry of index.files || []) {
     const relativePath = safeRelativePath(entry.path);
     if (archiveOnly && relativePath && !/\.zip$/i.test(relativePath)) {
@@ -516,14 +588,7 @@ async function collectWorkspaceArtifacts({
       continue;
     }
     const size = Number(entry.size);
-    if (
-      !relativePath ||
-      !Number.isInteger(size) ||
-      size <= 0 ||
-      size > EXECUTION_LIMITS.maxArtifactFileBytes ||
-      totalBytes + size > EXECUTION_LIMITS.maxArtifactBytes
-    )
-      continue;
+    if (!relativePath || !Number.isInteger(size) || size < 0 || size > 20 * 1024 * 1024) continue;
     const sandboxBytes = await sandbox.readFileToBuffer({
       path: path.posix.join(workspacePath, relativePath),
     });
@@ -549,6 +614,20 @@ async function collectWorkspaceArtifacts({
       warnings.push(
         `${relativePath}: checksum mismatch while retrieving from sandbox; file was not saved`
       );
+      continue;
+    }
+    if (actualSha256 && !archiveOnly && chatId && size <= 1024 * 1024) {
+      try {
+        const text = new TextDecoder('utf-8', { fatal: true }).decode(buffer);
+        await createWorkspaceFile(userId, chatId, relativePath, text, { overwrite: true });
+        known[relativePath] = String(entry.sha256 || actualSha256);
+      } catch (error) {
+        warnings.push(`${relativePath}: workspace sync skipped: ${error.message}`);
+      }
+    }
+    if (size === 0) { known[relativePath] = String(entry.sha256 || actualSha256); continue; }
+    if (size > EXECUTION_LIMITS.maxArtifactFileBytes || totalBytes + size > EXECUTION_LIMITS.maxArtifactBytes) {
+      warnings.push(`${relativePath}: workspace sync completed where applicable, but the File Library artifact limit was reached.`);
       continue;
     }
     try {
@@ -793,6 +872,10 @@ export async function executeWithVercelSandbox({
         const runtimeConfig = created.config || config;
         workspacePath = path.posix.join(sandbox.cwd || '/vercel/sandbox', WORKSPACE_NAME);
         await ensureSandboxDirectory(sandbox, workspacePath, controller.signal);
+        // Rebuild the project view from the durable workspace snapshot while
+        // retaining only the Python virtual environment between executions.
+        const cleanup = await sandbox.runCommand({ cmd: 'find', args: ['.', '-mindepth', '1', '-maxdepth', '1', '!', '-name', '.venv', '-exec', 'rm', '-rf', '--', '{}', '+'], cwd: workspacePath, timeoutMs: 10000, signal: controller.signal });
+        if (cleanup.exitCode !== 0) throw new Error(`Could not prepare a clean Python workspace: ${await readCommandOutput(cleanup, 'stderr')}`);
         inputFiles = await syncConversationUploads({
           sandbox,
           workspacePath,
@@ -800,18 +883,17 @@ export async function executeWithVercelSandbox({
           chatId: resolvedChatId,
           signal: controller.signal,
         });
-        if (Array.isArray(workspaceFiles) && workspaceFiles.length) {
-          const sourceRoot = '/tmp/nemotron-source';
-          await ensureSandboxDirectory(sandbox, sourceRoot, controller.signal);
-          const sourceWrites = workspaceFiles.slice(0, 500).map((file) => {
-            const relative = safeRelativePath(file.path);
-            if (!relative) throw new Error('A workspace snapshot contains an unsafe path.');
-            return { path: path.posix.join(sourceRoot, relative), content: Buffer.from(String(file.content || ''), 'utf8'), mode: 0o600 };
-          });
-          const directories = [...new Set(sourceWrites.map((file) => path.posix.dirname(file.path)))];
-          for (const directory of directories) await ensureSandboxDirectory(sandbox, directory, controller.signal);
-          if (sourceWrites.length) await sandbox.writeFiles(sourceWrites, { signal: controller.signal });
-        }
+        const sourceFiles = validateWorkspaceSnapshot(workspaceFiles);
+        const sourceWrites = sourceFiles.map((file) => {
+          const relative = safeRelativePath(file.path);
+          if (!relative) throw new Error('A workspace snapshot contains an unsafe path.');
+          return { path: path.posix.join(workspacePath, relative), content: Buffer.from(String(file.content || ''), 'utf8'), mode: 0o600 };
+        });
+        const directories = [...new Set(sourceWrites.map((file) => path.posix.dirname(file.path)))];
+        for (const directory of directories) await ensureSandboxDirectory(sandbox, directory, controller.signal);
+        if (sourceWrites.length) await sandbox.writeFiles(sourceWrites, { signal: controller.signal });
+        const sourceManifest = Object.fromEntries(sourceFiles.filter((file) => file.sha256).map((file) => [file.path, file.sha256]));
+        await sandbox.writeFiles([{ path: path.posix.join(workspacePath, '.nemotron-artifacts.json'), content: Buffer.from(JSON.stringify(sourceManifest), 'utf8'), mode: 0o600 }], { signal: controller.signal });
         const pythonPath = await ensurePythonEnvironment(sandbox, workspacePath, controller.signal);
         const scriptPath = `/tmp/nemotron-${id.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80)}.py`;
         await sandbox.writeFiles(
@@ -991,19 +1073,22 @@ export async function executeNodeInSandbox({ command = 'node', args = [], userId
   if (signal?.aborted) abortFromCaller();
   active.set(jobKey, job);
   let sandbox;
+  let workspacePath = '';
+  let artifacts = [];
+  let fileWarnings = [];
+  let artifactsCollected = false;
   const startedAt = Date.now();
   let status = 'failed', stdout = '', stderr = '', exitCode = null;
   try {
     await withSandboxLock(job.sandboxName, async () => {
       const created = await getSandbox({ userId: uid, chatId: String(chatId || ''), executionId: id, signal: controller.signal, runtime: 'node', sandboxCredentials });
       sandbox = created.sandbox;
-      const workspacePath = path.posix.join(sandbox.cwd || '/vercel/sandbox', WORKSPACE_NAME);
+      workspacePath = path.posix.join(sandbox.cwd || '/vercel/sandbox', WORKSPACE_NAME);
       await ensureSandboxDirectory(sandbox, workspacePath, controller.signal);
       // Keep dependency caches, but replace source files with the durable workspace snapshot.
-      await sandbox.runCommand({ cmd: 'find', args: ['.', '-mindepth', '1', '-maxdepth', '1', '!', '-name', 'node_modules', '!', '-name', '.npm', '-exec', 'rm', '-rf', '--', '{}', '+'], cwd: workspacePath, timeoutMs: 10000, signal: controller.signal });
-      const files = Array.isArray(workspaceFiles) ? workspaceFiles.slice(0, 500) : [];
-      const totalBytes = files.reduce((sum, file) => sum + Buffer.byteLength(String(file.content || ''), 'utf8'), 0);
-      if (totalBytes > 20 * 1024 * 1024) throw new Error('Workspace snapshot exceeds the 20 MB runtime transfer limit.');
+      const cleanup = await sandbox.runCommand({ cmd: 'find', args: ['.', '-mindepth', '1', '-maxdepth', '1', '!', '-name', 'node_modules', '!', '-name', '.npm', '-exec', 'rm', '-rf', '--', '{}', '+'], cwd: workspacePath, timeoutMs: 10000, signal: controller.signal });
+      if (cleanup.exitCode !== 0) throw new Error(`Could not prepare a clean Node.js workspace: ${await readCommandOutput(cleanup, 'stderr')}`);
+      const files = validateWorkspaceSnapshot(workspaceFiles);
       const writes = [];
       for (const file of files) {
         const relative = safeRelativePath(file.path);
@@ -1013,17 +1098,29 @@ export async function executeNodeInSandbox({ command = 'node', args = [], userId
       const dirs = [...new Set(writes.map((file) => path.posix.dirname(file.path)))];
       for (const directory of dirs) await ensureSandboxDirectory(sandbox, directory, controller.signal);
       if (writes.length) await sandbox.writeFiles(writes, { signal: controller.signal });
+      const sourceManifest = Object.fromEntries(files.filter((file) => file.sha256).map((file) => [file.path, file.sha256]));
+      await sandbox.writeFiles([{ path: path.posix.join(workspacePath, '.nemotron-artifacts.json'), content: Buffer.from(JSON.stringify(sourceManifest), 'utf8'), mode: 0o600 }], { signal: controller.signal });
       if (controller.signal.aborted) throw abortError(controller.signal);
       job.command = await sandbox.runCommand({ cmd: command, args, cwd: workspacePath, timeoutMs: Math.max(10000, Math.min(300000, Number(timeoutMs) || 120000)), signal: controller.signal });
       exitCode = job.command.exitCode;
       stdout = truncateOutput(await readCommandOutput(job.command, 'stdout'), EXECUTION_LIMITS.maxOutputBytes).text;
       stderr = truncateOutput(await readCommandOutput(job.command, 'stderr'), EXECUTION_LIMITS.maxOutputBytes).text;
       status = controller.signal.aborted ? 'cancelled' : exitCode === 0 ? 'completed' : (exitCode === 124 || exitCode === 137 ? 'timeout' : 'failed');
+      if (status !== 'cancelled') {
+        const collected = await collectWorkspaceArtifacts({ sandbox, workspacePath, userId: uid, chatId: String(chatId || ''), executionId: id, signal: controller.signal, scannerRuntime: 'node' });
+        artifacts = collected.artifacts; fileWarnings = collected.warnings; artifactsCollected = true;
+      }
     }, controller.signal);
   } catch (error) {
     status = controller.signal.aborted || error?.name === 'AbortError' ? 'cancelled' : /timeout|deadline/i.test(String(error?.message || '')) ? 'timeout' : 'failed';
     stderr = String(error?.message || error).slice(0, EXECUTION_LIMITS.maxOutputBytes);
   } finally {
+    if (sandbox && workspacePath && !artifactsCollected && !shuttingDown) {
+      try {
+        const collected = await collectWorkspaceArtifacts({ sandbox, workspacePath, userId: uid, chatId: String(chatId || ''), executionId: id, signal: controller.signal, scannerRuntime: 'node' });
+        artifacts = collected.artifacts; fileWarnings = collected.warnings; artifactsCollected = true;
+      } catch (error) { log.warn('Node workspace recovery collection failed', { userId: uid, executionId: id, error: error.message }); }
+    }
     if (sandbox) {
       try { await sandbox.stop({ signal: AbortSignal.timeout(SANDBOX_STOP_TIMEOUT_MS) }); }
       catch (error) { log.warn('Node sandbox snapshot failed', { userId: uid, executionId: id, error: error.message }); }
@@ -1031,7 +1128,7 @@ export async function executeNodeInSandbox({ command = 'node', args = [], userId
     signal?.removeEventListener('abort', abortFromCaller);
     active.delete(jobKey);
   }
-  return { executionId: id, runtime: 'node', status, stdout, stderr, exitCode: status === 'completed' ? 0 : exitCode, durationMs: Date.now() - startedAt, provider: 'vercel-sandbox', sandbox: { persistentWorkspace: Boolean(chatId), imageConfigured: true } };
+  return { executionId: id, runtime: 'node', status, stdout, stderr, exitCode: status === 'completed' ? 0 : exitCode, durationMs: Date.now() - startedAt, artifacts, fileWarnings, provider: 'vercel-sandbox', sandbox: { persistentWorkspace: Boolean(chatId), imageConfigured: true } };
 }
 
 export function executeInSandbox(args) {
