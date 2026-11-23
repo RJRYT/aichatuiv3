@@ -15,12 +15,20 @@ test('agent checkpoints persist run state and completed operation summaries in m
   __resetAgentCheckpointMemoryForTests();
   const chat = await createChat('checkpoint-owner', 'Checkpoint test');
   try {
-    const created = await createAgentCheckpoint({ ownerId: 'checkpoint-owner', chatId: String(chat._id), plan: { objective: 'Build a project', tasks: [] } });
+    const created = await createAgentCheckpoint({
+      ownerId: 'checkpoint-owner',
+      chatId: String(chat._id),
+      plan: { objective: 'Build a project', tasks: [] },
+    });
     assert.equal(created.status, 'running');
     await updateAgentCheckpoint('checkpoint-owner', created.runId, {
       round: 3,
       executionToolCalls: 2,
-      operation: { tool: 'workspace_create', status: 'completed', arguments: { path: 'index.html' } },
+      operation: {
+        tool: 'workspace_create',
+        status: 'completed',
+        arguments: { path: 'index.html' },
+      },
     });
     await finishAgentCheckpoint('checkpoint-owner', created.runId, 'interrupted', 'Model timeout');
     const latest = await getLatestAgentCheckpoint('checkpoint-owner', String(chat._id));
@@ -32,10 +40,10 @@ test('agent checkpoints persist run state and completed operation summaries in m
   } finally {
     await deleteChat('checkpoint-owner', String(chat._id));
     __resetAgentCheckpointMemoryForTests();
-    if (oldMongo === undefined) delete process.env.MONGODB_URI; else process.env.MONGODB_URI = oldMongo;
+    if (oldMongo === undefined) delete process.env.MONGODB_URI;
+    else process.env.MONGODB_URI = oldMongo;
   }
 });
-
 
 test('completed agent checkpoints remain available as project history for later turns', async () => {
   const oldMongo = process.env.MONGODB_URI;
@@ -46,11 +54,21 @@ test('completed agent checkpoints remain available as project history for later 
     const created = await createAgentCheckpoint({
       ownerId: 'checkpoint-history-owner',
       chatId: String(chat._id),
-      plan: { objective: 'Implement project milestones', tasks: [{ id: 'p1', title: 'Foundation', status: 'completed' }] },
+      plan: {
+        objective: 'Implement project milestones',
+        tasks: [{ id: 'p1', title: 'Foundation', status: 'completed' }],
+      },
     });
     await updateAgentCheckpoint('checkpoint-history-owner', created.runId, {
-      plan: { objective: 'Implement project milestones', tasks: [{ id: 'p1', title: 'Foundation', status: 'completed' }] },
-      operation: { tool: 'workspace_create', status: 'completed', arguments: { path: 'README.md' } },
+      plan: {
+        objective: 'Implement project milestones',
+        tasks: [{ id: 'p1', title: 'Foundation', status: 'completed' }],
+      },
+      operation: {
+        tool: 'workspace_create',
+        status: 'completed',
+        arguments: { path: 'README.md' },
+      },
     });
     await finishAgentCheckpoint('checkpoint-history-owner', created.runId, 'completed');
     const history = await getLatestAgentCheckpoint('checkpoint-history-owner', String(chat._id));
@@ -60,6 +78,7 @@ test('completed agent checkpoints remain available as project history for later 
   } finally {
     await deleteChat('checkpoint-history-owner', String(chat._id));
     __resetAgentCheckpointMemoryForTests();
-    if (oldMongo === undefined) delete process.env.MONGODB_URI; else process.env.MONGODB_URI = oldMongo;
+    if (oldMongo === undefined) delete process.env.MONGODB_URI;
+    else process.env.MONGODB_URI = oldMongo;
   }
 });

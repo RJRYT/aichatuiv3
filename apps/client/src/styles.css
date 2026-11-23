@@ -4310,3 +4310,53 @@ body[data-theme] {
   .next-step-actions { display: grid; grid-template-columns: 1fr; }
   .next-step-actions button { justify-content: space-between; }
 }
+
+/* Nemotron model routing and provider identity */
+.model-selector {
+  max-width: 190px;
+  min-width: 132px;
+  height: 32px;
+  border: 1px solid var(--border, rgba(255,255,255,.12));
+  border-radius: 9px;
+  padding: 0 9px;
+  color: var(--text, inherit);
+  background: var(--surface-2, rgba(255,255,255,.045));
+  font: inherit;
+  font-size: 11px;
+  outline-offset: 2px;
+}
+.model-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 2px 7px;
+  border: 1px solid var(--border, rgba(255,255,255,.12));
+  border-radius: 999px;
+  color: var(--muted, #9aa0a6);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+/* Developer integrations and high-impact tool controls */
+.developer-settings { display: grid; gap: 13px; }
+.integration-card { border: 1px solid var(--border, rgba(255,255,255,.12)); border-radius: 13px; padding: 14px; display: grid; gap: 12px; }
+.integration-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.integration-card-head > div { display: grid; gap: 4px; }
+.integration-card-head small, .integration-fields label { color: var(--muted, #999); font-size: 11px; }
+.integration-status { border: 1px solid var(--border, rgba(255,255,255,.12)); border-radius: 999px; padding: 4px 8px; font-size: 10px; white-space: nowrap; }
+.integration-status.configured { color: var(--success, #79d69b); border-color: color-mix(in srgb, var(--success, #79d69b) 40%, transparent); }
+.integration-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.integration-fields label { display: grid; gap: 6px; }
+.integration-fields input { width: 100%; min-width: 0; }
+.integration-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.developer-note { background: var(--surface-2, rgba(255,255,255,.04)); border-radius: 10px; padding: 12px; font-size: 12px; }
+.developer-note p { color: var(--muted, #999); margin: 5px 0 0; line-height: 1.5; }
+.tool-default-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 12px; border-bottom: 1px solid var(--border, rgba(255,255,255,.07)); }
+.tool-default-row span { display: grid; gap: 3px; }
+.tool-default-row small { color: var(--muted, #999); font-size: 11px; }
+.tool-default-row em { color: var(--muted, #999); font-size: 10px; font-style: normal; white-space: nowrap; }
+.usage-model-breakdown { display: grid; gap: 8px; margin-top: 16px; padding: 14px; border: 1px solid var(--border, rgba(255,255,255,.12)); border-radius: 12px; }
+.usage-model-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 12px; }
+.usage-model-row span { display: flex; gap: 8px; align-items: center; }
+.usage-model-row small { color: var(--muted, #999); }
+@media (max-width: 620px) { .integration-fields { grid-template-columns: 1fr; } .integration-card-head { flex-direction: column; } .model-selector { max-width: 140px; min-width: 105px; } }

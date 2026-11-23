@@ -16,7 +16,7 @@ import sharesRouter from './routes/shares.js';
 import publicShareRouter from './routes/publicShare.js';
 import { requireAuth } from './services/auth.js';
 import { getPluginCatalog } from './services/tools.js';
-import { MODEL_ID } from './services/nvidia.js';
+import { publicModelCatalog } from './services/modelRegistry.js';
 import { closeSandboxManager } from './services/interpreter/sandboxManager.js';
 import logger from './utils/logger.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -94,7 +94,10 @@ app.use('/api', requireAuth);
 app.use('/api/account', accountRouter);
 app.use('/api/shares', sharesRouter);
 app.use('/api/interpreter', limiter, interpreterRouter);
-app.get('/api/plugins', (_req, res) => res.json({ plugins: getPluginCatalog() }));
+app.get('/api/plugins', (req, res) => res.json({ plugins: getPluginCatalog(req.user) }));
+app.get('/api/models', (_req, res) =>
+  res.json({ models: publicModelCatalog(), defaultMode: 'auto' })
+);
 app.use('/api/chats', limiter, chatsRouter);
 app.use('/api/chat', limiter, chatRouter);
 app.use('/api', (_req, res) => res.status(404).json({ error: 'API endpoint not found.' }));

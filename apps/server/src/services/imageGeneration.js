@@ -70,12 +70,12 @@ export async function generateImageArtifact(args, user, options = {}) {
     throw Object.assign(new Error('Sign in is required to generate and save images.'), {
       status: 401,
     });
-  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
-  const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+  const accountId = options.credentials?.accountId || process.env.CLOUDFLARE_ACCOUNT_ID;
+  const apiToken = options.credentials?.apiToken || process.env.CLOUDFLARE_API_TOKEN;
   if (!accountId || !apiToken)
     throw Object.assign(
       new Error(
-        'Image generation is not configured. Add the Cloudflare account ID and API token to the backend environment.'
+        'Image generation is not configured. Add Cloudflare credentials in Developer Mode → Personal Integrations or configure platform credentials.'
       ),
       { status: 503, code: 'IMAGE_PROVIDER_NOT_CONFIGURED' }
     );

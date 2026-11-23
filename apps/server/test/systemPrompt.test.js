@@ -4,7 +4,7 @@ import { buildSystemPrompt, SYSTEM_PROMPT_VERSION } from '../src/services/system
 
 test('system prompt loads the versioned Markdown identity and tool policy', () => {
   const prompt = buildSystemPrompt();
-  assert.equal(SYSTEM_PROMPT_VERSION, '8.1.0');
+  assert.equal(SYSTEM_PROMPT_VERSION, '8.2.0');
   assert.match(prompt, /You are \*\*Nemi\*\*/);
   assert.match(prompt, /Robin J R \(RJRYT\)/);
   assert.match(prompt, /`execute_python`/);

@@ -24,6 +24,7 @@ export async function executePython(input, userId, options = {}) {
       signal: options.signal,
       archiveOnly: options.archiveOnly,
       workspaceFiles: options.workspaceFiles,
+      sandboxCredentials: options.sandboxCredentials,
     });
   } finally {
     release();

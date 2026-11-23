@@ -5,7 +5,12 @@ const agentRunSchema = new mongoose.Schema(
     runId: { type: String, required: true, unique: true },
     ownerId: { type: String, required: true, index: true },
     chatId: { type: String, required: true, index: true },
-    status: { type: String, enum: ['running', 'completed', 'interrupted', 'failed'], default: 'running', index: true },
+    status: {
+      type: String,
+      enum: ['running', 'completed', 'interrupted', 'failed'],
+      default: 'running',
+      index: true,
+    },
     round: { type: Number, default: 0 },
     executionToolCalls: { type: Number, default: 0 },
     plan: { type: mongoose.Schema.Types.Mixed, default: null },

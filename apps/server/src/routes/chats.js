@@ -7,6 +7,7 @@ import {
   setBranchMessages,
 } from '../services/conversationBranches.js';
 import logger from '../utils/logger.js';
+import { aggregateUsageFromChats } from '../services/usageAnalytics.js';
 import { deleteSandboxForChat } from '../services/interpreter/sandboxManager.js';
 import { deleteWorkspaceForChat } from '../services/workspace/workspaceManager.js';
 import { deleteAgentCheckpointsForChat } from '../services/agents/checkpointManager.js';
@@ -21,91 +22,25 @@ const log = logger.child({ component: 'routes:chats' });
 router.get('/usage', async (req, res, next) => {
   try {
     res.set('Cache-Control', 'private, no-store');
-    const chats = await listChats(owner(req));
     const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 90);
-    const since = new Date(Date.now() - (days - 1) * 86400000);
-    since.setUTCHours(0, 0, 0, 0);
-    const byDay = new Map();
-    const totals = {
-      chats: chats.length,
-      userMessages: 0,
-      assistantMessages: 0,
-      toolCalls: 0,
-      promptTokens: 0,
-      completionTokens: 0,
-      totalTokens: 0,
-      responseMs: 0,
-      assistantDurations: 0,
-    };
-    for (const chat of chats) {
-      ensureBranches(chat);
-      const messages = getBranchMessages(chat, chat.activeBranchId || 'main') || [];
-      for (const message of messages) {
-        const createdAt = message.createdAt ? new Date(message.createdAt) : null;
-        if (!createdAt || Number.isNaN(createdAt.getTime()) || createdAt < since) continue;
-        const key = createdAt.toISOString().slice(0, 10);
-        if (!byDay.has(key))
-          byDay.set(key, {
-            date: key,
-            userMessages: 0,
-            assistantMessages: 0,
-            toolCalls: 0,
-            totalTokens: 0,
-            responseMs: 0,
-            assistantDurations: 0,
-          });
-        const bucket = byDay.get(key);
-        if (message.role === 'user') {
-          totals.userMessages += 1;
-          bucket.userMessages += 1;
-        } else if (message.role === 'assistant') {
-          totals.assistantMessages += 1;
-          bucket.assistantMessages += 1;
-          const duration = Number(message.durationMs);
-          if (Number.isFinite(duration) && duration > 0) {
-            totals.responseMs += duration;
-            totals.assistantDurations += 1;
-            bucket.responseMs += duration;
-            bucket.assistantDurations += 1;
-          }
-        }
-        const events = Array.isArray(message.toolEvents) ? message.toolEvents : [];
-        totals.toolCalls += events.length;
-        bucket.toolCalls += events.length;
-        const usage = message.usage || {};
-        const prompt = Number(usage.prompt_tokens);
-        const completion = Number(usage.completion_tokens);
-        const total = Number(usage.total_tokens);
-        if (Number.isFinite(prompt)) totals.promptTokens += prompt;
-        if (Number.isFinite(completion)) totals.completionTokens += completion;
-        if (Number.isFinite(total)) {
-          totals.totalTokens += total;
-          bucket.totalTokens += total;
-        } else if (Number.isFinite(prompt) && Number.isFinite(completion)) {
-          totals.totalTokens += prompt + completion;
-          bucket.totalTokens += prompt + completion;
-        }
-      }
-    }
-    const daily = [...byDay.values()].sort((a, b) => (a.date < b.date ? -1 : 1));
+    const indexSince = new Date(Date.now() - (days + 2) * 86400000);
+    const index = (await listChats(owner(req))).filter(
+      (item) => new Date(item.updatedAt || item.createdAt || 0) >= indexSince
+    );
+    // listChats intentionally returns only lightweight index rows. Hydrate each chat before
+    // calculating usage; otherwise branch messages are absent and the dashboard reports zero.
+    const chats = (
+      await Promise.all(index.map((item) => getChat(owner(req), String(item._id))))
+    ).filter(Boolean);
+    const analytics = aggregateUsageFromChats(chats, days);
     res.json({
       usage: {
         days,
-        since: since.toISOString(),
-        totals: {
-          ...totals,
-          avgResponseMs: totals.assistantDurations
-            ? Math.round(totals.responseMs / totals.assistantDurations)
-            : 0,
-        },
-        daily,
+        ...analytics,
         folders: [
           ...new Set(chats.map((chat) => String(chat.folder || '')).filter(Boolean)),
         ].sort(),
-        tagCounts: chats.reduce((acc, chat) => {
-          for (const tag of chat.tags || []) acc[tag] = (acc[tag] || 0) + 1;
-          return acc;
-        }, {}),
+        tagCounts: {},
       },
     });
   } catch (error) {
@@ -334,6 +269,11 @@ router.post('/:id/messages/:messageId/versions', async (req, res, next) => {
             toolEvents: message.toolEvents,
             agentPlan: message.agentPlan,
             usage: message.usage,
+            usageByModel: message.usageByModel,
+            modelCallsByModel: message.modelCallsByModel,
+            model: message.model,
+            modelMode: message.modelMode,
+            routingDecision: message.routingDecision,
             startedAt: message.startedAt,
             createdAt: message.createdAt,
             completedAt: message.completedAt,
@@ -346,6 +286,12 @@ router.post('/:id/messages/:messageId/versions', async (req, res, next) => {
       toolEvents: Array.isArray(req.body?.toolEvents) ? req.body.toolEvents : [],
       agentPlan: req.body?.agentPlan,
       agentEvents: Array.isArray(req.body?.agentEvents) ? req.body.agentEvents : [],
+      usage: req.body?.usage,
+      usageByModel: req.body?.usageByModel,
+      modelCallsByModel: req.body?.modelCallsByModel,
+      model: req.body?.model,
+      modelMode: req.body?.modelMode,
+      routingDecision: req.body?.routingDecision,
       startedAt: req.body?.startedAt,
       createdAt: req.body?.startedAt || new Date(),
       completedAt: new Date(),

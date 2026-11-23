@@ -80,25 +80,136 @@ const DEFAULT_PREFERENCES = {
   visualAnswers: true,
   headers: true,
   lists: true,
+  activeModel: 'auto',
 };
 const PLUGIN_CATALOG = [
-  { id: 'execute_python', name: 'Python interpreter', description: 'run Python in a sandbox' },
-  { id: 'web_search', name: 'Web search', description: 'search the live web' },
-  { id: 'fetch_public_url', name: 'Fetch URL', description: 'read a web page' },
-  { id: 'npm_search', name: 'npm search', description: 'search npm packages' },
-  { id: 'github_search', name: 'GitHub search', description: 'search repos and code' },
-  { id: 'calculator', name: 'Calculator', description: 'evaluate math expressions' },
-  { id: 'create_task_plan', name: 'Task plans', description: 'structured multi-step plans' },
-  { id: 'save_memory', name: 'Save memory', description: 'remember things across chats' },
-  { id: 'search_memories', name: 'Search memories', description: 'recall saved memories' },
+  {
+    id: 'execute_python',
+    name: 'Python sandbox',
+    description: 'execute code in an isolated environment',
+    configurable: true,
+  },
+  {
+    id: 'execute_node',
+    name: 'Node.js sandbox',
+    description: 'run npm, node and build commands',
+    configurable: true,
+  },
+  {
+    id: 'web_search',
+    name: 'Web search',
+    description: 'search the live web with Tavily',
+    configurable: true,
+  },
+  {
+    id: 'generate_image',
+    name: 'Image generation',
+    description: 'generate images with Cloudflare Workers AI',
+    configurable: true,
+  },
+  {
+    id: 'workspace_delete',
+    name: 'Workspace deletion',
+    description: 'allow the agent to delete project files',
+    configurable: true,
+  },
+  {
+    id: 'workspace_archive',
+    name: 'ZIP packaging',
+    description: 'allow the agent to package project workspaces',
+    configurable: true,
+  },
+  {
+    id: 'github_search',
+    name: 'GitHub search',
+    description: 'search public repositories',
+    configurable: false,
+  },
+  { id: 'npm_search', name: 'npm search', description: 'search npm packages', configurable: false },
+  {
+    id: 'calculator',
+    name: 'Calculator',
+    description: 'evaluate calculations',
+    configurable: false,
+  },
+  {
+    id: 'fetch_public_url',
+    name: 'Open webpage',
+    description: 'read public documentation and pages',
+    configurable: false,
+  },
+  {
+    id: 'get_current_datetime',
+    name: 'Date & time',
+    description: 'timezone-aware current time',
+    configurable: false,
+  },
+  {
+    id: 'workspace_list',
+    name: 'Workspace files',
+    description: 'inspect project files',
+    configurable: false,
+  },
+  {
+    id: 'workspace_read',
+    name: 'Workspace reading',
+    description: 'read project source files',
+    configurable: false,
+  },
+  {
+    id: 'workspace_create',
+    name: 'Workspace creation',
+    description: 'create project files',
+    configurable: false,
+  },
+  {
+    id: 'workspace_edit',
+    name: 'Workspace editing',
+    description: 'edit project files',
+    configurable: false,
+  },
+  {
+    id: 'workspace_search',
+    name: 'Workspace search',
+    description: 'search across project files',
+    configurable: false,
+  },
+  {
+    id: 'workspace_status',
+    name: 'Workspace status',
+    description: 'inspect workspace storage',
+    configurable: false,
+  },
+  {
+    id: 'create_task_plan',
+    name: 'Task planning',
+    description: 'plan and track complex work',
+    configurable: false,
+  },
+  {
+    id: 'save_memory',
+    name: 'Save memory',
+    description: 'save durable user context',
+    configurable: false,
+  },
+  {
+    id: 'search_memories',
+    name: 'Search memory',
+    description: 'recall saved context',
+    configurable: false,
+  },
   {
     id: 'search_previous_chats',
-    name: 'Search past chats',
-    description: 'find earlier conversations',
+    name: 'Previous chats',
+    description: 'recall earlier conversations',
+    configurable: false,
   },
-  { id: 'list_shared_links', name: 'Shared links', description: 'list active shared links' },
-  { id: 'get_current_datetime', name: 'Date & time', description: 'current date and time' },
-  { id: 'generate_image', name: 'Image generation', description: 'generate images' },
+  {
+    id: 'list_shared_links',
+    name: 'Shared links',
+    description: 'list your active share links',
+    configurable: false,
+  },
 ];
 const COLOR_THEMES = [
   { id: 'forest', name: 'Forest', colors: ['#0b0e0c', '#a4df78'] },
@@ -254,6 +365,14 @@ async function prepareImage(file) {
     preview: canvas.toDataURL('image/jpeg', 0.5),
   };
 }
+async function prepareAudio(file) {
+  if (file.size > 15 * 1024 * 1024) throw new Error(`${file.name} exceeds the 15 MB audio limit.`);
+  const extension = file.name.split('.').pop().toLowerCase();
+  if (!['mp3', 'wav'].includes(extension))
+    throw new Error('Nemotron Omni currently accepts MP3 and WAV audio files.');
+  const mimeType = extension === 'wav' ? 'audio/wav' : 'audio/mpeg';
+  return { name: file.name, type: mimeType, dataUrl: await readFile(file), kind: 'audio' };
+}
 async function prepareVideo(file) {
   if (file.size > 45 * 1024 * 1024) throw new Error(`${file.name} exceeds the 45 MB video limit.`);
   const url = URL.createObjectURL(file);
@@ -358,6 +477,8 @@ async function prepareFiles(files) {
   for (const file of files) {
     if (file.type.startsWith('image/')) out.push(await prepareImage(file));
     else if (file.type.startsWith('video/')) out.push(await prepareVideo(file));
+    else if (file.type.startsWith('audio/') || /\.(mp3|wav)$/i.test(file.name))
+      out.push(await prepareAudio(file));
     else if (
       supported.has(file.type) ||
       /\.(pdf|txt|md|csv|tsv|json|xml|zip|xlsx?|docx?|pptx|py|jsx?|mjs|cjs|tsx?|html?|css|sql|ya?ml|toml|ini|cfg|conf|log|sh|env)$/i.test(
@@ -1125,14 +1246,30 @@ function getSuggestedNextSteps(message) {
   const toolFailures = (message.toolEvents || []).filter((event) => event.status === 'error');
   if (failed.length || toolFailures.length) {
     return [
-      { label: 'Investigate the blocker', prompt: 'Investigate the remaining failed task or tool error. Inspect the current files and diagnostics, fix the root cause, and verify the correction without repeating failed steps unchanged.' },
-      { label: 'Review completed work', prompt: 'Summarize the completed work, current project state, and the exact remaining blockers.' },
+      {
+        label: 'Investigate the blocker',
+        prompt:
+          'Investigate the remaining failed task or tool error. Inspect the current files and diagnostics, fix the root cause, and verify the correction without repeating failed steps unchanged.',
+      },
+      {
+        label: 'Review completed work',
+        prompt:
+          'Summarize the completed work, current project state, and the exact remaining blockers.',
+      },
     ];
   }
   if (pending.length) {
     return [
-      { label: 'Continue the next task', prompt: 'Continue the existing project plan from the next pending task. Inspect the current workspace and persisted progress first, preserve completed work, and verify each task before marking it complete.' },
-      { label: 'Review progress', prompt: 'Review the current project plan and completed milestones. Tell me what is done, what remains, and whether anything needs attention.' },
+      {
+        label: 'Continue the next task',
+        prompt:
+          'Continue the existing project plan from the next pending task. Inspect the current workspace and persisted progress first, preserve completed work, and verify each task before marking it complete.',
+      },
+      {
+        label: 'Review progress',
+        prompt:
+          'Review the current project plan and completed milestones. Tell me what is done, what remains, and whether anything needs attention.',
+      },
     ];
   }
   const hasArchive = (message.toolEvents || []).some((event) =>
@@ -1140,13 +1277,29 @@ function getSuggestedNextSteps(message) {
   );
   if (hasArchive) {
     return [
-      { label: 'Verify the deliverable', prompt: 'Perform a final verification of the generated project archive, its contents, and the project build/tests. Report any checks that cannot be run.' },
-      { label: 'Explain how to run it', prompt: 'Give me the exact installation, configuration, and run/deployment steps for this project.' },
+      {
+        label: 'Verify the deliverable',
+        prompt:
+          'Perform a final verification of the generated project archive, its contents, and the project build/tests. Report any checks that cannot be run.',
+      },
+      {
+        label: 'Explain how to run it',
+        prompt:
+          'Give me the exact installation, configuration, and run/deployment steps for this project.',
+      },
     ];
   }
   return [
-    { label: 'Verify the result', prompt: 'Run the most relevant checks for the changes just completed. Inspect failures and report verified results separately from unverified work.' },
-    { label: 'What should I do next?', prompt: 'Based on the result and current project state, recommend the most useful next step and explain why.' },
+    {
+      label: 'Verify the result',
+      prompt:
+        'Run the most relevant checks for the changes just completed. Inspect failures and report verified results separately from unverified work.',
+    },
+    {
+      label: 'What should I do next?',
+      prompt:
+        'Based on the result and current project state, recommend the most useful next step and explain why.',
+    },
   ];
 }
 
@@ -1270,6 +1423,15 @@ function Message({
         <div className="message-heading">
           <span>{user ? 'You' : 'Assistant'}</span>
           {message.createdAt && <time>{dateLabel(message.createdAt)}</time>}
+          {!user && message.model?.name && (
+            <span
+              className="model-badge"
+              title={message.routingDecision?.reason || message.model.id}
+            >
+              {message.model.name}
+              {message.modelMode === 'auto' ? ' · Auto' : ''}
+            </span>
+          )}
         </div>
         {!user && message.isStreaming && liveProgress && (
           <LiveProgress
@@ -1406,19 +1568,25 @@ function Message({
             )}
           </div>
         )}
-        {!user && !message.isStreaming && content.trim() && onFollowup &&
+        {!user &&
+          !message.isStreaming &&
+          content.trim() &&
+          onFollowup &&
           (message.agentPlan || message.toolEvents?.length > 0) && (
-          <div className="next-step-suggestions" aria-label="Suggested next steps">
-            <span className="next-step-heading"><Sparkles size={12} /> Suggested next steps</span>
-            <div className="next-step-actions">
-              {getSuggestedNextSteps(message).map((step) => (
-                <button key={step.label} onClick={() => onFollowup(step.prompt)}>
-                  {step.label}<ArrowUpRight size={12} />
-                </button>
-              ))}
+            <div className="next-step-suggestions" aria-label="Suggested next steps">
+              <span className="next-step-heading">
+                <Sparkles size={12} /> Suggested next steps
+              </span>
+              <div className="next-step-actions">
+                {getSuggestedNextSteps(message).map((step) => (
+                  <button key={step.label} onClick={() => onFollowup(step.prompt)}>
+                    {step.label}
+                    <ArrowUpRight size={12} />
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
-        )}
+          )}
         {user && content.trim() && (
           <div className="message-actions">
             <button
@@ -1960,7 +2128,10 @@ function UsageDashboard({ request }) {
     { label: 'Your messages', value: totals.userMessages },
     { label: 'Replies', value: totals.assistantMessages },
     { label: 'Tool calls', value: totals.toolCalls },
-    { label: 'Tokens', value: totals.totalTokens },
+    { label: 'Input tokens', value: totals.promptTokens },
+    { label: 'Output tokens', value: totals.completionTokens },
+    { label: 'Total tokens', value: totals.totalTokens },
+    { label: 'Responses measured', value: totals.requestsWithUsage },
     {
       label: 'Avg response',
       value: totals.avgResponseMs ? `${(totals.avgResponseMs / 1000).toFixed(1)}s` : '—',
@@ -2011,9 +2182,33 @@ function UsageDashboard({ request }) {
               <div className="empty-history">No activity in this period.</div>
             )}
           </div>
+          <div className="usage-model-breakdown">
+            <b>Model usage</b>
+            {Object.entries(data.modelUsage || {}).length ? (
+              Object.entries(data.modelUsage).map(([alias, item]) => (
+                <div className="usage-model-row" key={alias}>
+                  <span>
+                    {alias.charAt(0).toUpperCase() + alias.slice(1)}{' '}
+                    <small>
+                      {item.requests} request{item.requests === 1 ? '' : 's'}
+                    </small>
+                  </span>
+                  <b>{Number(item.totalTokens || 0).toLocaleString()} tokens</b>
+                </div>
+              ))
+            ) : (
+              <div className="empty-history">No model usage metadata recorded for this period.</div>
+            )}
+          </div>
           <small className="usage-footnote">
-            {daily.length} active day{daily.length === 1 ? '' : 's'} · token counts come from model
-            usage metadata.
+            {daily.length} active day{daily.length === 1 ? '' : 's'} · measured token counts come
+            from NVIDIA response usage metadata.{' '}
+            {totals.legacyUsageMessages
+              ? ` ${totals.legacyUsageMessages} response(s) from older releases may undercount multi-round token usage.`
+              : ''}
+            {totals.missingUsageMessages
+              ? ` ${totals.missingUsageMessages} response(s) have no usage metadata.`
+              : ''}
           </small>
         </>
       )}
@@ -2113,6 +2308,23 @@ function PreferencesDialog({
     [customTools, setCustomTools] = useState([]),
     [pluginsLoading, setPluginsLoading] = useState(false),
     [toolDraft, setToolDraft] = useState(null);
+  const [developerUnlocked, setDeveloperUnlocked] = useState(() => {
+    try {
+      return localStorage.getItem('nemotron.developerMode') === 'unlocked';
+    } catch {
+      return false;
+    }
+  });
+  const [settingsTitleClicks, setSettingsTitleClicks] = useState(0);
+  const [integrations, setIntegrations] = useState({});
+  const [integrationDrafts, setIntegrationDrafts] = useState({
+    nvidia: {},
+    tavily: {},
+    cloudflare: {},
+    vercel: {},
+  });
+  const [integrationBusy, setIntegrationBusy] = useState('');
+  const [integrationMessage, setIntegrationMessage] = useState('');
   const usernameValid = /^[a-z0-9_]{3,24}$/.test(username);
   useEffect(() => {
     if (open) {
@@ -2148,6 +2360,76 @@ function PreferencesDialog({
       clearTimeout(timer);
     };
   }, [username, open, user?.username]);
+  const loadIntegrations = async () => {
+    const response = await request('/api/account/integrations');
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || 'Could not load integrations.');
+    setIntegrations(payload.integrations || {});
+  };
+  const saveIntegration = async (provider) => {
+    setIntegrationBusy(`${provider}:save`);
+    setIntegrationMessage('');
+    try {
+      const response = await request(`/api/account/integrations/${provider}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(integrationDrafts[provider] || {}),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Could not save integration.');
+      setIntegrationDrafts((current) => ({ ...current, [provider]: {} }));
+      await loadIntegrations();
+      setIntegrationMessage(`${provider} credentials saved securely.`);
+    } catch (error) {
+      setIntegrationMessage(error.message);
+    } finally {
+      setIntegrationBusy('');
+    }
+  };
+  const testIntegration = async (provider) => {
+    setIntegrationBusy(`${provider}:test`);
+    setIntegrationMessage('');
+    try {
+      const response = await request(`/api/account/integrations/${provider}/test`, {
+        method: 'POST',
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) throw new Error(payload.error || 'Connection test failed.');
+      setIntegrationMessage(payload.message || 'Connection verified.');
+    } catch (error) {
+      setIntegrationMessage(error.message);
+    } finally {
+      setIntegrationBusy('');
+    }
+  };
+  const removeIntegration = async (provider) => {
+    setIntegrationBusy(`${provider}:remove`);
+    setIntegrationMessage('');
+    try {
+      const response = await request(`/api/account/integrations/${provider}`, { method: 'DELETE' });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Could not remove integration.');
+      await loadIntegrations();
+      setIntegrationMessage(`${provider} credentials removed.`);
+    } catch (error) {
+      setIntegrationMessage(error.message);
+    } finally {
+      setIntegrationBusy('');
+    }
+  };
+  const unlockDeveloperMode = () => {
+    const next = settingsTitleClicks + 1;
+    setSettingsTitleClicks(next);
+    if (next >= 7) {
+      setDeveloperUnlocked(true);
+      setTab('developer');
+      setSettingsTitleClicks(0);
+      try {
+        localStorage.setItem('nemotron.developerMode', 'unlocked');
+      } catch {}
+      loadIntegrations().catch((error) => setIntegrationMessage(error.message));
+    }
+  };
   if (!open) return null;
   const update = (key, value) => setPreferences((p) => ({ ...p, [key]: value }));
   const saveMemory = async () => {
@@ -2163,7 +2445,12 @@ function PreferencesDialog({
         <header className="modal-head">
           <div>
             <div className="eyebrow">YOUR ACCOUNT</div>
-            <h2>Personalization</h2>
+            <h2
+              onClick={unlockDeveloperMode}
+              title={developerUnlocked ? 'Developer Mode enabled' : undefined}
+            >
+              Personalization
+            </h2>
             <p>Shape how your assistant communicates and remembers context.</p>
           </div>
           <button className="icon-button" onClick={onClose}>
@@ -2238,8 +2525,157 @@ function PreferencesDialog({
           <button className={tab === 'usage' ? 'selected' : ''} onClick={() => setTab('usage')}>
             <BarChart3 size={14} /> Usage
           </button>
+          {developerUnlocked && (
+            <button
+              className={tab === 'developer' ? 'selected' : ''}
+              onClick={() => {
+                setTab('developer');
+                loadIntegrations().catch((error) => setIntegrationMessage(error.message));
+              }}
+            >
+              <Wrench size={14} /> Developer
+            </button>
+          )}
         </div>
-        {tab === 'shares' ? (
+        {tab === 'developer' && developerUnlocked ? (
+          <div className="developer-settings">
+            <div className="memory-intro">
+              <b>Developer Mode</b>
+              <p>
+                Configure personal credentials for Nemotron and the services used by agent tools.
+                Secrets are encrypted by the backend and never returned to this page.
+              </p>
+            </div>
+            {integrationMessage && <div className="notice">{integrationMessage}</div>}
+            {Object.values(integrations).some((item) => item?.error) && (
+              <div className="notice error-notice">
+                One or more saved credentials could not be decrypted. Re-enter the affected
+                credentials. Verify that USER_INTEGRATIONS_ENCRYPTION_KEY has not changed.
+              </div>
+            )}
+            {[
+              {
+                id: 'nvidia',
+                name: 'NVIDIA NIM',
+                description: 'Personal NVIDIA API key for all Nemotron models.',
+                fields: [{ id: 'apiKey', label: 'NVIDIA API key', secret: true }],
+              },
+              {
+                id: 'tavily',
+                name: 'Tavily Search',
+                description: 'Personal Tavily key for web research.',
+                fields: [{ id: 'apiKey', label: 'Tavily API key', secret: true }],
+              },
+              {
+                id: 'cloudflare',
+                name: 'Cloudflare Workers AI',
+                description: 'Image generation through your Cloudflare account.',
+                fields: [
+                  { id: 'accountId', label: 'Cloudflare account ID' },
+                  { id: 'apiToken', label: 'Cloudflare API token', secret: true },
+                ],
+              },
+              {
+                id: 'vercel',
+                name: 'Vercel Sandbox',
+                description:
+                  'Personal sandbox authentication. The deployment still needs an approved Node sandbox image to enable Node.js execution.',
+                fields: [
+                  { id: 'token', label: 'Vercel access token', secret: true },
+                  { id: 'teamId', label: 'Vercel team ID' },
+                  { id: 'projectId', label: 'Vercel project ID' },
+                ],
+              },
+            ].map((provider) => (
+              <section className="integration-card" key={provider.id}>
+                <div className="integration-card-head">
+                  <div>
+                    <b>{provider.name}</b>
+                    <small>{provider.description}</small>
+                  </div>
+                  <span
+                    className={`integration-status ${integrations[provider.id]?.configured ? 'configured' : ''}`}
+                  >
+                    {integrations[provider.id]?.error
+                      ? 'Credential error'
+                      : integrations[provider.id]?.configured
+                        ? 'Personal key saved'
+                        : 'Not configured'}
+                  </span>
+                </div>
+                <div className="integration-fields">
+                  {provider.fields.map((field) => (
+                    <label key={field.id}>
+                      {field.label}
+                      <input
+                        type={field.secret ? 'password' : 'text'}
+                        autoComplete="off"
+                        value={integrationDrafts[provider.id]?.[field.id] || ''}
+                        placeholder={
+                          integrations[provider.id]?.fields?.[field.id]
+                            ? `Saved ${integrations[provider.id].fields[field.id]} · enter to replace`
+                            : `Enter ${field.label}`
+                        }
+                        onChange={(event) =>
+                          setIntegrationDrafts((current) => ({
+                            ...current,
+                            [provider.id]: {
+                              ...current[provider.id],
+                              [field.id]: event.target.value,
+                            },
+                          }))
+                        }
+                      />
+                    </label>
+                  ))}
+                </div>
+                <div className="integration-actions">
+                  <button
+                    className="primary-button compact"
+                    disabled={Boolean(integrationBusy)}
+                    onClick={() => saveIntegration(provider.id)}
+                  >
+                    {integrationBusy === `${provider.id}:save` ? 'Saving…' : 'Save credentials'}
+                  </button>
+                  <button
+                    className="secondary-button compact"
+                    disabled={!integrations[provider.id]?.configured || Boolean(integrationBusy)}
+                    onClick={() => testIntegration(provider.id)}
+                  >
+                    {integrationBusy === `${provider.id}:test` ? 'Testing…' : 'Test connection'}
+                  </button>
+                  <button
+                    className="tiny-action danger-text"
+                    disabled={!integrations[provider.id]?.configured || Boolean(integrationBusy)}
+                    onClick={() => removeIntegration(provider.id)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </section>
+            ))}
+            <div className="developer-note">
+              <b>Credential priority</b>
+              <p>
+                Personal credentials are used when configured. Otherwise the application can use its
+                platform credentials. If your personal provider returns a quota or authentication
+                error, the agent will report it rather than silently spending the platform key.
+              </p>
+            </div>
+            <button
+              className="secondary-button compact"
+              onClick={() => {
+                setDeveloperUnlocked(false);
+                setTab('profile');
+                try {
+                  localStorage.removeItem('nemotron.developerMode');
+                } catch {}
+              }}
+            >
+              Disable Developer Mode
+            </button>
+          </div>
+        ) : tab === 'shares' ? (
           <div className="shared-links">
             {sharesLoading ? (
               <div className="share-list-skeleton">
@@ -2307,22 +2743,32 @@ function PreferencesDialog({
               </div>
             ) : (
               <div className="preference-toggles">
-                {PLUGIN_CATALOG.map((plugin) => (
-                  <Toggle
-                    key={plugin.id}
-                    label={`${plugin.name} — ${plugin.description}`}
-                    value={pluginPermissions[plugin.id] !== false}
-                    onChange={(v) => {
-                      const next = { ...pluginPermissions, [plugin.id]: v };
-                      setPluginPermissions(next);
-                      request('/api/account/plugins', {
-                        method: 'PATCH',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ permissions: { [plugin.id]: v } }),
-                      }).catch(() => {});
-                    }}
-                  />
-                ))}
+                {PLUGIN_CATALOG.map((plugin) =>
+                  plugin.configurable ? (
+                    <Toggle
+                      key={plugin.id}
+                      label={`${plugin.name} — ${plugin.description}`}
+                      value={pluginPermissions[plugin.id] !== false}
+                      onChange={(v) => {
+                        const next = { ...pluginPermissions, [plugin.id]: v };
+                        setPluginPermissions(next);
+                        request('/api/account/plugins', {
+                          method: 'PATCH',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ permissions: { [plugin.id]: v } }),
+                        }).catch(() => {});
+                      }}
+                    />
+                  ) : (
+                    <div className="tool-default-row" key={plugin.id}>
+                      <span>
+                        <b>{plugin.name}</b>
+                        <small>{plugin.description}</small>
+                      </span>
+                      <em>Always enabled</em>
+                    </div>
+                  )
+                )}
               </div>
             )}
             <div className="custom-tools-head">
@@ -3607,6 +4053,9 @@ export default function App() {
             expectedRevision: activeChat?.revision || 0,
             preserveExistingMessageId: message.id,
             thinkingEnabled: thinking,
+            modelMode: (preferences.activeModel || 'auto') === 'auto' ? 'auto' : 'manual',
+            modelAlias:
+              (preferences.activeModel || 'auto') === 'auto' ? 'surge' : preferences.activeModel,
             activePlan: latestActivePlan(messages.slice(0, index)),
             messages: messages.slice(0, index).map((m) => ({
               ...(m.id ? { id: m.id } : {}),
@@ -3627,9 +4076,10 @@ export default function App() {
         if (event.type === 'heartbeat')
           setLiveProgress((current) => ({
             ...(current || { startedAt: Date.now(), lastActivityAt: Date.now() }),
-            message: event.phase === 'tool'
-              ? toolActivityMessage(event.name, event.arguments || {})
-              : (event.message || 'The model is processing the request.'),
+            message:
+              event.phase === 'tool'
+                ? toolActivityMessage(event.name, event.arguments || {})
+                : event.message || 'The model is processing the request.',
             lastActivityAt: Date.now(),
           }));
         if (event.type === 'agent_event') {
@@ -3870,7 +4320,7 @@ export default function App() {
     const payloadSize = prepared.reduce(
       (n, item) =>
         n +
-        (item.type.startsWith('image/') ? item.dataUrl?.length || 0 : 0) +
+        (item.type.startsWith('image/') || item.kind === 'audio' ? item.dataUrl?.length || 0 : 0) +
         (item.frames || []).reduce((s, f) => s + f.dataUrl.length, 0),
       0
     );
@@ -3879,7 +4329,9 @@ export default function App() {
       setFileError('Compressed attachments exceed the 22 MB request limit.');
       return;
     }
-    const sandboxFiles = prepared.filter((item) => item.dataUrl && !item.frames);
+    const sandboxFiles = prepared.filter(
+      (item) => item.dataUrl && !item.frames && item.kind !== 'audio'
+    );
     const sandboxUploadBytes = sandboxFiles.reduce(
       (sum, item) => sum + Math.floor(item.dataUrl.length * 0.75),
       0
@@ -3930,6 +4382,8 @@ export default function App() {
     for (const item of prepared) {
       if (item.dataUrl && item.type.startsWith('image/'))
         parts.push({ type: 'image_url', image_url: { url: item.dataUrl } });
+      else if (item.kind === 'audio' && item.dataUrl)
+        parts.push({ type: 'audio_url', audio_url: { url: item.dataUrl } });
       else if (item.kind === 'document' && item.dataUrl) {
         const base64 = String(item.dataUrl).replace(/^data:[^;]+;base64,/, '');
         const decoded = decodeURIComponent(escape(atob(base64)));
@@ -4021,6 +4475,10 @@ export default function App() {
       agentPlan = continuingPlan,
       agentEvents = [],
       usage = null,
+      usageByModel = {},
+      modelCallsByModel = {},
+      routingInfo = null,
+      modelInfo = null,
       durationMs = null,
       liveAssistant = assistant;
     const update = () => {
@@ -4035,6 +4493,11 @@ export default function App() {
                   agentPlan,
                   agentEvents,
                   usage,
+                  usageByModel,
+                  modelCallsByModel,
+                  routingDecision: routingInfo,
+                  model: modelInfo,
+                  modelMode: (preferences.activeModel || 'auto') === 'auto' ? 'auto' : 'manual',
                   durationMs,
                 }
               : m
@@ -4055,6 +4518,9 @@ export default function App() {
             expectedRevision: options.expectedRevision ?? (chat.revision || 0),
             assistantMessageId: assistantId,
             thinkingEnabled: thinking,
+            modelMode: (preferences.activeModel || 'auto') === 'auto' ? 'auto' : 'manual',
+            modelAlias:
+              (preferences.activeModel || 'auto') === 'auto' ? 'surge' : preferences.activeModel,
             activePlan: continuingPlan,
             messages: nextMessages.map((m) => ({
               ...(m.id ? { id: m.id } : {}),
@@ -4074,11 +4540,24 @@ export default function App() {
         if (event.type === 'heartbeat')
           setLiveProgress((current) => ({
             ...(current || { startedAt: Date.now(), lastActivityAt: Date.now() }),
-            message: event.phase === 'tool'
-              ? toolActivityMessage(event.name, event.arguments || {})
-              : (event.message || 'The model is processing the request.'),
+            message:
+              event.phase === 'tool'
+                ? toolActivityMessage(event.name, event.arguments || {})
+                : event.message || 'The model is processing the request.',
             lastActivityAt: Date.now(),
           }));
+        if (event.type === 'model_selected' || event.type === 'model_switch') {
+          const selected = event.type === 'model_switch' ? event.to : event.model;
+          modelInfo = selected || modelInfo;
+          routingInfo = event.routing || routingInfo;
+          if (event.type === 'model_switch')
+            setLiveProgress((current) => ({
+              ...(current || { startedAt: Date.now() }),
+              message: `Switching to ${selected?.name || 'another Nemotron model'} to recover the request.`,
+              lastActivityAt: Date.now(),
+            }));
+          update();
+        }
         if (event.type === 'final_content') {
           setLiveProgress(null);
           output = event.content || '';
@@ -4158,6 +4637,10 @@ export default function App() {
         }
         if (event.type === 'done') {
           usage = event.usage || usage;
+          usageByModel = event.usageByModel || usageByModel;
+          modelCallsByModel = event.modelCallsByModel || modelCallsByModel;
+          routingInfo = event.routingDecision || routingInfo;
+          modelInfo = event.model || modelInfo;
           durationMs = event.durationMs ?? Math.round(performance.now() - started);
           update();
         }
@@ -4181,6 +4664,11 @@ export default function App() {
         agentPlan,
         agentEvents,
         usage,
+        usageByModel,
+        modelCallsByModel,
+        routingDecision: routingInfo,
+        model: modelInfo,
+        modelMode: (preferences.activeModel || 'auto') === 'auto' ? 'auto' : 'manual',
         durationMs,
       };
       const saved = [...nextMessages, liveAssistant];
@@ -4225,6 +4713,11 @@ export default function App() {
         agentEvents,
         error: stopped ? 'Generation stopped.' : chatErrorMessage(error),
         usage,
+        usageByModel,
+        modelCallsByModel,
+        routingDecision: routingInfo,
+        model: modelInfo,
+        modelMode: (preferences.activeModel || 'auto') === 'auto' ? 'auto' : 'manual',
         durationMs: durationMs ?? Math.round(performance.now() - started),
       };
       if (activeIdRef.current === chat._id)
@@ -4595,7 +5088,7 @@ export default function App() {
                 <button
                   type="button"
                   className="composer-icon"
-                  title="Attach images, videos or documents"
+                  title="Attach images, videos, MP3/WAV audio or documents"
                   onClick={() => fileRef.current?.click()}
                 >
                   <Paperclip size={17} />
@@ -4604,13 +5097,29 @@ export default function App() {
                   ref={fileRef}
                   hidden
                   type="file"
-                  accept="image/*,video/mp4,video/webm,video/quicktime,.pdf,.txt,.md,.csv,.tsv,.json,.xml,.zip,.xls,.xlsx,.doc,.docx,.pptx,.py,.js,.jsx,.mjs,.cjs,.ts,.tsx,.html,.css,.sql,.yml,.yaml,.toml,.ini,.cfg,.conf,.log,.sh,.env"
+                  accept="image/*,video/mp4,video/webm,video/quicktime,audio/mpeg,audio/wav,.mp3,.wav,.pdf,.txt,.md,.csv,.tsv,.json,.xml,.zip,.xls,.xlsx,.doc,.docx,.pptx,.py,.js,.jsx,.mjs,.cjs,.ts,.tsx,.html,.css,.sql,.yml,.yaml,.toml,.ini,.cfg,.conf,.log,.sh,.env"
                   multiple
                   onChange={(e) => {
                     addFiles(e.target.files);
                     e.target.value = '';
                   }}
                 />
+                <select
+                  className="model-selector"
+                  aria-label="Nemotron model"
+                  value={preferences.activeModel || 'auto'}
+                  onChange={(event) =>
+                    savePreferences({ ...preferences, activeModel: event.target.value })
+                  }
+                  title="Choose Auto routing or a Nemotron model"
+                >
+                  <option value="auto">Auto · Recommended</option>
+                  <option value="bolt">Bolt · Quick text</option>
+                  <option value="surge">Surge · Agent workhorse</option>
+                  <option value="titan">Titan · Advanced reasoning</option>
+                  <option value="vision">Vision · Visual tasks</option>
+                  <option value="omni">Omni · Multimodal</option>
+                </select>
                 <button
                   type="button"
                   className={`thinking-control ${thinking ? 'enabled' : ''}`}
@@ -4644,7 +5153,12 @@ export default function App() {
                 </>
               )}
             </span>
-            <span>Agent tools run automatically · Think mode {thinking ? 'on' : 'off'}</span>
+            <span>
+              {(preferences.activeModel || 'auto') === 'auto'
+                ? 'Auto model routing'
+                : `Model: ${String(preferences.activeModel).toUpperCase()}`}{' '}
+              · Think mode {thinking ? 'on' : 'off'}
+            </span>
             <span className="composer-char-counter">
               {input.length}/{MAX_TEXT_CHARS}
             </span>

@@ -66,10 +66,10 @@ Set `SERVE_STATIC=true` in the backend environment to serve the static frontend 
 | `CLOUDFLARE_IMAGE_MODEL`       | Model identifier (e.g., `@cf/black-forest-labs/flux-1-schnell`) |
 | `CLOUDFLARE_IMAGE_TIMEOUT_MS`  | Timeout in milliseconds (default 120000)                        |
 | `IMAGE_GENERATION_DAILY_LIMIT` | Daily image generation quota (default 8)                        |
-| `VERCEL_NODE_SANDBOX_IMAGE` | Optional isolated Node.js sandbox image |
-| `AGENT_MAX_MODEL_ROUNDS` | Model/tool loop budget (default 48) |
-| `AGENT_MAX_TOOL_CALLS` | Execution tool budget (default 24) |
-| `AGENT_MAX_RECOVERY_ATTEMPTS` | Per-tool recovery budget (default 3) |
+| `VERCEL_NODE_SANDBOX_IMAGE`    | Optional isolated Node.js sandbox image                         |
+| `AGENT_MAX_MODEL_ROUNDS`       | Model/tool loop budget (default 48)                             |
+| `AGENT_MAX_TOOL_CALLS`         | Execution tool budget (default 24)                              |
+| `AGENT_MAX_RECOVERY_ATTEMPTS`  | Per-tool recovery budget (default 3)                            |
 
 - Register OAuth callback URLs in Google, GitHub, and Discord developer consoles:
   - Google: `http://localhost:4000/api/auth/google/callback`

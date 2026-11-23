@@ -143,6 +143,11 @@ router.post('/stream', async (req, res, next) => {
                     agentPlan: target.agentPlan,
                     agentEvents: target.agentEvents,
                     usage: target.usage,
+                    usageByModel: target.usageByModel,
+                    modelCallsByModel: target.modelCallsByModel,
+                    model: target.model,
+                    modelMode: target.modelMode,
+                    routingDecision: target.routingDecision,
                     startedAt: target.startedAt,
                     createdAt: target.createdAt,
                     completedAt: target.completedAt,
@@ -155,6 +160,11 @@ router.post('/stream', async (req, res, next) => {
               agentPlan: alternative.agentPlan,
               agentEvents: alternative.agentEvents,
               usage: alternative.usage,
+              usageByModel: alternative.usageByModel,
+              modelCallsByModel: alternative.modelCallsByModel,
+              model: alternative.model,
+              modelMode: alternative.modelMode,
+              routingDecision: alternative.routingDecision,
               startedAt: alternative.startedAt,
               createdAt: alternative.createdAt,
               completedAt: alternative.completedAt,
@@ -184,6 +194,11 @@ router.post('/stream', async (req, res, next) => {
               toolEvents: message.toolEvents ?? previous.toolEvents,
               agentEvents: message.agentEvents ?? previous.agentEvents,
               usage: message.usage ?? previous.usage,
+              usageByModel: message.usageByModel ?? previous.usageByModel,
+              modelCallsByModel: message.modelCallsByModel ?? previous.modelCallsByModel,
+              model: message.model ?? previous.model,
+              modelMode: message.modelMode ?? previous.modelMode,
+              routingDecision: message.routingDecision ?? previous.routingDecision,
               agentPlan: message.agentPlan ?? previous.agentPlan,
               versions: message.versions ?? previous.versions,
               activeVersion: message.activeVersion ?? previous.activeVersion,
@@ -218,9 +233,7 @@ router.post('/stream', async (req, res, next) => {
 });
 router.post('/title', async (req, res, next) => {
   try {
-    if (!process.env.NVIDIA_API_KEY)
-      return res.status(503).json({ error: 'NVIDIA_API_KEY is missing on the backend.' });
-    const title = await generateChatTitle(req.body?.text || '');
+    const title = await generateChatTitle(req.body?.text || '', req.user);
     res.json({ title });
   } catch (error) {
     next(error);

@@ -101,7 +101,11 @@ export async function optionalAuth(req, res, next) {
         } else clearSessionCookie(res);
       } else clearSessionCookie(res);
     }
-    if (!req.user && process.env.AUTH_REQUIRED === 'false' && process.env.NODE_ENV !== 'production') {
+    if (
+      !req.user &&
+      process.env.AUTH_REQUIRED === 'false' &&
+      process.env.NODE_ENV !== 'production'
+    ) {
       const existing = await User.findOne({ email: 'dev@example.com' }).lean();
       if (existing) {
         req.user = existing;
@@ -450,6 +454,6 @@ export async function currentUser(req, res) {
     createSessionCookie(res, req.user._id);
   const user = String(req.user._id).startsWith('guest:')
     ? req.user
-    : await User.findById(req.user._id).select('-memories').lean();
+    : await User.findById(req.user._id).select('-memories -integrations').lean();
   res.json({ user });
 }

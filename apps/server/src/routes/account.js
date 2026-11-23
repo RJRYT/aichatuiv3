@@ -1,8 +1,22 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { User } from '../models/User.js';
 import logger from '../utils/logger.js';
+import {
+  encryptCredentials,
+  decryptCredentials,
+  maskSecret,
+} from '../services/integrations/crypto.js';
+import { isToolUserConfigurable } from '../services/toolPolicy.js';
 
 const router = Router();
+const integrationTestLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many integration tests. Please wait a minute and try again.' },
+});
 const log = logger.child({ component: 'routes:account' });
 const reservedUsernames = new Set([
   'admin',
@@ -28,6 +42,7 @@ const defaults = {
   visualAnswers: true,
   headers: true,
   lists: true,
+  activeModel: 'auto',
 };
 function guest(req) {
   return String(req.user?._id || '').startsWith('guest:');
@@ -69,7 +84,7 @@ router.patch('/profile', async (req, res, next) => {
       { $set: set },
       { new: true, runValidators: true }
     )
-      .select('-memories')
+      .select('-memories -integrations')
       .lean();
     res.json({ user });
   } catch (error) {
@@ -80,7 +95,7 @@ router.patch('/profile', async (req, res, next) => {
 });
 router.get('/profile', async (req, res) => {
   if (guest(req)) return res.json({ user: req.user });
-  const user = await User.findById(req.user._id).select('-memories').lean();
+  const user = await User.findById(req.user._id).select('-memories -integrations').lean();
   res.json({ user });
 });
 router.get('/preferences', async (req, res) => {
@@ -96,8 +111,15 @@ router.get('/memories', async (req, res) => {
 router.patch('/preferences', async (req, res) => {
   const userId = String(req.user._id);
   const next = {};
-  for (const key of Object.keys(defaults))
-    if (req.body?.[key] !== undefined) next[`preferences.${key}`] = req.body[key];
+  for (const key of Object.keys(defaults)) {
+    if (req.body?.[key] === undefined) continue;
+    if (
+      key === 'activeModel' &&
+      !['auto', 'bolt', 'vision', 'surge', 'titan', 'omni'].includes(String(req.body[key]))
+    )
+      continue;
+    next[`preferences.${key}`] = req.body[key];
+  }
   if (guest(req)) return res.json({ preferences: { ...defaults, ...req.body } });
   const user = await User.findByIdAndUpdate(req.user._id, { $set: next }, { new: true })
     .select('preferences')
@@ -152,9 +174,7 @@ router.delete('/memories/:id', async (req, res) => {
 });
 
 router.get('/plugins', async (req, res) => {
-  const user = await User.findById(req.user._id)
-    .select('pluginPermissions customTools')
-    .lean();
+  const user = await User.findById(req.user._id).select('pluginPermissions customTools').lean();
   res.json({
     permissions: user?.pluginPermissions || {},
     customTools: (user?.customTools || []).map((tool) => ({
@@ -176,13 +196,10 @@ router.patch('/plugins', async (req, res, next) => {
       return res.status(400).json({ error: 'permissions must be an object.' });
     const patch = {};
     for (const [key, value] of Object.entries(permissions)) {
-      if (typeof value === 'boolean') patch[`pluginPermissions.${key}`] = value;
+      if (typeof value === 'boolean' && isToolUserConfigurable(key))
+        patch[`pluginPermissions.${key}`] = value;
     }
-    const user = await User.findByIdAndUpdate(
-      req.user._id,
-      { $set: patch },
-      { new: true }
-    )
+    const user = await User.findByIdAndUpdate(req.user._id, { $set: patch }, { new: true })
       .select('pluginPermissions')
       .lean();
     res.json({ permissions: user?.pluginPermissions || {} });
@@ -194,7 +211,9 @@ router.patch('/plugins', async (req, res, next) => {
 router.post('/plugins/custom-tools', async (req, res, next) => {
   try {
     if (guest(req)) return res.status(403).json({ error: 'Sign in to add custom tools.' });
-    const name = String(req.body?.name || '').trim().slice(0, 60);
+    const name = String(req.body?.name || '')
+      .trim()
+      .slice(0, 60);
     const url = String(req.body?.url || '').trim();
     if (!name) return res.status(400).json({ error: 'Tool name is required.' });
     if (!/^https:\/\/[\w.-]+/.test(url))
@@ -203,12 +222,16 @@ router.post('/plugins/custom-tools', async (req, res, next) => {
     const tool = {
       id,
       name,
-      description: String(req.body?.description || '').trim().slice(0, 400),
+      description: String(req.body?.description || '')
+        .trim()
+        .slice(0, 400),
       url,
       method: req.body?.method === 'GET' ? 'GET' : 'POST',
       parameters: Array.isArray(req.body?.parameters)
         ? req.body.parameters.slice(0, 10).map((param) => ({
-            name: String(param?.name || '').replace(/[^\w-]/g, '').slice(0, 40),
+            name: String(param?.name || '')
+              .replace(/[^\w-]/g, '')
+              .slice(0, 40),
             type: ['string', 'number', 'boolean'].includes(param?.type) ? param.type : 'string',
             description: String(param?.description || '').slice(0, 200),
             required: Boolean(param?.required),
@@ -245,4 +268,157 @@ router.delete('/plugins/custom-tools/:id', async (req, res, next) => {
     next(error);
   }
 });
+
+const integrationFields = {
+  nvidia: ['apiKey'],
+  tavily: ['apiKey'],
+  cloudflare: ['accountId', 'apiToken'],
+  vercel: ['token', 'teamId', 'projectId'],
+};
+function integrationStatus(provider, credentials = {}) {
+  const masked = {};
+  for (const field of integrationFields[provider] || [])
+    masked[field] = credentials[field] ? maskSecret(credentials[field]) : '';
+  return { configured: Object.values(credentials).some(Boolean), fields: masked };
+}
+router.get('/integrations', async (req, res) => {
+  if (guest(req)) return res.json({ integrations: {} });
+  const user = await User.findById(req.user._id).select('integrations').lean();
+  const integrations = {};
+  for (const provider of Object.keys(integrationFields)) {
+    let credentials = {};
+    let decryptionError = false;
+    try {
+      credentials = decryptCredentials(user?.integrations?.[provider]);
+    } catch {
+      decryptionError = true;
+    }
+    integrations[provider] = {
+      ...integrationStatus(provider, credentials),
+      ...(decryptionError ? { error: 'Credentials cannot be decrypted. Re-enter them.' } : {}),
+    };
+  }
+  res.set('Cache-Control', 'private, no-store');
+  res.json({ integrations });
+});
+router.put('/integrations/:provider', async (req, res, next) => {
+  try {
+    if (guest(req))
+      return res.status(403).json({ error: 'Sign in to configure personal integrations.' });
+    const provider = String(req.params.provider || '').toLowerCase();
+    const allowed = integrationFields[provider];
+    if (!allowed) return res.status(404).json({ error: 'Unknown integration.' });
+    let existing = {};
+    try {
+      existing = decryptCredentials(req.user?.integrations?.[provider]);
+    } catch {}
+    const credentials = { ...existing };
+    for (const field of allowed) {
+      const value = String(req.body?.[field] || '').trim();
+      if (value.length > 4096) return res.status(400).json({ error: `${field} is too long.` });
+      if (value) credentials[field] = value;
+    }
+    const required =
+      provider === 'cloudflare'
+        ? ['accountId', 'apiToken']
+        : provider === 'vercel'
+          ? ['token', 'teamId', 'projectId']
+          : ['apiKey'];
+    if (required.some((field) => !credentials[field]))
+      return res.status(400).json({ error: `Required fields: ${required.join(', ')}.` });
+    const encrypted = encryptCredentials(credentials);
+    await User.updateOne(
+      { _id: req.user._id },
+      { $set: { [`integrations.${provider}`]: encrypted } }
+    );
+    res.json({ provider, status: integrationStatus(provider, credentials) });
+  } catch (error) {
+    next(error);
+  }
+});
+router.delete('/integrations/:provider', async (req, res) => {
+  if (guest(req))
+    return res.status(403).json({ error: 'Sign in to manage personal integrations.' });
+  const provider = String(req.params.provider || '').toLowerCase();
+  if (!integrationFields[provider]) return res.status(404).json({ error: 'Unknown integration.' });
+  await User.updateOne({ _id: req.user._id }, { $unset: { [`integrations.${provider}`]: '' } });
+  res.json({ provider, removed: true });
+});
+router.post('/integrations/:provider/test', integrationTestLimiter, async (req, res) => {
+  if (guest(req)) return res.status(403).json({ error: 'Sign in to test personal integrations.' });
+  const provider = String(req.params.provider || '').toLowerCase();
+  if (!integrationFields[provider]) return res.status(404).json({ error: 'Unknown integration.' });
+  const user = await User.findById(req.user._id).select('integrations').lean();
+  let credentials = {};
+  try {
+    credentials = decryptCredentials(user?.integrations?.[provider]);
+  } catch {
+    return res
+      .status(400)
+      .json({ ok: false, error: 'Stored credentials could not be decrypted. Re-enter them.' });
+  }
+  const required =
+    provider === 'cloudflare'
+      ? ['accountId', 'apiToken']
+      : provider === 'vercel'
+        ? ['token', 'teamId', 'projectId']
+        : ['apiKey'];
+  if (required.some((field) => !credentials[field]))
+    return res
+      .status(400)
+      .json({ ok: false, error: 'Save complete credentials before testing this integration.' });
+  try {
+    let response;
+    if (provider === 'nvidia') {
+      response = await fetch('https://integrate.api.nvidia.com/v1/models', {
+        headers: { Authorization: `Bearer ${credentials.apiKey}` },
+        signal: AbortSignal.timeout(12000),
+      });
+    } else if (provider === 'tavily') {
+      response = await fetch('https://api.tavily.com/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          api_key: credentials.apiKey,
+          query: 'Nemotron Agent Lab connection test',
+          max_results: 1,
+        }),
+        signal: AbortSignal.timeout(12000),
+      });
+    } else if (provider === 'cloudflare') {
+      response = await fetch('https://api.cloudflare.com/client/v4/user/tokens/verify', {
+        headers: { Authorization: `Bearer ${credentials.apiToken}` },
+        signal: AbortSignal.timeout(12000),
+      });
+    } else {
+      response = await fetch(
+        `https://api.vercel.com/v9/projects/${encodeURIComponent(credentials.projectId)}?teamId=${encodeURIComponent(credentials.teamId)}`,
+        {
+          headers: { Authorization: `Bearer ${credentials.token}` },
+          signal: AbortSignal.timeout(12000),
+        }
+      );
+    }
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload?.success === false)
+      return res
+        .status(400)
+        .json({
+          ok: false,
+          error: `Connection failed (HTTP ${response.status}). Check the credential and required permissions.`,
+        });
+    res.json({ ok: true, message: `${provider} connection verified.` });
+  } catch (error) {
+    res
+      .status(400)
+      .json({
+        ok: false,
+        error:
+          error.name === 'TimeoutError'
+            ? 'Connection test timed out.'
+            : 'Connection test failed. Check credentials and network access.',
+      });
+  }
+});
+
 export default router;

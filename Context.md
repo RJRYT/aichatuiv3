@@ -13,7 +13,7 @@ Nemotron Agent Lab is a full-stack AI chat and agent workspace. Users can have p
 - **Model:** NVIDIA Nemotron 3.5 Super VL through NVIDIA NIM's OpenAI-compatible streaming API. The backend owns the API key and model-directed tool loop.
 - **Agent checkpoints:** MongoDB stores run status, plan snapshots, recent operation summaries, budgets, and interruption details in `AgentRun`.
 - **Python:** `@vercel/sandbox` runs Python 3.14 in an isolated Firecracker microVM. Sandboxes are persistent per user/chat; execution code, timeouts, output limits, artifacts, and uploads are managed under `apps/server/src/services/interpreter`.
-- **Other integrations:** Tavily web search and Cloudflare Workers AI image generation.
+- **Other integrations:** Tavily web search, Cloudflare Workers AI image generation, and Vercel Sandbox. Developer Mode supports user-owned encrypted credentials for NVIDIA, Tavily, Cloudflare and Vercel; platform environment credentials remain defaults.
 
 ## Important request flows
 
@@ -57,7 +57,10 @@ Chat export downloads JSON using the chat title as a lowercase, hyphenated filen
 - `apps/server/src/routes/chat.js` — chat streaming endpoint and persistence merge.
 - `apps/server/src/routes/chats.js` — chat CRUD, branches, uploads, and response versions.
 - `apps/server/src/routes/interpreter.js` — execution, cancellation, status, and artifact API.
-- `apps/server/src/services/nvidia.js` — model streaming, model-directed tool loop, bounded execution/recovery budgets, timeouts, and actual lifecycle events.
+- `apps/server/src/services/nvidia.js` — model streaming, per-request model selection, model-round usage aggregation, model-directed tool loop, bounded execution/recovery budgets, timeouts, and lifecycle events.
+- `apps/server/src/services/modelRegistry.js` and `modelRouter.js` — Nemotron aliases, capability metadata, Auto classification and escalation policy.
+- `apps/server/src/services/integrations/crypto.js` — AES-256-GCM user credential encryption/decryption.
+- `apps/server/src/services/usageAnalytics.js` — full-chat token, request, model and tool usage aggregation.
 - `apps/server/src/services/tools.js` — tool definitions and dispatch.
 - `apps/server/src/services/agentPlanning.js` — model-directed plan validation and task-state transitions.
 - `apps/server/src/services/chatStore.js` and `conversationBranches.js` — chat persistence and branch behavior.
@@ -117,3 +120,14 @@ Production deployments should use HTTPS, explicit trusted CORS origins, a strong
 The worktree may contain changes from multiple recent fixes. Check `git status --short` before editing, and preserve unrelated staged or unstaged work.
 
 For this v8 upgrade, dependency installation could not complete in the build environment, so the full dependency-backed test suite and Vite production build remain unverified. Dependency-free architecture, archive-validation, and system-prompt tests were run separately. Re-run `npm ci`, `npm test`, and `npm run build` in the target development environment before deployment.
+
+
+## v8.2.0 additions
+
+- Model selector preference is stored as `preferences.activeModel` (`auto` by default).
+- Auto routing runs before the main agent loop and emits `model_selected` / `model_switch` events. The router's Bolt usage is included in the assistant usage totals.
+- Manual model mode never escalates. Auto escalation is bounded to one switch per turn.
+- Personal Integrations are encrypted in the `User.integrations` field. Generate a 32-byte key and set `USER_INTEGRATIONS_ENCRYPTION_KEY`; never rotate it without re-encrypting stored credentials.
+- Hidden Developer Mode is revealed by clicking the Personalization heading seven times.
+- Tool permissions are configurable only for Python, Node.js, web search, image generation, workspace deletion and ZIP packaging. Core tools and low-risk lookups are always enabled.
+- Usage endpoint `/api/chats/usage` hydrates full chats rather than relying on index rows. Historical v8.1 usage values may undercount agent turns with multiple model rounds.

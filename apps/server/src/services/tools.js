@@ -3,6 +3,9 @@ import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { Share } from '../models/Share.js';
 import { User } from '../models/User.js';
+import { decryptUserIntegrations } from './integrations/crypto.js';
+import { isPluginEnabled, isToolUserConfigurable } from './toolPolicy.js';
+export { isPluginEnabled, isToolUserConfigurable } from './toolPolicy.js';
 import logger from '../utils/logger.js';
 import { createTaskPlan, updatePlannedTask } from './agentPlanning.js';
 import { getChat, searchChatContexts } from './chatStore.js';
@@ -11,24 +14,131 @@ import { executePython } from './interpreter/interpreter.js';
 import { executeNodeInSandbox, getInterpreterStatus } from './interpreter/sandboxManager.js';
 import { acquireExecution } from './interpreter/executionQueue.js';
 import {
-  archiveWorkspace, createWorkspaceFile, deleteWorkspaceFile, editWorkspaceFile,
-  getWorkspaceSnapshot, getWorkspaceStatus, listWorkspaceFiles, readWorkspaceFile, searchWorkspaceFiles,
+  archiveWorkspace,
+  createWorkspaceFile,
+  deleteWorkspaceFile,
+  editWorkspaceFile,
+  getWorkspaceSnapshot,
+  getWorkspaceStatus,
+  listWorkspaceFiles,
+  readWorkspaceFile,
+  searchWorkspaceFiles,
 } from './workspace/workspaceManager.js';
 
 const log = logger.child({ component: 'tools' });
+
 const parser = new Parser({
   operators: { logical: false, comparison: false, in: false, assignment: false },
 });
 
 const tools = [
-  { type: 'function', function: { name: 'workspace_list', description: 'List files in the current conversation workspace. Use this to inspect project structure and file revisions. This is a native file operation; it does not start Python or Node.js.', parameters: { type: 'object', properties: { prefix: { type: 'string', description: 'Optional relative directory prefix.' } } } } },
-  { type: 'function', function: { name: 'workspace_read', description: 'Read a text file from the current conversation workspace. Use this before editing unfamiliar or existing files. Large files can be read in chunks using start_line and max_lines; continue from nextLine when truncated is true. This does not start a runtime.', parameters: { type: 'object', properties: { path: { type: 'string' }, start_line: { type: 'integer', minimum: 1 }, max_lines: { type: 'integer', minimum: 1, maximum: 500 } }, required: ['path'] } } },
-  { type: 'function', function: { name: 'workspace_create', description: 'Create a complete text source file in the current conversation workspace. Use for HTML, CSS, JavaScript, TypeScript, JSON, Markdown, Python source and other text files. This does not execute code. Existing files are not overwritten unless overwrite=true.', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' }, overwrite: { type: 'boolean' } }, required: ['path', 'content'] } } },
-  { type: 'function', function: { name: 'workspace_edit', description: 'Edit an existing workspace file without running a code interpreter. Prefer exact oldText/newText replacement with expectedRevision from workspace_read. Supports append, exact replace, or full overwrite.', parameters: { type: 'object', properties: { path: { type: 'string' }, mode: { type: 'string', enum: ['append', 'replace', 'overwrite'] }, oldText: { type: 'string' }, newText: { type: 'string' }, content: { type: 'string' }, expectedRevision: { type: 'integer' }, replaceAll: { type: 'boolean' } }, required: ['path', 'mode'] } } },
-  { type: 'function', function: { name: 'workspace_delete', description: 'Delete a file from the current conversation workspace. Use only when deletion is necessary for the requested change.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } },
-  { type: 'function', function: { name: 'workspace_search', description: 'Search text content across files in the current conversation workspace.', parameters: { type: 'object', properties: { query: { type: 'string' }, prefix: { type: 'string' } }, required: ['query'] } } },
-  { type: 'function', function: { name: 'workspace_status', description: 'Get current workspace file count, size, and storage limits.', parameters: { type: 'object', properties: {} } } },
-  { type: 'function', function: { name: 'workspace_archive', description: 'Create a verified ZIP archive of non-secret workspace files and save it as a downloadable artifact. Sensitive files such as .env and private keys are excluded. Use only when the user requests an archive or when packaging is genuinely necessary for delivery.', parameters: { type: 'object', properties: { name: { type: 'string' } } } } },
+  {
+    type: 'function',
+    function: {
+      name: 'workspace_list',
+      description:
+        'List files in the current conversation workspace. Use this to inspect project structure and file revisions. This is a native file operation; it does not start Python or Node.js.',
+      parameters: {
+        type: 'object',
+        properties: {
+          prefix: { type: 'string', description: 'Optional relative directory prefix.' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'workspace_read',
+      description:
+        'Read a text file from the current conversation workspace. Use this before editing unfamiliar or existing files. Large files can be read in chunks using start_line and max_lines; continue from nextLine when truncated is true. This does not start a runtime.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          start_line: { type: 'integer', minimum: 1 },
+          max_lines: { type: 'integer', minimum: 1, maximum: 500 },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'workspace_create',
+      description:
+        'Create a complete text source file in the current conversation workspace. Use for HTML, CSS, JavaScript, TypeScript, JSON, Markdown, Python source and other text files. This does not execute code. Existing files are not overwritten unless overwrite=true.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          content: { type: 'string' },
+          overwrite: { type: 'boolean' },
+        },
+        required: ['path', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'workspace_edit',
+      description:
+        'Edit an existing workspace file without running a code interpreter. Prefer exact oldText/newText replacement with expectedRevision from workspace_read. Supports append, exact replace, or full overwrite.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          mode: { type: 'string', enum: ['append', 'replace', 'overwrite'] },
+          oldText: { type: 'string' },
+          newText: { type: 'string' },
+          content: { type: 'string' },
+          expectedRevision: { type: 'integer' },
+          replaceAll: { type: 'boolean' },
+        },
+        required: ['path', 'mode'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'workspace_delete',
+      description:
+        'Delete a file from the current conversation workspace. Use only when deletion is necessary for the requested change.',
+      parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'workspace_search',
+      description: 'Search text content across files in the current conversation workspace.',
+      parameters: {
+        type: 'object',
+        properties: { query: { type: 'string' }, prefix: { type: 'string' } },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'workspace_status',
+      description: 'Get current workspace file count, size, and storage limits.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'workspace_archive',
+      description:
+        'Create a verified ZIP archive of non-secret workspace files and save it as a downloadable artifact. Sensitive files such as .env and private keys are excluded. Use only when the user requests an archive or when packaging is genuinely necessary for delivery.',
+      parameters: { type: 'object', properties: { name: { type: 'string' } } },
+    },
+  },
   {
     type: 'function',
     function: {
@@ -77,7 +187,8 @@ const tools = [
     type: 'function',
     function: {
       name: 'execute_node',
-      description: 'Run an isolated Node.js, npm, or npx command against a snapshot of the current conversation workspace. Use for JavaScript syntax checks, Node.js scripts, dependency installation, Vite/React builds, and Node tests. This runs in a separate sandbox, never in the application server. Requires a configured Node sandbox image.',
+      description:
+        'Run an isolated Node.js, npm, or npx command against a snapshot of the current conversation workspace. Use for JavaScript syntax checks, Node.js scripts, dependency installation, Vite/React builds, and Node tests. This runs in a separate sandbox, never in the application server. Requires a configured Node sandbox image.',
       parameters: {
         type: 'object',
         properties: {
@@ -93,7 +204,8 @@ const tools = [
     type: 'function',
     function: {
       name: 'get_agent_status',
-      description: 'Inspect the latest persisted agent-run checkpoint for this conversation. Use when the user asks to resume or continue earlier work, or when you need to understand what was completed before an interruption. This returns operation summaries, not source contents.',
+      description:
+        'Inspect the latest persisted agent-run checkpoint for this conversation. Use when the user asks to resume or continue earlier work, or when you need to understand what was completed before an interruption. This returns operation summaries, not source contents.',
       parameters: { type: 'object', properties: {} },
     },
   },
@@ -350,13 +462,15 @@ async function safeUrl(raw) {
   return url;
 }
 async function tavilySearch(args) {
-  if (!process.env.TAVILY_API_KEY)
-    throw new Error('Web search is not configured. Add TAVILY_API_KEY to the backend environment.');
+  if (!args._apiKey && !process.env.TAVILY_API_KEY)
+    throw new Error(
+      'Web search is not configured. Add a Tavily key in Developer Mode → Personal Integrations or configure the platform key.'
+    );
   const response = await fetch('https://api.tavily.com/search', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      api_key: process.env.TAVILY_API_KEY,
+      api_key: String(args._apiKey || process.env.TAVILY_API_KEY || ''),
       query: String(args.query || '').slice(0, 500),
       topic: ['general', 'news', 'finance'].includes(args.topic) ? args.topic : 'general',
       search_depth: 'basic',
@@ -383,20 +497,32 @@ async function tavilySearch(args) {
 async function executeTool(name, args, user, options = {}) {
   const userId = user?._id ? String(user._id) : 'unknown';
   if (name.startsWith('workspace_')) {
-    if (!user?._id || String(user._id).startsWith('guest:')) throw new Error('Sign in is required for persistent workspace operations.');
+    if (!user?._id || String(user._id).startsWith('guest:'))
+      throw new Error('Sign in is required for persistent workspace operations.');
     const chatId = String(options.chatId || '');
     if (name === 'workspace_list') return listWorkspaceFiles(userId, chatId, args.prefix || '');
-    if (name === 'workspace_read') return readWorkspaceFile(userId, chatId, args.path, { startLine: args.start_line, maxLines: args.max_lines });
-    if (name === 'workspace_create') return createWorkspaceFile(userId, chatId, args.path, args.content, { overwrite: Boolean(args.overwrite) });
+    if (name === 'workspace_read')
+      return readWorkspaceFile(userId, chatId, args.path, {
+        startLine: args.start_line,
+        maxLines: args.max_lines,
+      });
+    if (name === 'workspace_create')
+      return createWorkspaceFile(userId, chatId, args.path, args.content, {
+        overwrite: Boolean(args.overwrite),
+      });
     if (name === 'workspace_edit') return editWorkspaceFile(userId, chatId, args.path, args);
     if (name === 'workspace_delete') return deleteWorkspaceFile(userId, chatId, args.path);
-    if (name === 'workspace_search') return searchWorkspaceFiles(userId, chatId, args.query, args.prefix || '');
+    if (name === 'workspace_search')
+      return searchWorkspaceFiles(userId, chatId, args.query, args.prefix || '');
     if (name === 'workspace_status') return getWorkspaceStatus(userId, chatId);
-    if (name === 'workspace_archive') return archiveWorkspace(userId, chatId, args.name || 'project.zip');
+    if (name === 'workspace_archive')
+      return archiveWorkspace(userId, chatId, args.name || 'project.zip');
   }
   if (name === 'get_agent_status') {
-    if (!user?._id || String(user._id).startsWith('guest:')) throw new Error('Sign in is required to inspect agent checkpoints.');
-    if (!options.chatId) throw new Error('A conversation is required to inspect agent checkpoints.');
+    if (!user?._id || String(user._id).startsWith('guest:'))
+      throw new Error('Sign in is required to inspect agent checkpoints.');
+    if (!options.chatId)
+      throw new Error('A conversation is required to inspect agent checkpoints.');
     return { checkpoint: await getLatestAgentCheckpoint(userId, String(options.chatId)) };
   }
   if (name === 'create_task_plan')
@@ -404,13 +530,22 @@ async function executeTool(name, args, user, options = {}) {
   if (name === 'update_task_status')
     return updatePlannedTask(args, options.agentState, options.onAgentEvent);
   if (name === 'generate_image') {
+    if (options.integrations?.errors?.cloudflare)
+      throw new Error(
+        'Your saved Cloudflare credentials could not be decrypted. Re-enter them in Developer Mode → Personal Integrations.'
+      );
     return generateImageArtifact(args, user, {
       signal: options.signal,
       chatId: options.chatId,
+      credentials: options.integrations?.cloudflare,
       onProgress: (progress) => options.onAgentEvent?.('image_progress', progress),
     });
   }
   if (name === 'execute_python') {
+    if (options.integrations?.errors?.vercel)
+      throw new Error(
+        'Your saved Vercel credentials could not be decrypted. Re-enter them in Developer Mode → Personal Integrations.'
+      );
     if (!user?._id || String(user._id).startsWith('guest:')) {
       log.warn('Python execution denied: not signed in', { userId });
       throw new Error('A signed-in user is required for Python execution.');
@@ -419,7 +554,9 @@ async function executeTool(name, args, user, options = {}) {
       throw new Error(
         'This conversation no longer exists. Start a new conversation before running Python.'
       );
-    const workspaceFiles = options.chatId ? await getWorkspaceSnapshot(userId, String(options.chatId)) : [];
+    const workspaceFiles = options.chatId
+      ? await getWorkspaceSnapshot(userId, String(options.chatId))
+      : [];
     const result = await executePython(
       { code: args.code, chatId: options.chatId },
       String(user._id),
@@ -428,14 +565,28 @@ async function executeTool(name, args, user, options = {}) {
         chatId: options.chatId,
         archiveOnly: Boolean(options.archiveOnly),
         workspaceFiles,
+        sandboxCredentials: options.integrations?.vercel,
       }
     );
     return { ...result, taskContext: String(args.task_context || '').slice(0, 500) };
   }
   if (name === 'execute_node') {
-    if (!user?._id || String(user._id).startsWith('guest:')) throw new Error('A signed-in user is required for Node.js execution.');
-    if (!options.chatId || !(await getChat(userId, String(options.chatId)))) throw new Error('A valid conversation is required for Node.js execution.');
-    if (!process.env.VERCEL_NODE_SANDBOX_IMAGE) throw new Error('Node.js execution is not configured. Set VERCEL_NODE_SANDBOX_IMAGE to an approved isolated Node.js sandbox image.');
+    if (options.integrations?.errors?.vercel)
+      throw new Error(
+        'Your saved Vercel credentials could not be decrypted. Re-enter them in Developer Mode → Personal Integrations.'
+      );
+    if (!user?._id || String(user._id).startsWith('guest:'))
+      throw new Error('A signed-in user is required for Node.js execution.');
+    if (!options.chatId || !(await getChat(userId, String(options.chatId))))
+      throw new Error('A valid conversation is required for Node.js execution.');
+    if (!process.env.VERCEL_NODE_SANDBOX_IMAGE)
+      throw new Error(
+        'Node.js execution is not configured. The deployment must provide an approved VERCEL_NODE_SANDBOX_IMAGE.'
+      );
+    if (!options.integrations?.vercel?.token && !getInterpreterStatus().configured)
+      throw new Error(
+        'Configure Vercel Sandbox credentials in Developer Mode → Personal Integrations, or ask the administrator to configure the platform sandbox.'
+      );
     const workspaceFiles = await getWorkspaceSnapshot(userId, String(options.chatId));
     const release = acquireExecution(userId);
     try {
@@ -447,8 +598,11 @@ async function executeTool(name, args, user, options = {}) {
         chatId: String(options.chatId),
         signal: options.signal,
         workspaceFiles,
+        sandboxCredentials: options.integrations?.vercel,
       });
-    } finally { release(); }
+    } finally {
+      release();
+    }
   }
   if (name === 'save_memory') {
     if (!user?._id || String(user._id).startsWith('guest:')) {
@@ -517,7 +671,11 @@ async function executeTool(name, args, user, options = {}) {
     return { chats };
   }
   if (name === 'web_search') {
-    const result = await tavilySearch(args);
+    if (options.integrations?.errors?.tavily)
+      throw new Error(
+        'Your saved Tavily credentials could not be decrypted. Re-enter them in Developer Mode → Personal Integrations.'
+      );
+    const result = await tavilySearch({ ...args, _apiKey: options.integrations?.tavily?.apiKey });
     return result;
   }
   if (name === 'calculator') {
@@ -603,15 +761,18 @@ async function executeTool(name, args, user, options = {}) {
 }
 export function getToolDefinitions(user) {
   const enabled = (pluginId) => isPluginEnabled(user, pluginId);
-  const builtins = tools.filter((tool) => enabled(tool.function.name) && (tool.function.name !== 'execute_node' || Boolean(process.env.VERCEL_NODE_SANDBOX_IMAGE && getInterpreterStatus().configured)));
+  const personalVercel = decryptUserIntegrations(user).vercel || {};
+  const vercelReady = Boolean(
+    (personalVercel.token && personalVercel.teamId && personalVercel.projectId) ||
+    getInterpreterStatus().configured
+  );
+  const builtins = tools.filter(
+    (tool) =>
+      enabled(tool.function.name) &&
+      (tool.function.name !== 'execute_node' ||
+        Boolean(process.env.VERCEL_NODE_SANDBOX_IMAGE && vercelReady))
+  );
   return [...builtins, ...getCustomToolDefinitions(user)];
-}
-
-export function isPluginEnabled(user, pluginId) {
-  const permissions = user?.pluginPermissions;
-  if (!permissions || typeof permissions !== 'object' || permissions[pluginId] === undefined)
-    return true;
-  return permissions[pluginId] !== false;
 }
 
 function normalizeCustomTool(tool) {
@@ -623,7 +784,9 @@ function normalizeCustomTool(tool) {
     url: String(tool.url || '').slice(0, 500),
     method: tool.method === 'GET' ? 'GET' : 'POST',
     parameters: parameters.slice(0, 10).map((param) => ({
-      name: String(param?.name || '').replace(/[^\w-]/g, '').slice(0, 40),
+      name: String(param?.name || '')
+        .replace(/[^\w-]/g, '')
+        .slice(0, 40),
       type: ['string', 'number', 'boolean'].includes(param?.type) ? param.type : 'string',
       description: String(param?.description || '').slice(0, 200),
       required: Boolean(param?.required),
@@ -666,9 +829,10 @@ async function runCustomTool(tool, args, signal) {
   if (!/^https:\/\/[\w.-]+/.test(normalized.url))
     throw new Error('Custom tool URL must be a public https:// endpoint.');
   const method = normalized.method;
-  const query = method === 'GET' && args && Object.keys(args).length
-    ? `?${new URLSearchParams(Object.entries(args).map(([k, v]) => [k, String(v)])).toString()}`
-    : '';
+  const query =
+    method === 'GET' && args && Object.keys(args).length
+      ? `?${new URLSearchParams(Object.entries(args).map(([k, v]) => [k, String(v)])).toString()}`
+      : '';
   const response = await fetch(`${normalized.url}${query}`, {
     method,
     ...(method === 'POST'
@@ -692,14 +856,62 @@ async function runCustomTool(tool, args, signal) {
 }
 export function getPluginCatalog() {
   return [
-    { id: 'workspace_list', name: 'Workspace files', description: 'Inspect files in the current project workspace', icon: 'FolderOpen', configured: true },
-    { id: 'workspace_read', name: 'Workspace reading', description: 'Read source and project files', icon: 'FileText', configured: true },
-    { id: 'workspace_create', name: 'Workspace creation', description: 'Create source and project files without starting a runtime', icon: 'FilePlus', configured: true },
-    { id: 'workspace_edit', name: 'Workspace editing', description: 'Apply revision-aware edits to project files', icon: 'FilePenLine', configured: true },
-    { id: 'workspace_delete', name: 'Workspace deletion', description: 'Delete project files when requested or necessary', icon: 'FileX', configured: true },
-    { id: 'workspace_search', name: 'Workspace search', description: 'Search text across project files', icon: 'Search', configured: true },
-    { id: 'workspace_status', name: 'Workspace status', description: 'Inspect workspace size and file limits', icon: 'FolderCheck', configured: true },
-    { id: 'workspace_archive', name: 'Workspace archive', description: 'Package the current workspace when requested', icon: 'FileArchive', configured: true },
+    {
+      id: 'workspace_list',
+      name: 'Workspace files',
+      description: 'Inspect files in the current project workspace',
+      icon: 'FolderOpen',
+      configured: true,
+    },
+    {
+      id: 'workspace_read',
+      name: 'Workspace reading',
+      description: 'Read source and project files',
+      icon: 'FileText',
+      configured: true,
+    },
+    {
+      id: 'workspace_create',
+      name: 'Workspace creation',
+      description: 'Create source and project files without starting a runtime',
+      icon: 'FilePlus',
+      configured: true,
+    },
+    {
+      id: 'workspace_edit',
+      name: 'Workspace editing',
+      description: 'Apply revision-aware edits to project files',
+      icon: 'FilePenLine',
+      configured: true,
+    },
+    {
+      id: 'workspace_delete',
+      name: 'Workspace deletion',
+      description: 'Delete project files when requested or necessary',
+      icon: 'FileX',
+      configured: true,
+    },
+    {
+      id: 'workspace_search',
+      name: 'Workspace search',
+      description: 'Search text across project files',
+      icon: 'Search',
+      configured: true,
+    },
+    {
+      id: 'workspace_status',
+      name: 'Workspace status',
+      description: 'Inspect workspace size and file limits',
+      icon: 'FolderCheck',
+      configured: true,
+    },
+    {
+      id: 'workspace_archive',
+      name: 'Workspace archive',
+      description: 'Package the current workspace when requested',
+      icon: 'FileArchive',
+      configured: true,
+    },
     {
       id: 'execute_python',
       name: 'Python interpreter',
@@ -712,7 +924,9 @@ export function getPluginCatalog() {
       name: 'Node.js runtime',
       description: 'Isolated Node.js, npm and npx execution for builds and tests',
       icon: 'Terminal',
-      configured: Boolean(process.env.VERCEL_NODE_SANDBOX_IMAGE && getInterpreterStatus().configured),
+      configured: Boolean(
+        process.env.VERCEL_NODE_SANDBOX_IMAGE && getInterpreterStatus().configured
+      ),
     },
     {
       id: 'generate_image',
@@ -805,7 +1019,11 @@ export function getPluginCatalog() {
       icon: 'Clock',
       configured: true,
     },
-  ];
+  ].map((tool) => ({
+    ...tool,
+    configurable: isToolUserConfigurable(tool.id),
+    defaultEnabled: true,
+  }));
 }
 export async function runTool(name, args, user, options = {}) {
   try {

@@ -1,4 +1,4 @@
-# Nemotron Agent Lab v8.0.0 — MERN Monorepo
+# Nemotron Agent Lab v8.2.0 — MERN Monorepo
 
 A full-stack Agent Lab interface for NVIDIA Nemotron 3.5 Super VL, built with React, Vite, Express, and MongoDB.
 
@@ -6,13 +6,17 @@ A full-stack Agent Lab interface for NVIDIA Nemotron 3.5 Super VL, built with Re
 
 - Workspace color themes (Forest, Midnight, Ocean, Amethyst, Nord, Solarized) with a theme picker in Personalization, persisted across sessions.
 - Personalization and persistent memory with editable long-term memory.
-- Model-directed agent orchestration with automatic tool selection and optional task planning.
+- NVIDIA-only Nemotron model intelligence: Auto routing plus manual Bolt, Vision, Surge, Titan and Omni selection.
+- Model-aware escalation in Auto mode for provider failures and repeated tool recovery failures.
 - Native persistent conversation workspaces for source creation, reading, revision-aware editing, search, and requested ZIP packaging.
 - Dynamic isolated execution: Python by default when needed, with an optional separately configured Node.js sandbox for builds and tests.
 - Backend-authored tool lifecycle events, optional model progress, bounded recovery, and evidence-based artifact verification.
 - Cloudflare Workers AI image generation (FLUX.1 Schnell) with binary validation and File Library storage.
 - OAuth authentication (Google, GitHub, Discord) with secure HttpOnly cookies.
 - Web search via Tavily API.
+- Hidden Developer Mode → Personal Integrations for user-owned NVIDIA, Tavily, Cloudflare and Vercel credentials, encrypted at rest.
+- Capability-based tool controls: switches only for high-impact operations; low-risk tools remain enabled.
+- Usage analytics across model rounds, conversation branches and regenerated response versions.
 - Automatic Python dependency installation in sandboxed execution, without using Python as a routine file-writing bridge.
 
 ## Demo
@@ -32,7 +36,7 @@ See [Agent Architecture](ARCHITECTURE.md) for subsystem boundaries, tool contrac
 - **Frontend**: React 19 + Vite static build
 - **Backend**: Express API + Mongoose + OAuth + Agent runtime
 - **Database**: MongoDB
-- **Model**: NVIDIA Nemotron 3.5 Super VL 120B
+- **Model**: NVIDIA Nemotron family via NVIDIA NIM (Auto routing or manual selection)
 
 ## Prerequisites
 
@@ -57,6 +61,7 @@ See [Agent Architecture](ARCHITECTURE.md) for subsystem boundaries, tool contrac
 | `NVIDIA_API_KEY`               | Your NVIDIA API key (backend‑only)                              |
 | `MONGODB_URI`                  | MongoDB connection string                                       |
 | `SESSION_SECRET`               | Long, high‑entropy secret for session signing                   |
+| `USER_INTEGRATIONS_ENCRYPTION_KEY` | 32-byte hex/base64 key for AES-256-GCM Personal Integrations (required only when users save personal credentials) |
 | `TAVILY_API_KEY`               | Tavily API key (for web search)                                 |
 | `CLOUDFLARE_ACCOUNT_ID`        | Cloudflare account ID (Workers AI)                              |
 | `CLOUDFLARE_API_TOKEN`         | Workers AI API token                                            |
@@ -64,8 +69,8 @@ See [Agent Architecture](ARCHITECTURE.md) for subsystem boundaries, tool contrac
 | `CLOUDFLARE_IMAGE_TIMEOUT_MS`  | Timeout in milliseconds (default 120000)                        |
 | `IMAGE_GENERATION_DAILY_LIMIT` | Daily image generation quota (default 8)                        |
 | `VERCEL_NODE_SANDBOX_IMAGE` | Optional isolated Node.js sandbox image; enables `execute_node` |
-| `AGENT_MAX_MODEL_ROUNDS` | Maximum model/tool loop rounds (default 48, bounded) |
-| `AGENT_MAX_TOOL_CALLS` | Maximum execution tool calls per turn (default 24, bounded) |
+| `AGENT_MAX_MODEL_ROUNDS` | Maximum model/tool loop rounds (default 96, bounded) |
+| `AGENT_MAX_TOOL_CALLS` | Maximum execution tool calls per turn (default 64, bounded) |
 | `AGENT_MAX_RECOVERY_ATTEMPTS` | Maximum consecutive failures per tool (default 3, bounded) |
 
 ## Running the App
@@ -83,6 +88,10 @@ npm start
 Set `SERVE_STATIC=true` in the backend environment to serve the static frontend files.
 
 ## Configuration Details
+
+- To reveal Developer Mode, open Personalization settings and click the **Personalization** heading seven times. The Developer tab then exposes Personal Integrations. This is a hidden UI shortcut, not a security boundary; API routes still enforce authentication and ownership.
+- Generate `USER_INTEGRATIONS_ENCRYPTION_KEY` with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. Keep it stable and backed up; do not rotate it without re-encrypting existing credentials.
+- Auto uses Bolt for task classification, then selects a model using AI classification and deterministic capability rules. Bolt is currently used for quick text requests and routing only; the agent tool loop uses tool-capable models. MP3/WAV attachments route to Omni for speech and audio understanding. Manual mode never changes models during a turn. Auto allows one controlled escalation.
 
 - Register OAuth callback URLs in Google, GitHub, and Discord developer consoles:
   - Google: `http://localhost:4000/api/auth/google/callback`
