@@ -4,7 +4,7 @@ import { buildSystemPrompt, SYSTEM_PROMPT_VERSION } from '../src/services/system
 
 test('system prompt loads the versioned Markdown identity and tool policy', () => {
   const prompt = buildSystemPrompt();
-  assert.equal(SYSTEM_PROMPT_VERSION, '8.4.1');
+  assert.equal(SYSTEM_PROMPT_VERSION, '8.4.2');
   assert.match(prompt, /You are \*\*Nemi\*\*/);
   assert.match(prompt, /Robin J R \(RJRYT\)/);
   assert.match(prompt, /`execute_python`/);
@@ -16,6 +16,10 @@ test('system prompt loads the versioned Markdown identity and tool policy', () =
   assert.match(prompt, /`get_current_datetime`/);
   assert.match(prompt, /`npm_search`/);
   assert.match(prompt, /`github_search`/);
+  assert.match(prompt, /`workspace_export`/);
+  assert.match(prompt, /workspace_create` and `workspace_edit` only save files/i);
+  assert.match(prompt, /If truncated is true, continue reading/i);
+  assert.match(prompt, /not proof that an HTML page works in a browser/i);
   assert.match(prompt, /`create_task_plan`/);
   assert.match(prompt, /`update_task_status`/);
   assert.match(prompt, /`generate_image`/);

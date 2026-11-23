@@ -5,6 +5,7 @@ import { deleteArtifacts, getArtifact } from '../src/services/interpreter/artifa
 import {
   __resetWorkspaceMemoryForTests,
   archiveWorkspace,
+  exportWorkspaceFile,
   createWorkspaceFile,
   deleteWorkspaceFile,
   editWorkspaceFile,
@@ -75,6 +76,34 @@ test('workspace archive creates a stored ZIP with a verified manifest', async ()
     const artifact = await getArtifact(artifactId, ownerId);
     assert.equal(artifact.mimeType, 'application/zip');
     assert.ok(artifact.data.length > 22);
+  } finally {
+    if (artifactId) await deleteArtifacts([artifactId], ownerId);
+    await deleteChat(ownerId, String(chat._id));
+    __resetWorkspaceMemoryForTests();
+    if (oldMongo === undefined) delete process.env.MONGODB_URI; else process.env.MONGODB_URI = oldMongo;
+  }
+});
+
+test('workspace export creates a downloadable artifact for a single deliverable', async () => {
+  const oldMongo = process.env.MONGODB_URI;
+  delete process.env.MONGODB_URI;
+  __resetWorkspaceMemoryForTests();
+  const chat = await createChat(ownerId, 'Export test');
+  let artifactId;
+  try {
+    const source = '<!doctype html><html><body><h1>Download me</h1></body></html>';
+    await createWorkspaceFile(ownerId, String(chat._id), 'site/index.html', source);
+    const result = await exportWorkspaceFile(ownerId, String(chat._id), 'site/index.html');
+    artifactId = result.artifact.id;
+    assert.equal(result.exported, true);
+    assert.equal(result.path, 'site/index.html');
+    assert.equal(result.size, Buffer.byteLength(source, 'utf8'));
+    assert.equal(result.artifacts.length, 1);
+    assert.equal(result.artifacts[0].name, 'index.html');
+    assert.ok(result.artifacts[0].downloadUrl.includes('/api/interpreter/artifacts/'));
+    const stored = await getArtifact(artifactId, ownerId);
+    assert.equal(stored.data.toString('utf8'), source);
+    assert.equal(stored.mimeType, 'text/html');
   } finally {
     if (artifactId) await deleteArtifacts([artifactId], ownerId);
     await deleteChat(ownerId, String(chat._id));

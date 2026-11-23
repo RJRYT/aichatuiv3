@@ -1,4 +1,4 @@
-# Nemotron Agent Lab v8.4.1 — MERN Monorepo
+# Nemotron Agent Lab v8.4.2 — MERN Monorepo
 
 A full-stack Agent Lab interface for NVIDIA Nemotron 3.5 Super VL, built with React, Vite, Express, and MongoDB.
 
@@ -91,7 +91,7 @@ Set `SERVE_STATIC=true` in the backend environment to serve the static frontend 
 
 - To reveal Developer Mode, open Personalization settings and click the **Personalization** heading seven times. The Developer tab then exposes Personal Integrations. This is a hidden UI shortcut, not a security boundary; API routes still enforce authentication and ownership.
 - Generate `USER_INTEGRATIONS_ENCRYPTION_KEY` with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. Keep it stable and backed up; do not rotate it without re-encrypting existing credentials.
-- Auto uses Bolt for task classification, then selects a model using AI classification and deterministic capability rules. Bolt is currently used for quick text requests and routing only; the agent tool loop uses tool-capable models. MP3/WAV attachments route to Omni for speech and audio understanding. Manual mode never changes models during a turn. Auto allows one controlled escalation.
+- Auto uses Bolt for task classification, then selects a model using recent user-turn context, AI classification and deterministic capability rules. Current-information requests, web research, explicit tool requests and short follow-ups retain their task context and route to a tool-capable model. Bolt is text-only and never receives tool-requiring tasks. Empty model responses trigger controlled escalation in Auto mode instead of being reported as successful completions. MP3/WAV attachments route to Omni for speech and audio understanding. Manual mode never changes models during a turn. Auto allows one controlled escalation.
 
 - Register OAuth callback URLs in Google, GitHub, and Discord developer consoles:
   - Google: `http://localhost:4000/api/auth/google/callback`

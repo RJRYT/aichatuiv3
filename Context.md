@@ -152,3 +152,11 @@ For this v8 upgrade, dependency installation could not complete in the build env
 ## v8.4.1 unified persona settings
 
 Personalization UI order is Color theme, then Agent personality. Base style, Base tone, Warmth, Enthusiasm, Emoji usage, Visual answers when useful, Use headers, and Use lists are now controls inside Agent personality and are injected as actionable character/presentation instructions. Named personality profiles and JSON import/export include these presentation preferences.
+
+
+## v8.4.2 Bolt routing reliability
+
+- Auto routing evaluates recent user-turn context for short follow-ups instead of classifying only the last short message.
+- Latest/current information, browsing, web search, explicit tool requests and research are guarded away from Bolt to tool-capable models.
+- Manual Bolt mode rejects tasks that require tools with a clear capability message.
+- Empty model responses are treated as failures; Auto escalates rather than persisting a generic empty-answer fallback as success.

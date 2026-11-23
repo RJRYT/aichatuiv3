@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import mongoose from 'mongoose';
 import { WorkspaceFile } from '../../models/WorkspaceFile.js';
 import { getChat } from '../chatStore.js';
-import { storeArtifact } from '../interpreter/artifactStore.js';
+import { guessMimeType, storeArtifact } from '../interpreter/artifactStore.js';
 import { inspectZipBuffer } from '../archiveValidation.js';
 import { deflateRawSync } from 'node:zlib';
 
@@ -205,6 +205,29 @@ function createZip(files) {
   end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(files.length, 8); end.writeUInt16LE(files.length, 10);
   end.writeUInt32LE(centralBuffer.length, 12); end.writeUInt32LE(offset, 16);
   return Buffer.concat([...local, centralBuffer, end]);
+}
+
+export async function exportWorkspaceFile(ownerId, chatId, rawPath, requestedName = '') {
+  await assertWorkspace(ownerId, chatId);
+  const file = await readWorkspaceFile(ownerId, chatId, rawPath, { full: true });
+  const baseName = String(requestedName || file.path.split('/').at(-1) || 'download.txt');
+  if (baseName.includes('/') || baseName.includes('\\\\')) throw new Error('Export name must be a filename, not a path.');
+  const artifact = await storeArtifact({
+    ownerId,
+    chatId,
+    name: baseName,
+    relativePath: file.path,
+    content: file.content,
+    mimeType: guessMimeType(baseName),
+  });
+  return {
+    exported: true,
+    path: file.path,
+    size: Buffer.byteLength(file.content, 'utf8'),
+    sha256: file.sha256,
+    artifact,
+    artifacts: [artifact],
+  };
 }
 
 export async function archiveWorkspace(ownerId, chatId, name = 'project.zip') {

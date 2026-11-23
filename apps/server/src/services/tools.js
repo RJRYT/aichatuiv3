@@ -15,7 +15,7 @@ import { executeNodeInSandbox, getInterpreterStatus } from './interpreter/sandbo
 import { acquireExecution } from './interpreter/executionQueue.js';
 import {
   archiveWorkspace, createWorkspaceFile, deleteWorkspaceFile, editWorkspaceFile,
-  getWorkspaceSnapshot, getWorkspaceStatus, listWorkspaceFiles, readWorkspaceFile, searchWorkspaceFiles,
+  exportWorkspaceFile, getWorkspaceSnapshot, getWorkspaceStatus, listWorkspaceFiles, readWorkspaceFile, searchWorkspaceFiles,
 } from './workspace/workspaceManager.js';
 
 const log = logger.child({ component: 'tools' });
@@ -32,6 +32,7 @@ const tools = [
   { type: 'function', function: { name: 'workspace_delete', description: 'Delete a file from the current conversation workspace. Use only when deletion is necessary for the requested change.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } },
   { type: 'function', function: { name: 'workspace_search', description: 'Search text content across files in the current conversation workspace.', parameters: { type: 'object', properties: { query: { type: 'string' }, prefix: { type: 'string' } }, required: ['query'] } } },
   { type: 'function', function: { name: 'workspace_status', description: 'Get current workspace file count, size, and storage limits.', parameters: { type: 'object', properties: {} } } },
+  { type: 'function', function: { name: 'workspace_export', description: 'Export a workspace file as a user-downloadable File Library artifact and return its artifact metadata for an inline download card. Use this after creating or editing a requested deliverable (HTML, source file, document, etc.). Creating a workspace file alone does NOT deliver it to the user.', parameters: { type: 'object', properties: { path: { type: 'string' }, name: { type: 'string', description: 'Optional download filename.' } }, required: ['path'] } } },
   { type: 'function', function: { name: 'workspace_archive', description: 'Create a verified ZIP archive of non-secret workspace files and save it as a downloadable artifact. Sensitive files such as .env and private keys are excluded. Use only when the user requests an archive or when packaging is genuinely necessary for delivery.', parameters: { type: 'object', properties: { name: { type: 'string' } } } } },
   {
     type: 'function',
@@ -396,6 +397,7 @@ async function executeTool(name, args, user, options = {}) {
     if (name === 'workspace_delete') return deleteWorkspaceFile(userId, chatId, args.path);
     if (name === 'workspace_search') return searchWorkspaceFiles(userId, chatId, args.query, args.prefix || '');
     if (name === 'workspace_status') return getWorkspaceStatus(userId, chatId);
+    if (name === 'workspace_export') return exportWorkspaceFile(userId, chatId, args.path, args.name || '');
     if (name === 'workspace_archive') return archiveWorkspace(userId, chatId, args.name || 'project.zip');
   }
   if (name === 'get_agent_status') {
@@ -707,6 +709,7 @@ export function getPluginCatalog() {
     { id: 'workspace_search', name: 'Workspace search', description: 'Search text across project files', icon: 'Search', configured: true },
     { id: 'workspace_status', name: 'Workspace status', description: 'Inspect workspace size and file limits', icon: 'FolderCheck', configured: true },
     { id: 'workspace_archive', name: 'Workspace archive', description: 'Package the current workspace when requested', icon: 'FileArchive', configured: true },
+    { id: 'workspace_export', name: 'Export workspace file', description: 'Create a downloadable artifact from a workspace file', icon: 'Download', configured: true },
     {
       id: 'execute_python',
       name: 'Python interpreter',

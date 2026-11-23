@@ -4,7 +4,7 @@ import { buildSystemPrompt } from './systemPrompt.js';
 import { createAgentCheckpoint, finishAgentCheckpoint, getLatestAgentCheckpoint, updateAgentCheckpoint } from './agents/checkpointManager.js';
 import { getToolDefinitions, runTool } from './tools.js';
 import { MODEL_REGISTRY, DEFAULT_MODEL_ALIAS, getModel } from './modelRegistry.js';
-import { routeModel, escalationTarget, isEscalatableModelError } from './modelRouter.js';
+import { routeModel, escalationTarget, isEscalatableModelError, requiresToolCapableModel, isEmptyModelResponse } from './modelRouter.js';
 import { decryptUserIntegrations } from './integrations/crypto.js';
 
 export const MODEL_ID = MODEL_REGISTRY.vision.id;
@@ -60,6 +60,7 @@ function safeToolArguments(name, args = {}) {
   if (name === 'workspace_read' || name === 'workspace_delete') return { path: args.path };
   if (name === 'workspace_search') return { query: String(args.query || '').slice(0, 120), prefix: args.prefix || '' };
   if (name === 'execute_node') return { command: args.command, args: Array.isArray(args.args) ? args.args.slice(0, 20) : [], timeout_ms: args.timeout_ms };
+  if (name === 'workspace_export') return { path: args.path, name: args.name || '' };
   if (name === 'workspace_archive') return { name: args.name || 'project.zip' };
   if (name === 'save_memory') return { memory_characters: String(args.memory || '').length };
   if (name === 'search_memories') return { query_characters: String(args.query || '').length };
@@ -259,6 +260,12 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
   const modelMode = body.modelMode === 'manual' ? 'manual' : (body.modelMode === 'auto' || !body.modelMode ? 'auto' : 'auto');
   let modelAlias = modelMode === 'manual' ? String(body.modelAlias || user?.preferences?.activeModel || DEFAULT_MODEL_ALIAS).toLowerCase() : DEFAULT_MODEL_ALIAS;
   if (!MODEL_REGISTRY[modelAlias]) modelAlias = DEFAULT_MODEL_ALIAS;
+  if (modelMode === 'manual' && modelAlias === 'bolt' && requiresToolCapableModel(body.messages)) {
+    throw Object.assign(
+      new Error('Bolt is a text-only model and cannot browse, search the web, execute tools, or modify workspace files. Select Surge or Auto for this task.'),
+      { status: 400, code: 'MODEL_TOOLS_UNSUPPORTED' }
+    );
+  }
   const tools = getToolDefinitions(user);
   const input = body.messages.map((message) => {
     const attachments = Array.isArray(message.attachments) ? message.attachments.filter((file) => file?.sandboxPath?.startsWith('uploads/')) : [];
@@ -394,6 +401,24 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
       if (result.usage) {
         finalUsage = addUsage(finalUsage, result.usage);
         usageByModel[activeModel.alias] = addUsage(usageByModel[activeModel.alias], result.usage);
+      }
+      if (isEmptyModelResponse(result)) {
+        const emptyError = Object.assign(
+          new Error(`${activeModel.name} returned an empty response. The request was not treated as completed.`),
+          { status: 502, code: 'MODEL_EMPTY_RESPONSE' }
+        );
+        if (modelMode === 'auto' && !escalated) {
+          const nextAlias = escalationTarget(modelAlias);
+          if (nextAlias && nextAlias !== modelAlias) {
+            const previous = activeModel;
+            modelAlias = nextAlias;
+            activeModel = getModel(modelAlias);
+            escalated = true;
+            sse(res, { type: 'model_switch', from: { alias: previous.alias, name: previous.name }, to: { alias: activeModel.alias, name: activeModel.name, id: activeModel.id }, reason: `${previous.name} returned an empty response. Auto mode escalated to a compatible model.` });
+            continue;
+          }
+        }
+        throw emptyError;
       }
       if (!result.toolCalls.length) {
         if (result.finishReason === 'length' && outputContinuations < 4) {

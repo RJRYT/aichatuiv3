@@ -1,7 +1,7 @@
 export const MODEL_REGISTRY = Object.freeze({
   bolt: {
     alias: 'bolt', name: 'Bolt', id: 'nvidia/nemotron-3.5-bolt-e4b',
-    description: 'Fast lightweight text responses and Auto routing',
+    description: 'Fast lightweight text-only responses and Auto routing; does not execute tools',
     capabilities: ['text', 'fast'], tier: 'light', supportsTools: false, supportsVision: false, supportsAudio: false, temperature: 0.4, maxOutputTokens: 4096,
   },
   vision: {
