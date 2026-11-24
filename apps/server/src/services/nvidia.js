@@ -13,16 +13,30 @@ const NVIDIA_ENDPOINT = 'https://integrate.api.nvidia.com/v1/chat/completions';
 const MAX_TOOL_ROUNDS = Math.max(16, Math.min(128, Number(process.env.AGENT_MAX_MODEL_ROUNDS) || 96));
 const MAX_EXECUTION_TOOL_CALLS = Math.max(8, Math.min(128, Number(process.env.AGENT_MAX_TOOL_CALLS) || 64));
 const MAX_RECOVERY_ATTEMPTS_PER_TOOL = Math.max(1, Math.min(5, Number(process.env.AGENT_MAX_RECOVERY_ATTEMPTS) || 3));
-const MODEL_STREAM_IDLE_TIMEOUT_MS = 90_000;
-const MODEL_ROUND_TIMEOUT_MS = 10 * 60_000;
-const CHAT_TURN_TIMEOUT_MS = 15 * 60_000;
+const MODEL_STREAM_IDLE_TIMEOUT_MS = Math.max(60_000, Math.min(10 * 60_000, Number(process.env.AGENT_MODEL_STREAM_IDLE_TIMEOUT_MS) || 5 * 60_000));
+const MODEL_ROUND_TIMEOUT_MS = Math.max(60_000, Math.min(20 * 60_000, Number(process.env.AGENT_MODEL_ROUND_TIMEOUT_MS) || 15 * 60_000));
+// Total wall-clock budget for one agent turn. This is a soft deadline: the
+// current model/tool operation is allowed to settle, then the agent summarizes.
+export const CHAT_TURN_TIMEOUT_MS = Math.max(15 * 60_000, Math.min(4 * 60 * 60_000, Number(process.env.AGENT_CHAT_TURN_TIMEOUT_MS) || 60 * 60_000));
 const MODEL_HEARTBEAT_INTERVAL_MS = 20_000;
 const activeChatGenerations = new Map();
 
+export function requestStopChatGeneration(generationId, ownerId, reason = 'user') {
+  const active = activeChatGenerations.get(String(generationId));
+  if (!active || active.ownerId !== String(ownerId)) return false;
+  if (!active.stopRequest) {
+    active.stopRequest = { reason: reason === 'time_limit' ? 'time_limit' : 'user', requestedAt: new Date().toISOString() };
+    try { active.onStopRequested?.(active.stopRequest); } catch {}
+  }
+  return true;
+}
+
+// Force cancellation is reserved for destructive lifecycle operations such as
+// deleting a chat. The user-facing Stop control uses requestStopChatGeneration.
 export function cancelChatGeneration(generationId, ownerId) {
   const active = activeChatGenerations.get(String(generationId));
   if (!active || active.ownerId !== String(ownerId)) return false;
-  active.controller.abort(Object.assign(new Error('Generation cancelled by the user.'), { name: 'AbortError', code: 'USER_CANCELLED' }));
+  active.controller.abort(Object.assign(new Error('Generation cancelled because its conversation is being deleted.'), { name: 'AbortError', code: 'USER_CANCELLED' }));
   return true;
 }
 
@@ -375,8 +389,17 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
   let activeModel = getModel(modelAlias);
   let escalated = false;
   const controller = new AbortController();
-  if (body.generationId) activeChatGenerations.set(String(body.generationId), { ownerId: userId, chatId: String(body.chatId || ''), controller });
-  const turnTimer = setTimeout(() => controller.abort(Object.assign(new Error('This chat turn exceeded its 15-minute time limit. Please retry.'), { code: 'CHAT_TURN_TIMEOUT', status: 504 })), CHAT_TURN_TIMEOUT_MS);
+  const activeGeneration = { ownerId: userId, chatId: String(body.chatId || ''), controller, stopRequest: null, onStopRequested: null };
+  if (body.generationId) activeChatGenerations.set(String(body.generationId), activeGeneration);
+  const turnTimer = setTimeout(() => {
+    if (activeGeneration.stopRequest) return;
+    activeGeneration.stopRequest = { reason: 'time_limit', requestedAt: new Date().toISOString() };
+    activeGeneration.onStopRequested?.(activeGeneration.stopRequest);
+  }, CHAT_TURN_TIMEOUT_MS);
+  activeGeneration.onStopRequested = (request) => {
+    sse(res, { type: 'status', status: 'Finishing current operation and preparing a progress summary', stopRequested: true, stopReason: request.reason });
+    sse(res, { type: 'agent_event', event: { type: 'progress_update', message: request.reason === 'time_limit' ? 'The configured time budget was reached. The current operation will finish before I summarize completed work and remaining tasks.' : 'Stop requested. The current operation will finish before I summarize completed work and remaining tasks.' } });
+  };
   // A browser disconnect is a transport event, not a user cancellation. Keep
   // model/tool execution alive; SSE writes are already guarded by sse().
   const onClose = () => { log.debug('Chat SSE client disconnected; generation remains active', { userId, chatId: body.chatId }); };
@@ -412,6 +435,28 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
     });
     return checkpointWriteQueue;
   };
+  let gracefullyStopped = false;
+  const summarizeStoppedRun = async () => {
+    const request = activeGeneration.stopRequest || { reason: 'user' };
+    const reason = request.reason === 'time_limit'
+      ? `The configured agent time budget (${Math.round(CHAT_TURN_TIMEOUT_MS / 60000)} minutes) was reached.`
+      : 'The user requested that the agent stop.';
+    const operationSummary = toolEvents.map((item) => ({ tool: item.name, status: item.status, error: item.error || '' })).slice(-40);
+    messages.push({ role: 'system', content: `STOP REQUESTED. Do not execute any more tools or continue implementation. Produce a clear final status report using only evidence in this conversation and the operation record. Explain why work stopped: ${reason} State what was completed, what is partially completed, what remains, any verification performed or still needed, and the safest next action. Never claim the overall task is complete unless the evidence proves it. Operation record: ${JSON.stringify(operationSummary)}. Current plan: ${JSON.stringify(agentState.plan || null)}.` });
+    try {
+      modelCallsByModel[activeModel.alias] = (modelCallsByModel[activeModel.alias] || 0) + 1;
+      const summary = await requestRound({ messages, tools: [], thinkingEnabled: false, signal: controller.signal, res, round: rounds + 1, hasVision, modelId: activeModel.id, apiKey: nvidiaApiKey });
+      if (summary.usage) { finalUsage = addUsage(finalUsage, summary.usage); usageByModel[activeModel.alias] = addUsage(usageByModel[activeModel.alias], summary.usage); }
+      const generated = String(summary.content || '').trim();
+      if (generated) return `${generated}\n\n**Execution status: stopped before completion.**\nReason: ${reason}`;
+    } catch (summaryError) {
+      log.warn('AI stop summary could not be generated; using an evidence-based status summary', { userId, error: summaryError.message });
+    }
+    const completed = operationSummary.filter((item) => item.status === 'complete').length;
+    const failed = operationSummary.filter((item) => item.status !== 'complete').length;
+    return `The task stopped before completion.\n\n**Reason:** ${reason}\n\n**Progress recorded:** ${completed} operation(s) completed and ${failed} operation(s) failed or remain incomplete.\n\n**What remains:** Review the current workspace and agent plan, verify the completed work, then continue from the saved progress. No unverified work is being reported as complete.`;
+  };
+
   const emitAgentEvent = (type, data = {}) => {
     const summary = type === 'progress_update' ? String(data.message || '').slice(0, 280)
       : type === 'plan_created' ? 'Created an execution plan.'
@@ -433,6 +478,7 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       rounds = round + 1;
       if (controller.signal.aborted) throw controller.signal.reason || new Error('Chat cancelled.');
+      if (activeGeneration.stopRequest) { finalText = await summarizeStoppedRun(); gracefullyStopped = true; completedNaturally = true; break; }
       sse(res, { type: 'status', status: 'Working', round });
       let result;
       modelCallsByModel[activeModel.alias] = (modelCallsByModel[activeModel.alias] || 0) + 1;
@@ -461,6 +507,15 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
       if (result.usage) {
         finalUsage = addUsage(finalUsage, result.usage);
         usageByModel[activeModel.alias] = addUsage(usageByModel[activeModel.alias], result.usage);
+      }
+      if (activeGeneration.stopRequest) {
+        if (result.toolCalls?.length) {
+          const pendingCalls = result.toolCalls.map((call, index) => ({ id: call.id || `stopped_${round}_${index}`, type: 'function', function: { name: String(call.function?.name || 'unknown_tool'), arguments: call.function?.arguments || '{}' } }));
+          messages.push({ role: 'assistant', content: result.content || null, tool_calls: pendingCalls });
+          for (const call of pendingCalls) messages.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: JSON.stringify({ ok: false, skipped: true, error: 'Not executed because a graceful stop was requested.' }) });
+        } else if (result.content) messages.push({ role: 'assistant', content: result.content });
+        finalText = await summarizeStoppedRun();
+        gracefullyStopped = true; completedNaturally = true; break;
       }
       if (isEmptyModelResponse(result)) {
         const emptyError = Object.assign(
@@ -502,6 +557,10 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
 
       for (const call of calls) {
         const name = String(call.function.name || '');
+        if (activeGeneration.stopRequest) {
+          messages.push({ role: 'tool', tool_call_id: call.id, name: name || 'unknown_tool', content: JSON.stringify({ ok: false, skipped: true, error: 'Not executed because a graceful stop was requested.' }) });
+          continue;
+        }
         let args;
         try { args = parseToolArgs(call.function.arguments); }
         catch (error) {
@@ -613,6 +672,7 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
         const serialized = JSON.stringify(payload);
         messages.push({ role: 'tool', tool_call_id: call.id, name, content: serialized.length > 60000 ? `${serialized.slice(0, 60000)}\n[Tool result truncated by the application.]` : serialized });
       }
+      if (activeGeneration.stopRequest) { finalText = await summarizeStoppedRun(); gracefullyStopped = true; completedNaturally = true; break; }
       if (modelMode === 'auto' && !escalated && [...failuresByTool.values()].some((count) => count >= MAX_RECOVERY_ATTEMPTS_PER_TOOL)) {
         const nextAlias = escalationTarget(modelAlias);
         if (nextAlias) {
@@ -640,11 +700,13 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
     if (unresolvedToolFailures.length) {
       finalText = `${finalText}\n\nExecution note: ${unresolvedToolFailures.length} tool operation(s) did not complete successfully. The task must not be considered fully verified; review the recorded errors and remaining work.`.trim();
     }
-    if (agentEvents.length || agentState.plan) emitAgentEvent('agent_completed', { status: unresolvedToolFailures.length ? 'completed_with_errors' : 'completed', message: unresolvedToolFailures.length ? 'The response is ready with unresolved tool errors.' : 'The response is ready.', unresolvedToolFailures: unresolvedToolFailures.length });
-    res.generationFinalStatus = unresolvedToolFailures.length ? 'completed_with_errors' : 'completed';
+    if (agentEvents.length || agentState.plan) emitAgentEvent('agent_completed', { status: gracefullyStopped ? 'stopped' : unresolvedToolFailures.length ? 'completed_with_errors' : 'completed', message: gracefullyStopped ? 'Execution stopped after preparing a progress summary.' : unresolvedToolFailures.length ? 'The response is ready with unresolved tool errors.' : 'The response is ready.', unresolvedToolFailures: unresolvedToolFailures.length });
+    const stopReason = gracefullyStopped ? (activeGeneration.stopRequest?.reason || 'user') : null;
+    if (gracefullyStopped) sse(res, { type: 'final_content', content: finalText });
+    res.generationFinalStatus = gracefullyStopped ? 'stopped' : unresolvedToolFailures.length ? 'completed_with_errors' : 'completed';
     try {
       await checkpointWriteQueue;
-      if (checkpoint?.runId) await finishAgentCheckpoint(userId, checkpoint.runId, unresolvedToolFailures?.length ? 'failed' : (completedNaturally ? 'completed' : 'interrupted'), unresolvedToolFailures?.length ? `${unresolvedToolFailures.length} tool operation(s) failed.` : '');
+      if (checkpoint?.runId) await finishAgentCheckpoint(userId, checkpoint.runId, unresolvedToolFailures?.length ? 'failed' : (gracefullyStopped ? 'interrupted' : completedNaturally ? 'completed' : 'interrupted'), unresolvedToolFailures?.length ? `${unresolvedToolFailures.length} tool operation(s) failed.` : gracefullyStopped ? 'The run was gracefully stopped after recording a progress summary.' : '');
     }
     catch (checkpointError) { log.warn('Agent checkpoint finalization failed', { userId, runId: checkpoint?.runId, error: checkpointError.message }); }
 
@@ -656,21 +718,33 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
         usage: finalUsage, usageByModel, modelCallsByModel, model: { alias: activeModel.alias, name: activeModel.name, id: activeModel.id }, modelMode, routingDecision, toolEvents, agentPlan: agentState.plan, agentEvents,
         startedAt: new Date(startedAt).toISOString(), createdAt: new Date(startedAt).toISOString(),
         completedAt: new Date().toISOString(), durationMs: Date.now() - startedAt,
+        ...(gracefullyStopped ? { executionStatus: 'stopped', stopReason } : unresolvedToolFailures.length ? { executionStatus: 'completed_with_errors' } : { executionStatus: 'completed' }),
       },
     ]);
     log.info('Chat generation completed', { userId, rounds, durationMs: Date.now() - startedAt, toolEventCount: toolEvents.length, usage: finalUsage, model: activeModel.alias, usageByModel, executionToolCalls });
-    sse(res, { type: 'done', usage: finalUsage, usageByModel, modelCallsByModel, model: { alias: activeModel.alias, name: activeModel.name, id: activeModel.id }, modelMode, routingDecision, durationMs: Date.now() - startedAt, toolRounds: rounds, agentPlan: agentState.plan, agentEvents, executionToolCalls });
+    sse(res, { type: 'done', usage: finalUsage, usageByModel, modelCallsByModel, model: { alias: activeModel.alias, name: activeModel.name, id: activeModel.id }, modelMode, routingDecision, durationMs: Date.now() - startedAt, toolRounds: rounds, agentPlan: agentState.plan, agentEvents, executionToolCalls, executionStatus: gracefullyStopped ? 'stopped' : unresolvedToolFailures.length ? 'completed_with_errors' : 'completed', stopReason: gracefullyStopped ? stopReason : null });
   } catch (error) {
     try {
       await checkpointWriteQueue;
       if (checkpoint?.runId) await finishAgentCheckpoint(userId, checkpoint.runId, error.name === 'AbortError' ? 'interrupted' : 'failed', error.message);
     }
     catch (checkpointError) { log.warn('Agent checkpoint error state could not be persisted', { userId, runId: checkpoint?.runId, error: checkpointError.message }); }
-    res.generationFinalStatus = error.code === 'USER_CANCELLED' ? 'cancelled' : error.name === 'AbortError' ? 'interrupted' : 'failed';
-    if (error.name === 'AbortError' && controller.signal.reason?.code !== 'CHAT_TURN_TIMEOUT') sse(res, { type: 'stopped' });
-    else {
-      log.error('Chat generation failed', { userId, error: error instanceof Error ? { message: error.message, stack: error.stack, status: error.status } : String(error) });
-      sse(res, { type: 'error', status: error.status || 502, error: error.message || 'NVIDIA request failed.' });
+    if (error.code === 'USER_CANCELLED') {
+      res.generationFinalStatus = 'cancelled';
+      sse(res, { type: 'stopped', reason: 'conversation_deleted' });
+    } else {
+      log.error('Chat generation failed; preserving a user-facing progress report', { userId, error: error instanceof Error ? { message: error.message, stack: error.stack, status: error.status } : String(error) });
+      const reason = String(error?.message || 'An unexpected execution error occurred.');
+      const completed = toolEvents.filter((item) => item.status === 'complete');
+      const failed = toolEvents.filter((item) => item.status !== 'complete');
+      const partialText = String(finalText || '').trim();
+      const statusText = `${partialText ? `${partialText}\n\n` : ''}**Execution status: stopped with an error.**\n\n**Why it stopped:** ${reason}\n\n**Recorded progress:** ${completed.length} tool operation(s) completed; ${failed.length} failed or incomplete.\n\n**Next action:** The conversation and recorded workspace changes have been preserved where possible. Retry the operation or ask the agent to continue from the saved checkpoint. Any unverified work still needs testing.`;
+      res.generationFinalStatus = 'completed_with_errors';
+      try {
+        await persist?.([...body.messages.filter((message) => message.role !== 'system' && message.role !== 'tool'), { id: String(body.assistantMessageId || crypto.randomUUID()), role: 'assistant', content: statusText, toolEvents, agentPlan: agentState.plan, agentEvents, startedAt: new Date(startedAt).toISOString(), createdAt: new Date(startedAt).toISOString(), completedAt: new Date().toISOString(), durationMs: Date.now() - startedAt, executionStatus: 'completed_with_errors', error: reason }]);
+      } catch (persistError) { log.error('Could not persist the execution status report', { userId, error: persistError.message }); }
+      sse(res, { type: 'final_content', content: statusText });
+      sse(res, { type: 'done', durationMs: Date.now() - startedAt, executionStatus: 'completed_with_errors', stopReason: reason, agentPlan: agentState.plan, agentEvents, toolRounds: rounds, executionToolCalls });
     }
   } finally {
     clearTimeout(turnTimer); res.off('close', onClose); if (body.generationId) activeChatGenerations.delete(String(body.generationId)); if (!res.writableEnded) res.end();

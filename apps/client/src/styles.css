@@ -4548,3 +4548,11 @@ body[data-theme] {
 .history-item > input[type="checkbox"], .library-file > input[type="checkbox"] { flex:0 0 auto; accent-color:var(--accent, #6d8cff); }
 .library-bulk-select { display:flex; align-items:center; gap:7px; font-size:12px; }
 .library-bulk-select input { accent-color:var(--accent, #6d8cff); }
+
+
+/* Graceful execution stop and recovery actions (v8.5.3). */
+.message-recovery-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.message-recovery-actions button { border: 1px solid var(--border, rgba(127,127,127,.28)); border-radius: 8px; padding: 6px 10px; background: var(--surface-2, rgba(127,127,127,.08)); color: inherit; font: inherit; font-size: 12px; cursor: pointer; }
+.message-recovery-actions button:hover { background: var(--surface-3, rgba(127,127,127,.14)); }
+.message-execution-status { display: flex; flex-direction: column; gap: 5px; margin-top: 12px; padding: 11px 12px; border: 1px solid var(--border, rgba(127,127,127,.25)); border-radius: 10px; font-size: 13px; }
+.message-execution-status > span { color: var(--muted, #888); font-size: 12px; }

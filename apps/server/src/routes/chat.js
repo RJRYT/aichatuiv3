@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { runNemotronChat, generateChatTitle, cancelChatGeneration, generateSuggestedNextSteps } from '../services/nvidia.js';
+import { runNemotronChat, generateChatTitle, requestStopChatGeneration, generateSuggestedNextSteps } from '../services/nvidia.js';
 import { getChat, updateChat } from '../services/chatStore.js';
 import {
   ensureBranches,
@@ -299,9 +299,9 @@ router.post('/stream/:generationId/cancel', async (req, res, next) => {
     const session = await getGenerationSession(generationId, ownerId);
     if (!session) return res.status(404).json({ error: 'Generation session not found.' });
     if (session.status !== 'running') return res.json({ cancelled: false, status: session.status });
-    const cancelled = cancelChatGeneration(generationId, ownerId);
-    if (!cancelled) return res.status(409).json({ error: 'The generation is no longer active in this server process.', status: session.status });
-    return res.json({ cancelled: true, status: 'cancelling' });
+    const stopRequested = requestStopChatGeneration(generationId, ownerId, 'user');
+    if (!stopRequested) return res.status(409).json({ error: 'The generation is no longer active in this server process.', status: session.status });
+    return res.json({ stopRequested: true, status: 'finishing_current_operation' });
   } catch (error) { next(error); }
 });
 router.get('/stream/:generationId/events', async (req, res, next) => {

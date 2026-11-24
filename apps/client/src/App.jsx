@@ -1231,6 +1231,8 @@ function Message({
   onShare,
   onRegenerate,
   onVersion,
+  onRetry,
+  onContinue,
   liveProgress,
   progressClock,
   thinking,
@@ -1358,7 +1360,23 @@ function Message({
         {message.error && (
           <div className="message-error" role="alert">
             <AlertCircle size={14} />
-            {message.error}
+            <span>{message.error}</span>
+            {!user && isLastAssistant && !message.isStreaming && (
+              <div className="message-recovery-actions">
+                <button type="button" onClick={() => onRetry?.(message)}>Retry task</button>
+                <button type="button" onClick={() => onContinue?.(message)}>Continue from saved progress</button>
+              </div>
+            )}
+          </div>
+        )}
+        {!user && !message.error && !message.isStreaming && ['stopped', 'completed_with_errors', 'interrupted'].includes(message.executionStatus) && (
+          <div className="message-execution-status" role="status">
+            <strong>{message.executionStatus === 'stopped' ? 'Execution stopped early' : message.executionStatus === 'interrupted' ? 'Execution interrupted' : 'Completed with issues'}</strong>
+            {message.stopReason && <span>{message.stopReason === 'time_limit' ? 'The configured time budget was reached.' : message.stopReason}</span>}
+            <div className="message-recovery-actions">
+              <button type="button" onClick={() => onContinue?.(message)}>Continue from saved progress</button>
+              <button type="button" onClick={() => onRetry?.(message)}>Retry task</button>
+            </div>
           </div>
         )}
         {!user && !message.isStreaming && content.trim() && (
@@ -4375,6 +4393,8 @@ export default function App() {
       routingInfo = null,
       modelInfo = null,
       durationMs = null,
+      executionStatus = 'completed',
+      stopReason = null,
       liveAssistant = assistant;
     const update = () => {
       if (activeIdRef.current === chat._id)
@@ -4544,6 +4564,8 @@ export default function App() {
           routingInfo = event.routingDecision || routingInfo;
           modelInfo = event.model || modelInfo;
           durationMs = event.durationMs ?? Math.round(performance.now() - started);
+          executionStatus = event.executionStatus || executionStatus;
+          stopReason = event.stopReason || null;
           update();
         }
         if (event.type === 'stopped') {
@@ -4572,6 +4594,8 @@ export default function App() {
         model: modelInfo,
         modelMode: (preferences.activeModel || 'auto') === 'auto' ? 'auto' : 'manual',
         durationMs,
+        executionStatus,
+        ...(stopReason ? { stopReason } : {}),
       };
       const saved = [...nextMessages, liveAssistant];
       if (activeIdRef.current === chat._id) setMessages(saved);
@@ -4622,7 +4646,8 @@ export default function App() {
         toolEvents: events,
         agentPlan,
         agentEvents,
-        error: stopped ? 'Generation stopped.' : chatErrorMessage(error),
+        error: stopped ? 'Generation was interrupted before a final status could be generated.' : chatErrorMessage(error),
+        executionStatus: stopped ? 'interrupted' : 'failed',
         usage,
         usageByModel,
         modelCallsByModel,
@@ -4755,8 +4780,8 @@ export default function App() {
           {busy && (
             <button
               className="icon-button stop-button"
-              title="Stop"
-              onClick={() => { const generationId = abortRef.current?.generationId; if (generationId) void fetch(api(`/api/chat/stream/${generationId}/cancel`), { method: 'POST', credentials: 'include' }).catch(() => {}); abortRef.current?.abort(); }}
+              title="Finish current operation and summarize progress"
+              onClick={() => { const generationId = abortRef.current?.generationId; if (!generationId) return; setStatus('Finishing current operation and preparing summary…'); setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: 'Stop requested. The current operation will finish, then the agent will summarize completed work and what remains.', lastActivityAt: Date.now() })); void fetch(api(`/api/chat/stream/${generationId}/cancel`), { method: 'POST', credentials: 'include' }).then(async (response) => { if (!response.ok) throw await responseError(response, 'Could not request a graceful stop'); }).catch((error) => setToast({ id: Date.now(), message: error.message, type: 'error' })); }}
             >
               <Square size={14} />
             </button>
@@ -4898,6 +4923,8 @@ export default function App() {
                     onShare={shareResponse}
                     onRegenerate={regenerateResponse}
                     onVersion={changeVersion}
+                    onRetry={() => sendMessage('', [], { reuseLastUser: true })}
+                    onContinue={() => sendMessage('Continue from the saved project progress. First inspect the current workspace, agent plan, completed operations, generated artifacts, and any recorded errors. Do not repeat completed work. Identify remaining tasks, run appropriate tests, verify the results, and package a multi-file project as one complete ZIP archive when appropriate.', [])}
                     liveProgress={liveProgress}
                     progressClock={progressClock}
                     thinking={thinking}

@@ -111,9 +111,9 @@ Production deployments should use HTTPS, explicit trusted CORS origins, a strong
 - Added duplicate artifact filename suffixes.
 - Added timestamps, tool/assistant durations, and work-time totals to exported chat JSON.
 - Export inspection found a turn whose `execute_python` event remained `running` for over 16 minutes without a tool result. Sandbox cancellation now propagates through startup and lock waits, and stopping a sandbox is bounded.
-- The initial timeout policy was adjusted after feedback that valid model reasoning may take several minutes. There is no longer a short first-visible-output deadline. Model rounds may run for up to 10 minutes, provided the upstream stream continues sending data; 90 seconds without upstream stream data still aborts the model request.
+- The initial timeout policy was adjusted after feedback that valid model reasoning may take several minutes. There is no longer a short first-visible-output deadline. Model rounds now default to 15 minutes (configurable up to 20 minutes), and upstream stream idle timeout defaults to 5 minutes (configurable up to 10 minutes).
 - Client chat streams have a 110-second connection deadline, a 100-second no-SSE-data deadline, and a 16-minute overall client limit. The client accepts server heartbeat events while the model reasons and shows activity rather than treating a lack of visible answer text as failure.
-- The server sends model-wait heartbeats and periodic heartbeats while tools run. A heartbeat alone does not extend the server-side model idle timer: when the upstream model stream is silent for 90 seconds, the server sends an explicit error. The server chat-turn cap remains 15 minutes.
+- The server sends model-wait heartbeats and periodic heartbeats while tools run. A heartbeat alone does not extend the server-side model idle timer: when the upstream model stream is silent beyond the configured 5-minute idle timeout, the server reports a recoverable execution status. The default chat-turn deadline is now 60 minutes and requests graceful finalization instead of abruptly aborting the run.
 
 ## Current worktree and validation caveats
 
@@ -176,3 +176,11 @@ Personalization UI order is Color theme, then Agent personality. Base style, Bas
 - Generation elapsed time uses the persisted original start timestamp after refresh and during event replay.
 - Single-chat deletion uses switches for optional library/share cleanup and hides each control when no matching resources exist.
 - Bulk chat deletion continues to remove all associated resources.
+
+
+## v8.5.3 long-running execution and graceful recovery
+- Default chat-turn soft deadline increased to 60 minutes (configurable 15 minutes–4 hours).
+- Model round default increased to 15 minutes; upstream idle timeout default increased to 5 minutes.
+- Stop and time-budget expiry finish the current operation, skip queued tools, and generate a final evidence-based progress report.
+- Recoverable execution errors are persisted as status responses with Retry and Continue actions.
+- Multi-file software projects should be delivered as one verified ZIP rather than individual source artifacts.

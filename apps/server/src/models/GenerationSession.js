@@ -4,7 +4,7 @@ const generationSessionSchema = new mongoose.Schema({
   generationId: { type: String, required: true, unique: true },
   ownerId: { type: String, required: true, index: true },
   chatId: { type: String, required: true, index: true },
-  status: { type: String, enum: ['running', 'completed', 'completed_with_errors', 'failed', 'interrupted', 'cancelled'], default: 'running', index: true },
+  status: { type: String, enum: ['running', 'completed', 'completed_with_errors', 'failed', 'interrupted', 'cancelled', 'stopped'], default: 'running', index: true },
   nextEventId: { type: Number, default: 1 },
   events: { type: [mongoose.Schema.Types.Mixed], default: [] },
   lastError: { type: String, default: '', maxlength: 2000 },

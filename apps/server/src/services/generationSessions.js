@@ -24,7 +24,7 @@ export async function appendGenerationEvent(generationId, ownerId, event) {
   session.nextEventId += 1; session.updatedAt = new Date(); return session;
 }
 export async function finishGenerationSession(generationId, ownerId, status, error = '') {
-  const patch = { status: ['completed','completed_with_errors','failed','interrupted','cancelled'].includes(status) ? status : 'failed', lastError: String(error || '').slice(0, 2000), updatedAt: new Date(), completedAt: new Date() };
+  const patch = { status: ['completed','completed_with_errors','failed','interrupted','cancelled','stopped'].includes(status) ? status : 'failed', lastError: String(error || '').slice(0, 2000), updatedAt: new Date(), completedAt: new Date() };
   if (databaseReady()) return GenerationSession.findOneAndUpdate({ generationId: String(generationId), ownerId: String(ownerId) }, { $set: patch }, { new: true }).lean();
   const session = memory.get(String(generationId)); if (!session || session.ownerId !== String(ownerId)) return null; Object.assign(session, patch); return session;
 }
