@@ -1,12 +1,12 @@
-# Nemotron Agent Lab v8.5.3 — MERN Monorepo
+# Nemi v8.5.4 — AI Workspace
 
-A full-stack Agent Lab interface for NVIDIA Nemotron 3.5 Super VL, built with React, Vite, Express, and MongoDB.
+A full-stack AI workspace with a conversational assistant, project tools, persistent files, and isolated execution capabilities.
 
 ## Features
 
 - Workspace color themes (Forest, Midnight, Ocean, Amethyst, Nord, Solarized) with a theme picker in Personalization, persisted across sessions.
 - Personalization and persistent memory with editable long-term memory.
-- NVIDIA-only Nemotron model intelligence: Auto routing plus manual Bolt, Vision, Surge, Titan and Omni selection.
+- Automatic model routing and optional manual model selection.
 - Model-aware escalation in Auto mode for provider failures and repeated tool recovery failures.
 - Native persistent conversation workspaces for source creation, reading, revision-aware editing, search, and requested ZIP packaging.
 - Dynamic isolated execution: Python by default when needed, with an optional separately configured Node.js sandbox for builds and tests.
@@ -15,7 +15,7 @@ A full-stack Agent Lab interface for NVIDIA Nemotron 3.5 Super VL, built with Re
 - OAuth authentication (Google, GitHub, Discord) with secure HttpOnly cookies.
 - Web search via Tavily API.
 - Hidden Developer Mode → Personal Integrations for user-owned NVIDIA, Tavily, Cloudflare and Vercel credentials, encrypted at rest.
-- Capability-based tool controls: switches only for high-impact operations; low-risk tools remain enabled.
+- Tool controls for Python sandbox, Node.js sandbox, Web search, and Image generation; core project tools remain available automatically.
 - Usage analytics across model rounds, conversation branches and regenerated response versions.
 - Automatic Python dependency installation in sandboxed execution, without using Python as a routine file-writing bridge.
 
@@ -23,13 +23,9 @@ A full-stack Agent Lab interface for NVIDIA Nemotron 3.5 Super VL, built with Re
 
 ![Demo screenshot](screenshot.png)
 
-## Agent architecture
+## Overview
 
-The agent is model-directed: Nemotron selects tools using automatic tool choice. The backend enforces authentication, workspace ownership, tool schemas, execution quotas, sandbox isolation, and artifact integrity; it does not force a Python call, visible plan, progress call, or ZIP for every project request.
-
-Project files are stored in a persistent per-user, per-conversation workspace in MongoDB. Native workspace tools handle ordinary file operations. Python execution receives a read-only snapshot under `/tmp/nemotron-source`; generated Python outputs are collected into the File Library. When `VERCEL_NODE_SANDBOX_IMAGE` is configured, the model can use an isolated Node.js sandbox for commands such as `npm install`, `npm run build`, and `node --check`. Node execution runs in a separate persistent sandbox and does not execute generated code inside the Express process.
-
-See [Agent Architecture](ARCHITECTURE.md) for subsystem boundaries, tool contracts, runtime behavior, and current limitations.
+Nemi helps users work with conversations, project files, research, generated artifacts, and optional code-execution tools. The interface supports multiple color themes and a persistent File Library for generated files and previously uploaded attachments.
 
 ## Stack
 

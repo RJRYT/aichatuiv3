@@ -146,7 +146,7 @@ async function getSandbox({ userId, chatId, executionId, signal, runtime = 'pyth
   if (!config.configured) {
     throw Object.assign(
       new Error(
-        'Vercel Sandbox is not configured. Add VERCEL_TOKEN, VERCEL_TEAM_ID and VERCEL_PROJECT_ID to the backend environment (or deploy on Vercel with OIDC enabled).'
+        'The isolated execution service is not configured. Contact the administrator to enable code execution.'
       ),
       { status: 503 }
     );
@@ -798,7 +798,7 @@ export async function executeWithVercelSandbox({
   if (!config.configured) {
     throw Object.assign(
       new Error(
-        'Vercel Sandbox is not configured. Add VERCEL_TOKEN, VERCEL_TEAM_ID and VERCEL_PROJECT_ID to the backend environment (or deploy on Vercel with OIDC enabled).'
+        'The isolated execution service is not configured. Contact the administrator to enable code execution.'
       ),
       { status: 503 }
     );
@@ -981,7 +981,7 @@ export async function executeWithVercelSandbox({
       /timed? ?out|timeout|deadline/i.test(String(error?.message || '')) ||
       error?.code === 'COMMAND_TIMEOUT';
     status = cancelled ? 'cancelled' : timedOut ? 'timeout' : 'failed';
-    stderr = String(error?.message || error || 'Vercel Sandbox execution failed.').slice(
+    stderr = String(error?.message || error || 'Isolated execution failed.').slice(
       0,
       EXECUTION_LIMITS.maxOutputBytes
     );
@@ -1060,7 +1060,7 @@ export async function executeNodeInSandbox({ command = 'node', args = [], userId
   if (!Array.isArray(args) || args.length > 64 || args.some((item) => typeof item !== 'string' || item.length > 1000)) throw new Error('Node runtime arguments are invalid.');
   const sandboxEnv = { ...process.env, ...(sandboxCredentials?.token ? { VERCEL_TOKEN: sandboxCredentials.token } : {}), ...(sandboxCredentials?.teamId ? { VERCEL_TEAM_ID: sandboxCredentials.teamId } : {}), ...(sandboxCredentials?.projectId ? { VERCEL_PROJECT_ID: sandboxCredentials.projectId } : {}) };
   const config = getVercelSandboxConfig(sandboxEnv);
-  if (!config.configured) throw Object.assign(new Error('Vercel Sandbox is not configured.'), { status: 503 });
+  if (!config.configured) throw Object.assign(new Error('The isolated execution service is not configured.'), { status: 503 });
   if (!process.env.VERCEL_NODE_SANDBOX_IMAGE) throw Object.assign(new Error('Node.js sandbox is not configured. Set VERCEL_NODE_SANDBOX_IMAGE to an approved isolated Node.js sandbox image.'), { status: 503 });
   const uid = String(userId);
   const id = String(executionId || randomUUID());

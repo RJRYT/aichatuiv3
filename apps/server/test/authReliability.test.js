@@ -32,5 +32,5 @@ test('current-user endpoint safely handles a request without an authenticated us
   const source = await readFile(authFile, 'utf8');
   const routes = await readFile(routesFile, 'utf8');
   assert.match(source, /if \(!req\.user\?\._id\) return res\.json\(\{ user: null \}\)/);
-  assert.match(routes, /req\.user\?\._id \? String\(req\.user\._id\) : null/);
+  assert.match(routes, /router\.get\('\/me', optionalAuth/);
 });

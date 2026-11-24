@@ -3,8 +3,6 @@ const USER_CONFIGURABLE_TOOLS = new Set([
   'execute_node',
   'web_search',
   'generate_image',
-  'workspace_delete',
-  'workspace_archive',
 ]);
 
 export function isToolUserConfigurable(toolId) {

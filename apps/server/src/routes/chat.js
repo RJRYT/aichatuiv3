@@ -8,7 +8,9 @@ import {
 } from '../services/conversationBranches.js';
 import logger from '../utils/logger.js';
 import { randomUUID } from 'node:crypto';
-import { createGenerationSession, appendGenerationEvent, finishGenerationSession, getGenerationEvents, getGenerationSession } from '../services/generationSessions.js';
+import { createGenerationSession, appendGenerationEvent, finishGenerationSession, getGenerationEvents, getGenerationSession, getLatestActiveGenerationSession } from '../services/generationSessions.js';
+import { getLatestAgentCheckpoint } from '../services/agents/checkpointManager.js';
+import { recordUsageEvent } from '../services/usageRecords.js';
 
 const router = Router();
 const log = logger.child({ component: 'routes:chat' });
@@ -36,7 +38,20 @@ router.post('/suggestions', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+router.get('/stream/active', async (req, res, next) => {
+  try {
+    const ownerId = String(req.user?._id || '');
+    const chatId = String(req.query.chatId || '');
+    if (!ownerId) return res.status(401).json({ error: 'Sign in to recover active work.' });
+    const session = await getLatestActiveGenerationSession(ownerId, chatId);
+    const checkpoint = session ? await getLatestAgentCheckpoint(ownerId, session.chatId) : (chatId ? await getLatestAgentCheckpoint(ownerId, chatId) : null);
+    if (!session) return res.json({ active: false, checkpoint: checkpoint || null });
+    return res.json({ active: true, generation: { generationId: session.generationId, chatId: session.chatId, startedAt: session.startedAt, status: session.status }, checkpoint: checkpoint || null });
+  } catch (error) { next(error); }
+});
+
 router.post('/stream', async (req, res, next) => {
+  let sessionHeartbeatTimer;
   try {
     const ownerId = String(req.user?._id || '');
     const chatId = String(req.body?.chatId || '');
@@ -152,7 +167,10 @@ router.post('/stream', async (req, res, next) => {
           persisted.replayTruncated = true;
         }
       }
-      if (Buffer.byteLength(JSON.stringify(persisted), 'utf8') > 2048) {
+      if (event.type === 'agent_event' && event.event?.plan) {
+        persisted = { type: event.type, eventId: event.eventId, generationId, event: { type: event.event.type, plan: event.event.plan, task: event.event.task, message: event.event.message }, replayTruncated: false };
+      }
+      if (Buffer.byteLength(JSON.stringify(persisted), 'utf8') > 2048 && !(event.type === 'agent_event' && event.event?.plan)) {
         const compact = { type: event.type, eventId: event.eventId, generationId, replayTruncated: true };
         for (const field of ['name', 'status', 'round', 'phase']) {
           if (typeof event[field] === 'string' || typeof event[field] === 'number') compact[field] = event[field];
@@ -170,12 +188,23 @@ router.post('/stream', async (req, res, next) => {
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders?.();
+    // Keep the durable session alive even when the model is thinking quietly or
+    // the original browser has disconnected. This heartbeat is independent of
+    // model token chunks and tool-level progress events.
+    sessionHeartbeatTimer = setInterval(() => {
+      const event = res.publishEvent({ type: 'heartbeat', phase: 'session', message: 'The task is still active.' });
+      if (!res.destroyed && !res.writableEnded) {
+        try { res.write(`data: ${JSON.stringify(event)}\n\n`); } catch { /* The durable event remains available for replay. */ }
+      }
+    }, 20_000);
+    sessionHeartbeatTimer.unref?.();
     await runNemotronChat({
       body: req.body,
       req,
       res,
       user: req.user,
       persist: async (generatedMessages) => {
+        let usageVersionIndex = 0;
         const current = await getChat(ownerId, chatId);
         if (!current) return;
         ensureBranches(current);
@@ -209,6 +238,7 @@ router.post('/stream', async (req, res, next) => {
                     durationMs: target.durationMs,
                   },
                 ];
+            usageVersionIndex = target.versions.length;
             target.versions.push({
               content: alternative.content,
               toolEvents: alternative.toolEvents,
@@ -281,12 +311,18 @@ router.post('/stream', async (req, res, next) => {
             { status: 409 }
           );
         }
+        const usageMessage = [...generatedMessages].reverse().find((message) => message.role === 'assistant' && message.completedAt);
+        const usageUserMessage = [...generatedMessages].reverse().find((message) => message.role === 'user');
+        if (usageUserMessage) await recordUsageEvent({ generationId: `user:${chatId}:${usageUserMessage.id || generationId}`, ownerId, chatId, message: usageUserMessage });
+        if (usageMessage) await recordUsageEvent({ generationId, ownerId, chatId, message: { ...usageMessage, id: req.body.preserveExistingMessageId || usageMessage.id, versionIndex: usageVersionIndex } });
         return saved;
       },
     });
     await persistenceQueue;
     await finishGenerationSession(generationId, ownerId, res.generationFinalStatus || 'completed');
+    if (sessionHeartbeatTimer) clearInterval(sessionHeartbeatTimer);
   } catch (error) {
+    if (sessionHeartbeatTimer) clearInterval(sessionHeartbeatTimer);
     const generationId = String(req.body?.generationId || '');
     if (generationId) await finishGenerationSession(generationId, String(req.user?._id || ''), 'failed', error.message).catch(() => {});
     next(error);

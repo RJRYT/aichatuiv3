@@ -7,6 +7,7 @@ import {
   deleteArtifacts,
 } from '../services/interpreter/artifactStore.js';
 import { getChat } from '../services/chatStore.js';
+import { listOwnerUploadMetadata, getOwnerUpload, deleteOwnerUpload } from '../services/interpreter/uploadStore.js';
 import { getInterpreterStatus } from '../services/interpreter/sandboxManager.js';
 import logger from '../utils/logger.js';
 
@@ -75,6 +76,27 @@ router.post('/cancel/:id', (req, res) => {
       ? 'Cancellation requested. The remote Python command is being terminated.'
       : 'Execution not found or not owned by this account.',
   });
+});
+
+router.get('/uploads', async (req, res, next) => {
+  try { return res.json(await listOwnerUploadMetadata(owner(req), req.query.limit)); }
+  catch (error) { next(error); }
+});
+router.get('/uploads/:id', async (req, res, next) => {
+  try {
+    const file = await getOwnerUpload(owner(req), req.params.id);
+    if (!file || !Buffer.isBuffer(file.data) || file.data.byteLength !== Number(file.size)) return res.status(404).json({ error: 'Uploaded file not found.' });
+    res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
+    res.setHeader('Content-Length', String(file.data.byteLength));
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Content-Disposition', `attachment; filename="${String(file.name).replace(/[\"\r\n]/g, '_')}"`);
+    return res.send(file.data);
+  } catch (error) { next(error); }
+});
+router.delete('/uploads/:id', async (req, res, next) => {
+  try { const deleted = await deleteOwnerUpload(owner(req), req.params.id); return deleted ? res.json({ ok: true }) : res.status(404).json({ error: 'Uploaded file not found.' }); }
+  catch (error) { next(error); }
 });
 
 router.get('/artifacts', async (req, res, next) => {

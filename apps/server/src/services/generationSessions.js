@@ -28,6 +28,13 @@ export async function finishGenerationSession(generationId, ownerId, status, err
   if (databaseReady()) return GenerationSession.findOneAndUpdate({ generationId: String(generationId), ownerId: String(ownerId) }, { $set: patch }, { new: true }).lean();
   const session = memory.get(String(generationId)); if (!session || session.ownerId !== String(ownerId)) return null; Object.assign(session, patch); return session;
 }
+export async function getLatestActiveGenerationSession(ownerId, chatId = '') {
+  const filter = { ownerId: String(ownerId), status: 'running' };
+  if (chatId) filter.chatId = String(chatId);
+  if (databaseReady()) return GenerationSession.findOne(filter).sort({ startedAt: -1 }).lean();
+  return [...memory.values()].filter((session) => session.ownerId === String(ownerId) && (!chatId || session.chatId === String(chatId)) && session.status === 'running').sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt))[0] || null;
+}
+
 export async function getGenerationSession(generationId, ownerId) {
   if (databaseReady()) return GenerationSession.findOne({ generationId: String(generationId), ownerId: String(ownerId) }).lean();
   const session = memory.get(String(generationId)); return session && session.ownerId === String(ownerId) ? session : null;

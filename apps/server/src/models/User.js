@@ -61,7 +61,6 @@ const userSchema = new mongoose.Schema(
     memories: { type: [memorySchema], default: [] },
     pluginPermissions: { type: mongoose.Schema.Types.Mixed, default: {} },
     integrations: { type: mongoose.Schema.Types.Mixed, default: {} },
-    customTools: { type: [mongoose.Schema.Types.Mixed], default: [] },
     createdAt: { type: Date, default: Date.now },
     lastLoginAt: { type: Date, default: Date.now },
   },

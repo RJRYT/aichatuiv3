@@ -248,7 +248,7 @@ async function fetchProfile(provider, token) {
     const headers = {
       Authorization: `Bearer ${token}`,
       Accept: 'application/vnd.github+json',
-      'User-Agent': 'Nemotron-Agent-Lab',
+      'User-Agent': 'Nemi',
     };
     const signal = AbortSignal.timeout(15000);
     const [userRes, emailRes] = await Promise.all([

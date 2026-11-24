@@ -1,7 +1,7 @@
 {
-  "name": "@nemotron/client",
+  "name": "@nemi/client",
   "private": true,
-  "version": "8.5.3",
+  "version": "8.5.4",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",

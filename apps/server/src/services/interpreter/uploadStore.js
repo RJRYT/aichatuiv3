@@ -252,6 +252,49 @@ export async function listConversationUploadMetadata(ownerId, chatId) {
     .map(toMetadata);
 }
 
+
+export async function listOwnerUploadMetadata(ownerId, limit = 100) {
+  const useDatabase = await databaseReady();
+  const owner = String(ownerId);
+  const safeLimit = Math.max(1, Math.min(100, Number(limit) || 100));
+  if (useDatabase) {
+    const ConversationUpload = await uploadModel();
+    const [files, total, totals] = await Promise.all([
+      ConversationUpload.find({ ownerId: owner }).select('uploadId name mimeType sandboxPath size sha256 createdAt chatId').sort({ createdAt: -1 }).limit(safeLimit).lean(),
+      ConversationUpload.countDocuments({ ownerId: owner }),
+      ConversationUpload.aggregate([{ $match: { ownerId: owner } }, { $group: { _id: null, bytes: { $sum: '$size' } } }]),
+    ]);
+    return { files: files.map((file) => ({ ...file, id: file.uploadId, kind: 'upload' })), total, totalBytes: totals[0]?.bytes || 0 };
+  }
+  const files = [...memoryUploads.values()].filter((file) => file.ownerId === owner).sort((a,b) => new Date(b.createdAt)-new Date(a.createdAt));
+  return { files: files.slice(0,safeLimit).map((file) => ({ ...toMetadata(file), id: file.uploadId, chatId: file.chatId, kind: 'upload' })), total: files.length, totalBytes: files.reduce((sum,file)=>sum+Number(file.size||0),0) };
+}
+
+export async function getOwnerUpload(ownerId, uploadId) {
+  const useDatabase = await databaseReady();
+  const owner = String(ownerId);
+  if (useDatabase) {
+    const ConversationUpload = await uploadModel();
+    const file = await ConversationUpload.findOne({ ownerId: owner, uploadId: String(uploadId) }).select('+data').lean();
+    return file ? normalizeUploadRecord(file) : null;
+  }
+  const file = memoryUploads.get(String(uploadId));
+  return file && file.ownerId === owner ? normalizeUploadRecord({ ...file, data: Buffer.from(file.data) }) : null;
+}
+
+export async function deleteOwnerUpload(ownerId, uploadId) {
+  const useDatabase = await databaseReady();
+  if (useDatabase) {
+    const ConversationUpload = await uploadModel();
+    const result = await ConversationUpload.deleteOne({ ownerId: String(ownerId), uploadId: String(uploadId) });
+    return result.deletedCount > 0;
+  }
+  const file = memoryUploads.get(String(uploadId));
+  if (!file || file.ownerId !== String(ownerId)) return false;
+  memoryUploads.delete(String(uploadId));
+  return true;
+}
+
 export async function getConversationUploads(ownerId, chatId, uploadIds = []) {
   const useDatabase = await databaseReady();
   const owner = String(ownerId),

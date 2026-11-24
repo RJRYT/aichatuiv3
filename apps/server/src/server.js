@@ -141,7 +141,7 @@ try {
   log.error('Could not reconcile generation sessions during startup', { error: error.message });
 }
 const httpServer = app.listen(port, () =>
-  log.info(`Nemotron Agent Lab API listening on http://localhost:${port}`)
+  log.info(`Nemi API listening on http://localhost:${port}`)
 );
 let shuttingDown = false;
 async function shutdown(signal) {

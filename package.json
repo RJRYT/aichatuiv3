@@ -1,21 +1,21 @@
 {
-  "name": "nemotron-chat-monorepo",
+  "name": "nemi-ai-workspace",
   "private": true,
-  "version": "8.5.3",
+  "version": "8.5.4",
   "type": "module",
   "workspaces": [
     "apps/client",
     "apps/server"
   ],
   "scripts": {
-    "dev": "concurrently -k -n API,WEB -c blue,green \"npm run dev --workspace @nemotron/server\" \"npm run dev --workspace @nemotron/client\"",
-    "build": "npm run build --workspace @nemotron/client",
-    "start": "npm run start --workspace @nemotron/server",
+    "dev": "concurrently -k -n API,WEB -c blue,green \"npm run dev --workspace @nemi/server\" \"npm run dev --workspace @nemi/client\"",
+    "build": "npm run build --workspace @nemi/client",
+    "start": "npm run start --workspace @nemi/server",
     "start:build": "npm run build && npm start",
-    "start:api": "npm run start --workspace @nemotron/server",
+    "start:api": "npm run start --workspace @nemi/server",
     "test": "node --test apps/server/test/*.test.js",
-    "sandbox:check": "npm run sandbox:check --workspace @nemotron/server",
-    "sandbox:smoke": "npm run sandbox:smoke --workspace @nemotron/server",
+    "sandbox:check": "npm run sandbox:check --workspace @nemi/server",
+    "sandbox:smoke": "npm run sandbox:smoke --workspace @nemi/server",
     "format": "prettier --write \"apps/**/*.{js,jsx,ts,tsx,json,md}\"",
     "format:check": "prettier --check \"apps/**/*.{js,jsx,ts,tsx,json,md}\""
   },

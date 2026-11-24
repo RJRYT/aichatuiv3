@@ -8,6 +8,9 @@ import { isPluginEnabled, isToolUserConfigurable } from './toolPolicy.js';
 export { isPluginEnabled, isToolUserConfigurable } from './toolPolicy.js';
 import logger from '../utils/logger.js';
 import { createTaskPlan, updatePlannedTask } from './agentPlanning.js';
+import { getLatestAgentCheckpoint } from './agents/checkpointManager.js';
+import { listArtifacts, getArtifact } from './interpreter/artifactStore.js';
+import { listOwnerUploadMetadata, getOwnerUpload } from './interpreter/uploadStore.js';
 import { getChat, searchChatContexts } from './chatStore.js';
 import { generateImageArtifact, getImageGenerationStatus } from './imageGeneration.js';
 import { executePython } from './interpreter/interpreter.js';
@@ -25,6 +28,7 @@ const parser = new Parser({
 });
 
 const tools = [
+  { type: 'function', function: { name: 'file_library_search', description: 'Search the signed-in user File Library for project-related artifacts. Use query to find source archives, reports, generated documents, images, or other deliverables. When read_file_id is supplied, read a bounded text artifact and return its contents. Never expose private download URLs.', parameters: { type: 'object', properties: { query: { type: 'string', maxLength: 160 }, read_file_id: { type: 'string' }, max_chars: { type: 'integer', minimum: 500, maximum: 12000 } } } } },
   { type: 'function', function: { name: 'workspace_list', description: 'List files in the current conversation workspace. Use this to inspect project structure and file revisions. This is a native file operation; it does not start Python or Node.js.', parameters: { type: 'object', properties: { prefix: { type: 'string', description: 'Optional relative directory prefix.' } } } } },
   { type: 'function', function: { name: 'workspace_read', description: 'Read a text file from the current conversation workspace. Use this before editing unfamiliar or existing files. Large files can be read in chunks using start_line and max_lines; continue from nextLine when truncated is true. This does not start a runtime.', parameters: { type: 'object', properties: { path: { type: 'string' }, start_line: { type: 'integer', minimum: 1 }, max_lines: { type: 'integer', minimum: 1, maximum: 500 } }, required: ['path'] } } },
   { type: 'function', function: { name: 'workspace_create', description: 'Create a complete text source file in the current conversation workspace. Use for HTML, CSS, JavaScript, TypeScript, JSON, Markdown, Python source and other text files. This does not execute code. Existing files are not overwritten unless overwrite=true.', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' }, overwrite: { type: 'boolean' } }, required: ['path', 'content'] } } },
@@ -60,7 +64,7 @@ const tools = [
     function: {
       name: 'execute_python',
       description:
-        'Execute CPython 3.14 code in an isolated Vercel Sandbox microVM. Use for Python-specific execution, computation, data processing, automation, document generation, image processing, charts, and Python application testing. A non-secret snapshot of the current project workspace is materialized into the sandbox working directory when a workspace exists. Changes to eligible text files and deletions are synchronized back to the durable workspace; binary outputs are saved to the File Library. For ordinary source-file creation, reading, editing, searching, and project organization, use native workspace tools instead; do not start Python merely to write files. Uploaded files are mounted under uploads/. Generated files are collected into the user File Library. Inspect execution status, stdout, stderr, exit code and artifact metadata. Never claim success unless execution completed.',
+        'Run Python code in an isolated execution environment. Use for Python-specific execution, computation, data processing, automation, document generation, image processing, charts, and Python application testing. A non-secret snapshot of the current project workspace is materialized into the sandbox working directory when a workspace exists. Changes to eligible text files and deletions are synchronized back to the durable workspace; binary outputs are saved to the File Library. For ordinary source-file creation, reading, editing, searching, and project organization, use native workspace tools instead; do not start Python merely to write files. Uploaded files are mounted under uploads/. Generated files are collected into the user File Library. Inspect execution status, stdout, stderr, exit code and artifact metadata. Never claim success unless execution completed.',
       parameters: {
         type: 'object',
         properties: {
@@ -82,7 +86,7 @@ const tools = [
     type: 'function',
     function: {
       name: 'execute_node',
-      description: 'Run an isolated Node.js, npm, or npx command against a clean snapshot of the current conversation workspace. Changes to eligible UTF-8 text files and deletions are synchronized back to the durable workspace; generated binary files are saved to the File Library. Use for JavaScript syntax checks, Node.js scripts, dependency installation, Vite/React builds, and Node tests. This runs in a separate sandbox, never in the application server. Requires a configured Node sandbox image.',
+      description: 'Run an isolated Node.js, npm, or npx command against a clean snapshot of the current conversation workspace. Changes to eligible UTF-8 text files and deletions are synchronized back to the durable workspace; generated binary files are saved to the File Library. Use for JavaScript syntax checks, Node.js scripts, dependency installation, Vite/React builds, and Node tests. Use only when the Node.js execution capability is enabled.',
       parameters: {
         type: 'object',
         properties: {
@@ -356,7 +360,7 @@ async function safeUrl(raw) {
 }
 async function tavilySearch(args) {
   if (!args._apiKey && !process.env.TAVILY_API_KEY)
-    throw new Error('Web search is not configured. Add a Tavily key in Developer Mode → Personal Integrations or configure the platform key.');
+    throw new Error('Web search is not configured. Enable the search capability or contact the administrator.');
   const response = await fetch('https://api.tavily.com/search', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -372,7 +376,7 @@ async function tavilySearch(args) {
     signal: AbortSignal.timeout(20000),
   });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.detail || `Tavily returned HTTP ${response.status}`);
+  if (!response.ok) throw new Error(data.detail || `The web-search service returned HTTP ${response.status}`);
   return {
     query: args.query,
     answer: data.answer || null,
@@ -387,6 +391,21 @@ async function tavilySearch(args) {
 }
 async function executeTool(name, args, user, options = {}) {
   const userId = user?._id ? String(user._id) : 'unknown';
+  if (name === 'file_library_search') {
+    if (!user?._id || String(user._id).startsWith('guest:')) throw new Error('Sign in is required to access the File Library.');
+    if (args.read_file_id) {
+      const file = await getArtifact(String(args.read_file_id), userId) || await getOwnerUpload(userId, String(args.read_file_id));
+      if (!file) throw new Error('File Library item was not found or is not accessible.');
+      const textual = /^(text\/|application\/(json|xml|javascript|x-javascript)|application\/x-yaml)/i.test(file.mimeType || '') || /\.(txt|md|csv|json|xml|ya?ml|js|jsx|ts|tsx|py|html|css|sql|log)$/i.test(file.name || '');
+      if (!textual) return { id: file.id, name: file.name, mimeType: file.mimeType, size: file.size, readable: false, message: 'This artifact is binary or not a supported text format. It is available in the File Library.' };
+      const maxChars = Math.max(500, Math.min(12000, Number(args.max_chars) || 8000));
+      return { id: file.id, name: file.name, mimeType: file.mimeType, size: file.size, readable: true, truncated: file.data.toString('utf8').length > maxChars, content: file.data.toString('utf8').slice(0, maxChars) };
+    }
+    const [result, uploads] = await Promise.all([listArtifacts(userId, { search: String(args.query || ''), limit: 30 }), listOwnerUploadMetadata(userId, 30)]);
+    const term = String(args.query || '').trim().toLowerCase();
+    const uploadedFiles = uploads.files.filter((file) => !term || `${file.name} ${file.mimeType || ''}`.toLowerCase().includes(term));
+    return { total: result.total + uploadedFiles.length, files: [...result.files.map(({ id, name, size, mimeType, chatId, relativePath, createdAt }) => ({ id, name, size, mimeType, chatId, relativePath, createdAt, kind: 'generated' })), ...uploadedFiles.map(({ id, uploadId, name, size, mimeType, chatId, createdAt }) => ({ id: uploadId || id, name, size, mimeType, chatId, createdAt, kind: 'uploaded' }))].slice(0, 30) };
+  }
   if (name.startsWith('workspace_')) {
     if (!user?._id || String(user._id).startsWith('guest:')) throw new Error('Sign in is required for persistent workspace operations.');
     const chatId = String(options.chatId || '');
@@ -410,7 +429,7 @@ async function executeTool(name, args, user, options = {}) {
   if (name === 'update_task_status')
     return updatePlannedTask(args, options.agentState, options.onAgentEvent);
   if (name === 'generate_image') {
-    if (options.integrations?.errors?.cloudflare) throw new Error('Your saved Cloudflare credentials could not be decrypted. Re-enter them in Developer Mode → Personal Integrations.');
+    if (options.integrations?.errors?.cloudflare) throw new Error('Image-generation credentials could not be accessed. Re-enter the saved credentials in Personal Integrations.');
     return generateImageArtifact(args, user, {
       signal: options.signal,
       chatId: options.chatId,
@@ -419,7 +438,7 @@ async function executeTool(name, args, user, options = {}) {
     });
   }
   if (name === 'execute_python') {
-    if (options.integrations?.errors?.vercel) throw new Error('Your saved Vercel credentials could not be decrypted. Re-enter them in Developer Mode → Personal Integrations.');
+    if (options.integrations?.errors?.vercel) throw new Error('Execution credentials could not be accessed. Re-enter the saved credentials in Personal Integrations.');
     if (!user?._id || String(user._id).startsWith('guest:')) {
       log.warn('Python execution denied: not signed in', { userId });
       throw new Error('A signed-in user is required for Python execution.');
@@ -443,11 +462,11 @@ async function executeTool(name, args, user, options = {}) {
     return { ...result, taskContext: String(args.task_context || '').slice(0, 500) };
   }
   if (name === 'execute_node') {
-    if (options.integrations?.errors?.vercel) throw new Error('Your saved Vercel credentials could not be decrypted. Re-enter them in Developer Mode → Personal Integrations.');
+    if (options.integrations?.errors?.vercel) throw new Error('Execution credentials could not be accessed. Re-enter the saved credentials in Personal Integrations.');
     if (!user?._id || String(user._id).startsWith('guest:')) throw new Error('A signed-in user is required for Node.js execution.');
     if (!options.chatId || !(await getChat(userId, String(options.chatId)))) throw new Error('A valid conversation is required for Node.js execution.');
-    if (!process.env.VERCEL_NODE_SANDBOX_IMAGE) throw new Error('Node.js execution is not configured. The deployment must provide an approved VERCEL_NODE_SANDBOX_IMAGE.');
-    if (!options.integrations?.vercel?.token && !getInterpreterStatus().configured) throw new Error('Configure Vercel Sandbox credentials in Developer Mode → Personal Integrations, or ask the administrator to configure the platform sandbox.');
+    if (!process.env.VERCEL_NODE_SANDBOX_IMAGE) throw new Error('Node.js execution is not configured. Contact the administrator to enable this capability.');
+    if (!options.integrations?.vercel?.token && !getInterpreterStatus().configured) throw new Error('Node.js execution is not configured. Enable the Node.js execution capability or contact the administrator.');
     const workspaceFiles = await getWorkspaceSnapshot(userId, String(options.chatId));
     const release = acquireExecution(userId);
     try {
@@ -530,7 +549,7 @@ async function executeTool(name, args, user, options = {}) {
     return { chats };
   }
   if (name === 'web_search') {
-    if (options.integrations?.errors?.tavily) throw new Error('Your saved Tavily credentials could not be decrypted. Re-enter them in Developer Mode → Personal Integrations.');
+    if (options.integrations?.errors?.tavily) throw new Error('Web-search credentials could not be accessed. Re-enter the saved credentials in Personal Integrations.');
     const result = await tavilySearch({ ...args, _apiKey: options.integrations?.tavily?.apiKey });
     return result;
   }
@@ -580,7 +599,7 @@ async function executeTool(name, args, user, options = {}) {
     const response = await fetch(
       `https://api.github.com/search/repositories?q=${encodeURIComponent(query)}&per_page=${limit}`,
       {
-        headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Nemotron-Agent-Lab' },
+        headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Nemi' },
         signal: AbortSignal.timeout(12000),
       }
     );
@@ -600,7 +619,7 @@ async function executeTool(name, args, user, options = {}) {
     const url = await safeUrl(String(args.url || ''));
     const response = await fetch(url, {
       headers: {
-        'User-Agent': 'Nemotron-Agent-Lab/1.0',
+        'User-Agent': 'Nemi/1.0',
         Accept: 'text/html,text/plain,application/json',
       },
       redirect: 'error',
@@ -620,213 +639,20 @@ export function getToolDefinitions(user) {
   const personalVercel = decryptUserIntegrations(user).vercel || {};
   const vercelReady = Boolean((personalVercel.token && personalVercel.teamId && personalVercel.projectId) || getInterpreterStatus().configured);
   const builtins = tools.filter((tool) => enabled(tool.function.name) && (tool.function.name !== 'execute_node' || Boolean(process.env.VERCEL_NODE_SANDBOX_IMAGE && vercelReady)));
-  return [...builtins, ...getCustomToolDefinitions(user)];
+  return builtins;
 }
 
-function normalizeCustomTool(tool) {
-  const parameters = Array.isArray(tool?.parameters) ? tool.parameters : [];
-  return {
-    id: String(tool.id || '').slice(0, 40),
-    name: String(tool.name || '').slice(0, 60),
-    description: String(tool.description || '').slice(0, 400),
-    url: String(tool.url || '').slice(0, 500),
-    method: tool.method === 'GET' ? 'GET' : 'POST',
-    parameters: parameters.slice(0, 10).map((param) => ({
-      name: String(param?.name || '').replace(/[^\w-]/g, '').slice(0, 40),
-      type: ['string', 'number', 'boolean'].includes(param?.type) ? param.type : 'string',
-      description: String(param?.description || '').slice(0, 200),
-      required: Boolean(param?.required),
-    })),
-  };
-}
-
-function getCustomToolDefinitions(user) {
-  return (user?.customTools || []).map((tool) => {
-    const normalized = normalizeCustomTool(tool);
-    const properties = {};
-    const required = [];
-    for (const param of normalized.parameters) {
-      if (!param.name) continue;
-      properties[param.name] = {
-        type: param.type,
-        description: param.description || param.name,
-      };
-      if (param.required) required.push(param.name);
-    }
-    return {
-      type: 'function',
-      function: {
-        name: `custom_${normalized.id}`,
-        description:
-          normalized.description ||
-          `User-defined custom tool "${normalized.name}" that calls ${normalized.url}.`,
-        parameters: {
-          type: 'object',
-          properties,
-          ...(required.length ? { required } : {}),
-        },
-      },
-    };
-  });
-}
-
-async function runCustomTool(tool, args, signal) {
-  const normalized = normalizeCustomTool(tool);
-  if (!/^https:\/\/[\w.-]+/.test(normalized.url))
-    throw new Error('Custom tool URL must be a public https:// endpoint.');
-  const method = normalized.method;
-  const query = method === 'GET' && args && Object.keys(args).length
-    ? `?${new URLSearchParams(Object.entries(args).map(([k, v]) => [k, String(v)])).toString()}`
-    : '';
-  const response = await fetch(`${normalized.url}${query}`, {
-    method,
-    ...(method === 'POST'
-      ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(args || {}) }
-      : {}),
-    signal: signal || AbortSignal.timeout(20000),
-  });
-  if (!response.ok) throw new Error(`Custom tool returned HTTP ${response.status}`);
-  const type = response.headers.get('content-type') || '';
-  const text = await response.text();
-  if (/json/i.test(type)) {
-    let parsed;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      parsed = text;
-    }
-    return typeof parsed === 'string' ? parsed.slice(0, 20000) : parsed;
-  }
-  return { content: text.slice(0, 20000) };
-}
 export function getPluginCatalog() {
+  const nodeConfigured = Boolean(process.env.VERCEL_NODE_SANDBOX_IMAGE && getInterpreterStatus().configured);
   return [
-    { id: 'workspace_list', name: 'Workspace files', description: 'Inspect files in the current project workspace', icon: 'FolderOpen', configured: true },
-    { id: 'workspace_read', name: 'Workspace reading', description: 'Read source and project files', icon: 'FileText', configured: true },
-    { id: 'workspace_create', name: 'Workspace creation', description: 'Create source and project files without starting a runtime', icon: 'FilePlus', configured: true },
-    { id: 'workspace_edit', name: 'Workspace editing', description: 'Apply revision-aware edits to project files', icon: 'FilePenLine', configured: true },
-    { id: 'workspace_delete', name: 'Workspace deletion', description: 'Delete project files when requested or necessary', icon: 'FileX', configured: true },
-    { id: 'workspace_search', name: 'Workspace search', description: 'Search text across project files', icon: 'Search', configured: true },
-    { id: 'workspace_status', name: 'Workspace status', description: 'Inspect workspace size and file limits', icon: 'FolderCheck', configured: true },
-    { id: 'workspace_archive', name: 'Workspace archive', description: 'Package the current workspace when requested', icon: 'FileArchive', configured: true },
-    { id: 'workspace_export', name: 'Export workspace file', description: 'Create a downloadable artifact from a workspace file', icon: 'Download', configured: true },
-    {
-      id: 'execute_python',
-      name: 'Python interpreter',
-      description: 'Full CPython in an isolated Vercel Sandbox microVM',
-      icon: 'Code',
-      configured: getInterpreterStatus().configured,
-    },
-    {
-      id: 'execute_node',
-      name: 'Node.js runtime',
-      description: 'Isolated Node.js, npm and npx execution for builds and tests',
-      icon: 'Terminal',
-      configured: Boolean(process.env.VERCEL_NODE_SANDBOX_IMAGE && getInterpreterStatus().configured),
-    },
-    {
-      id: 'generate_image',
-      name: 'Image generation',
-      description: 'Generate and save images with FLUX.1 Schnell',
-      icon: 'Image',
-      configured: getImageGenerationStatus().configured,
-    },
-    {
-      id: 'get_agent_status',
-      name: 'Agent checkpoints',
-      description: 'Inspect the latest persisted execution checkpoint for this conversation',
-      icon: 'History',
-      configured: true,
-    },
-    {
-      id: 'create_task_plan',
-      name: 'Autonomous planning',
-      description: 'Create and track multi-step execution plans',
-      icon: 'ListChecks',
-      configured: true,
-    },
-    {
-      id: 'save_memory',
-      name: 'Save memory',
-      description: 'Save user-approved facts for future chats',
-      icon: 'MemoryStick',
-      configured: true,
-    },
-    {
-      id: 'search_memories',
-      name: 'Search memory',
-      description: 'Recall saved user context',
-      icon: 'MemoryStick',
-      configured: true,
-    },
-    {
-      id: 'list_shared_links',
-      name: 'Shared links',
-      description: 'List the signed-in user’s active share links',
-      icon: 'Share2',
-      configured: true,
-    },
-    {
-      id: 'search_previous_chats',
-      name: 'Previous chats',
-      description: 'Find relevant context in the signed-in user’s earlier chats',
-      icon: 'MessageSquare',
-      configured: true,
-    },
-    {
-      id: 'web_search',
-      name: 'Web search',
-      description: 'Search current websites and news',
-      icon: 'Globe',
-      configured: Boolean(process.env.TAVILY_API_KEY),
-    },
-    {
-      id: 'fetch_public_url',
-      name: 'Open webpage',
-      description: 'Read public URLs and documentation',
-      icon: 'Link',
-      configured: true,
-    },
-    {
-      id: 'github_search',
-      name: 'GitHub',
-      description: 'Find public repositories',
-      icon: 'Github',
-      configured: true,
-    },
-    {
-      id: 'npm_search',
-      name: 'npm',
-      description: 'Search npm packages',
-      icon: 'Package',
-      configured: true,
-    },
-    {
-      id: 'calculator',
-      name: 'Calculator',
-      description: 'Evaluate calculations',
-      icon: 'Calculator',
-      configured: true,
-    },
-    {
-      id: 'get_current_datetime',
-      name: 'Date & time',
-      description: 'Get timezone-aware current time',
-      icon: 'Clock',
-      configured: true,
-    },
-  ].map((tool) => ({ ...tool, configurable: isToolUserConfigurable(tool.id), defaultEnabled: true }));
+    { id: 'execute_python', name: 'Python sandbox', description: 'Run Python in an isolated execution environment.', icon: 'Code2', configurable: true, defaultEnabled: true, configured: getInterpreterStatus().configured },
+    { id: 'execute_node', name: 'Node.js sandbox', description: 'Run Node.js commands in an isolated execution environment.', icon: 'Terminal', configurable: true, defaultEnabled: true, configured: nodeConfigured },
+    { id: 'web_search', name: 'Web search', description: 'Search the public web for current information.', icon: 'Globe', configurable: true, defaultEnabled: true, configured: Boolean(process.env.TAVILY_API_KEY) },
+    { id: 'generate_image', name: 'Image generation', description: 'Generate original images.', icon: 'Image', configurable: true, defaultEnabled: true, configured: Boolean(process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN) },
+  ];
 }
 export async function runTool(name, args, user, options = {}) {
   try {
-    if (name.startsWith('custom_')) {
-      const tool = (user?.customTools || []).find(
-        (candidate) => `custom_${normalizeCustomTool(candidate).id}` === name
-      );
-      if (!tool) throw new Error(`Unknown custom tool: ${name}`);
-      const result = await runCustomTool(tool, args, options.signal);
-      return { ok: true, result };
-    }
     if (!isPluginEnabled(user, name))
       return { ok: false, error: `The ${name} tool is disabled in your plugin settings.` };
     const result = await executeTool(name, args, user, options);

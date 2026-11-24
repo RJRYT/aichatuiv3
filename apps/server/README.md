@@ -1,6 +1,6 @@
-# Nemotron Server — Express Backend
+# Nemi Server — Express Backend
 
-A full-stack Agent Lab interface for NVIDIA Nemotron 3.5 Super VL, built with Express, Mongoose, and MongoDB.
+Nemi API built with Express, Mongoose, and MongoDB.
 
 ## Features
 

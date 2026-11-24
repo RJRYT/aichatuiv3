@@ -26,8 +26,8 @@ export function createTaskPlan(args, agentState = {}, onAgentEvent) {
   });
   for (const task of tasks) {
     if (!task.title) throw new Error(`Task ${task.id} needs a title.`);
-    if (task.dependsOn.some((id) => !ids.has(id) || id === task.id))
-      throw new Error(`Task ${task.id} has an invalid dependency.`);
+    const invalidDependency = task.dependsOn.find((id) => !ids.has(id) || id === task.id);
+    if (invalidDependency) throw new Error(`Task ${task.id} references invalid dependency ${invalidDependency}. Valid task IDs: ${[...ids].join(', ')}.`);
   }
   const byId = new Map(tasks.map((task) => [task.id, task]));
   const visiting = new Set(),
@@ -66,6 +66,10 @@ export function updatePlannedTask(args, agentState = {}, onAgentEvent) {
     throw new Error('A completed task cannot be reopened.');
   if (task.status === 'skipped' && next !== 'skipped')
     throw new Error('A skipped task cannot be reopened.');
+  if (next === 'completed' && task.status === 'pending') {
+    task.status = 'running';
+    onAgentEvent?.('task_updated', { task: { ...task }, plan, implicitTransition: true });
+  }
   if (next === 'completed' && task.status !== 'running')
     throw new Error('Mark the task running before marking it completed.');
   task.status = next;

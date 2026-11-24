@@ -26,6 +26,7 @@ test('client refreshes memories through explicit sync only and offers ten persis
   const stylesFile = fileURLToPath(new URL('../../client/src/styles.css', import.meta.url));
   const source = await readFile(appFile, 'utf8');
   const styles = await readFile(stylesFile, 'utf8');
+  const tools = await readFile(new URL('../src/services/tools.js', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /addEventListener\(['"]focus['"]/);
   assert.doesNotMatch(source, /addEventListener\(['"]visibilitychange['"]/);
   assert.match(source, /localStorage\.setItem\('nemotron\.colorTheme'/);
@@ -37,7 +38,10 @@ test('client refreshes memories through explicit sync only and offers ten persis
     ).length,
     10
   );
-  assert.match(source, /progressMessage && thinking/);
-  assert.match(source, /message && thinking/);
-  assert.match(styles, /:root\[data-theme="light"\]/);
+  assert.match(source, /const progressMessage = item\.type === 'progress_update'/);
+  assert.match(source, /setLiveProgress/);
+  assert.match(source, /api\/chat\/stream\/active/);
+  assert.match(source, /Open File Library/);
+  assert.match(tools, /name: 'file_library_search'/);
+  assert.match(styles, /:root\[data-theme=['\"]light['\"]\]/);
 });

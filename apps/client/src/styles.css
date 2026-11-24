@@ -16,6 +16,9 @@
   --accent: #a4df78;
   --accent2: #c2f39d;
   --red: #ff938a;
+  --success: #86c98a;
+  --danger-bg: color-mix(in srgb, var(--red) 12%, var(--panel));
+  --surface-hover: color-mix(in srgb, var(--panel2) 75%, var(--accent) 5%);
 }
 * {
   box-sizing: border-box;
@@ -3285,6 +3288,11 @@ a {
 }
 :root[data-theme] {
   color-scheme: dark;
+  --surface: var(--panel);
+  --surface-2: var(--panel2);
+  --surface-3: var(--panel3);
+  --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+  --danger: var(--red);
 }
 :root[data-theme='light'] {
   color-scheme: light;
@@ -4556,3 +4564,203 @@ body[data-theme] {
 .message-recovery-actions button:hover { background: var(--surface-3, rgba(127,127,127,.14)); }
 .message-execution-status { display: flex; flex-direction: column; gap: 5px; margin-top: 12px; padding: 11px 12px; border: 1px solid var(--border, rgba(127,127,127,.25)); border-radius: 10px; font-size: 13px; }
 .message-execution-status > span { color: var(--muted, #888); font-size: 12px; }
+
+/* Theme-aware controls and completion metadata */
+.app[data-theme] .composer-icon:hover,
+.app[data-theme] .library-nav-button:hover,
+.app[data-theme] .history-bulk-toolbar button:hover { background: var(--surface-hover); color: var(--text); border-color: var(--accent); }
+.app[data-theme] .composer-icon { color: var(--muted); }
+.app[data-theme] .message-duration { display:inline-flex; align-items:center; margin-left:7px; padding:2px 7px; border:1px solid var(--border); border-radius:999px; color:var(--muted); background:var(--panel); font-size:10px; line-height:1.5; white-space:nowrap; }
+.app[data-theme] .error-notice { background:var(--danger-bg); color:var(--red); }
+.app[data-theme] .field-error { color:var(--red); }
+
+.attachment-source-wrap { position:relative; }
+.attachment-source-menu { position:absolute; z-index:30; left:0; bottom:calc(100% + 9px); min-width:190px; padding:6px; display:grid; gap:3px; border:1px solid var(--border); border-radius:12px; background:var(--panel); box-shadow:0 14px 40px #0004; }
+.attachment-source-menu button { display:flex; align-items:center; gap:9px; width:100%; padding:9px 10px; border:0; border-radius:8px; background:transparent; color:var(--text); text-align:left; font-size:12px; }
+.attachment-source-menu button:hover { background:var(--panel2); color:var(--accent2); }
+
+
+/* Complete theme-token coverage for legacy components that previously retained forest colors. */
+.app[data-theme] .topbar { background: color-mix(in srgb, var(--bg) 94%, transparent); }
+.app[data-theme] .brand-mark { background: linear-gradient(135deg, var(--accent2), var(--accent)); color: var(--bg); box-shadow: 0 5px 22px color-mix(in srgb, var(--accent) 20%, transparent); }
+.app[data-theme] .brand-text small,
+.app[data-theme] .message-heading time,
+.app[data-theme] .tiny-action,
+.app[data-theme] .history-select small,
+.app[data-theme] .delete-chat,
+.app[data-theme] .empty-history,
+.app[data-theme] .field-hint,
+.app[data-theme] .login-foot,
+.app[data-theme] .library-search,
+.app[data-theme] .library-file-info small,
+.app[data-theme] .library-empty,
+.app[data-theme] .library-footer > span,
+.app[data-theme] .next-step-heading,
+.app[data-theme] .plan-objective-label,
+.app[data-theme] .plan-dock-footer,
+.app[data-theme] .tool-detail,
+.app[data-theme] .tool-usage-fields > div b,
+.app[data-theme] .tool-usage-fields > div span { color: var(--muted); }
+.app[data-theme] .icon-button,
+.app[data-theme] .text-action,
+.app[data-theme] .suggestions button,
+.app[data-theme] .thinking-control,
+.app[data-theme] .history-item.active,
+.app[data-theme] .history-item:hover,
+.app[data-theme] .tab-row button.selected,
+.app[data-theme] .new-chat-button,
+.app[data-theme] .library-nav-button,
+.app[data-theme] .next-step-actions button,
+.app[data-theme] .plan-dock-footer button,
+.app[data-theme] .tool-detail pre,
+.app[data-theme] .code-run-output { background: var(--panel2); color: var(--text); border-color: var(--border); }
+.app[data-theme] .welcome-symbol,
+.app[data-theme] .message-avatar,
+.app[data-theme] .user-avatar,
+.app[data-theme] .user-text,
+.app[data-theme] .reasoning-block,
+.app[data-theme] .tool-activity,
+.app[data-theme] .stats,
+.app[data-theme] .plugin-dropup,
+.app[data-theme] .history-drawer,
+.app[data-theme] .preferences-modal,
+.app[data-theme] .login-card,
+.app[data-theme] .file-library-modal,
+.app[data-theme] .agent-plan-dock,
+.app[data-theme] .message-artifacts,
+.app[data-theme] .artifact-card,
+.app[data-theme] .artifact-preview-dialog,
+.app[data-theme] .code-shell { background: var(--panel); color: var(--text); border-color: var(--border); }
+.app[data-theme] .message-heading,
+.app[data-theme] .message-content,
+.app[data-theme] .user-text,
+.app[data-theme] .markdown,
+.app[data-theme] .markdown h1,
+.app[data-theme] .markdown h2,
+.app[data-theme] .markdown h3,
+.app[data-theme] .markdown h4,
+.app[data-theme] .history-select b,
+.app[data-theme] .library-file-info b,
+.app[data-theme] .agent-plan-dock > summary > span,
+.app[data-theme] .tool-row b,
+.app[data-theme] .tool-drawer-title { color: var(--text); }
+.app[data-theme] .markdown blockquote,
+.app[data-theme] .attachment-pill,
+.app[data-theme] .pending-file,
+.app[data-theme] .preference-grid select,
+.app[data-theme] .profile-settings input,
+.app[data-theme] .profile-settings textarea,
+.app[data-theme] .memory-add,
+.app[data-theme] .memory-add textarea,
+.app[data-theme] .agent-plan-dock-body > textarea,
+.app[data-theme] .plan-edit-fields,
+.app[data-theme] .plan-edit-task,
+.app[data-theme] .code-head,
+.app[data-theme] .code-block,
+.app[data-theme] .inline-code,
+.app[data-theme] .artifact-preview-text { background: var(--panel2); color: var(--text); border-color: var(--border); }
+.app[data-theme] .markdown a,
+.app[data-theme] .linked-providers a,
+.app[data-theme] .provider-linked,
+.app[data-theme] .tool-row svg,
+.app[data-theme] .prompt-expand,
+.app[data-theme] .tool-artifacts a,
+.app[data-theme] .next-step-actions button svg { color: var(--accent2); }
+.app[data-theme] .composer { background: var(--panel); border-color: var(--border); box-shadow: 0 15px 55px color-mix(in srgb, var(--bg) 35%, transparent); }
+.app[data-theme] .composer-icon:hover,
+.app[data-theme] .composer-icon.active,
+.app[data-theme] .thinking-control.enabled,
+.app[data-theme] .suggestions button:hover,
+.app[data-theme] .next-step-actions button:hover { background: var(--panel3); border-color: var(--accent); color: var(--text); }
+.app[data-theme] .send-button { color: var(--bg); }
+.app[data-theme] .drawer-layer,
+.app[data-theme] .modal-layer { background: color-mix(in srgb, var(--bg) 70%, transparent); }
+.app[data-theme] .error-notice,
+.app[data-theme] .message-error,
+.app[data-theme] .attachment-error,
+.app[data-theme] .tool-error,
+.app[data-theme] .field-error,
+.app[data-theme] .chat-load-error { color: var(--red); }
+.app[data-theme] .switch { background: var(--border); }
+.app[data-theme] .switch.on { background: var(--accent); }
+.app[data-theme] .switch i { background: var(--bg); }
+.app[data-theme] .library-file,
+.app[data-theme] .library-summary,
+.app[data-theme] .artifact-card,
+.app[data-theme] .artifact-preview-loading,
+.app[data-theme] .artifact-preview-error,
+.app[data-theme] .artifact-preview-unavailable { background: var(--panel); border-color: var(--border); color: var(--text); }
+.app[data-theme] .tool-usage-inline,
+.app[data-theme] .reasoning-block,
+.app[data-theme] .tool-activity,
+.app[data-theme] .stats { border-color: var(--border); }
+.app[data-theme] *::-webkit-scrollbar-track { background: var(--panel); }
+.app[data-theme] *::-webkit-scrollbar-thumb { background: var(--border); border-color: var(--panel); }
+.app[data-theme] *::-webkit-scrollbar-thumb:hover { background: var(--subtle); }
+
+/* Remaining semantic color tokens for legacy tool/settings components. */
+.app[data-theme] .plugin-drop-head span,
+.app[data-theme] .plugin-entry-icon,
+.app[data-theme] .persona-active,
+.app[data-theme] .persona-preset > svg,
+.app[data-theme] .personality-slider-title output,
+.app[data-theme] .prompt-expand,
+.app[data-theme] .live-progress-typing { color: var(--accent2); }
+.app[data-theme] .plugin-entry-icon,
+.app[data-theme] .plugin-entry,
+.app[data-theme] .plugin-dropup,
+.app[data-theme] .developer-note,
+.app[data-theme] .integration-card,
+.app[data-theme] .persona-section,
+.app[data-theme] .persona-preset,
+.app[data-theme] .persona-presentation-controls,
+.app[data-theme] .personality-group,
+.app[data-theme] .personality-intensity,
+.app[data-theme] .personality-preview,
+.app[data-theme] .chat-meta-dialog,
+.app[data-theme] .tool-default-row,
+.app[data-theme] .usage-model-row,
+.app[data-theme] .usage-range button { background: var(--panel); border-color: var(--border); color: var(--text); }
+.app[data-theme] .oauth-button,
+.app[data-theme] .tool-detail pre,
+.app[data-theme] .workspace-tools select,
+.app[data-theme] .persona-custom-label textarea,
+.app[data-theme] .persona-presentation-grid select,
+.app[data-theme] .integration-fields input { background: var(--panel2); color: var(--text); border-color: var(--border); }
+.app[data-theme] .plugin-entry small,
+.app[data-theme] .plugin-dropup > p,
+.app[data-theme] .tool-default-row small,
+.app[data-theme] .tool-default-row em,
+.app[data-theme] .integration-card-head small,
+.app[data-theme] .integration-fields label,
+.app[data-theme] .developer-note p,
+.app[data-theme] .persona-heading p,
+.app[data-theme] .persona-preset-description,
+.app[data-theme] .persona-custom-label > span,
+.app[data-theme] .persona-character-count,
+.app[data-theme] .personality-group-heading small,
+.app[data-theme] .personality-slider-ends small,
+.app[data-theme] .personality-preview small,
+.app[data-theme] .personality-message,
+.app[data-theme] .personality-quickstarts > span,
+.app[data-theme] .usage-model-row small,
+.app[data-theme] .message-execution-status > span { color: var(--muted); }
+.app[data-theme] .integration-status.configured,
+.app[data-theme] .plan-edit-task.completed .plan-edit-task-state { color: var(--success); }
+.app[data-theme] .danger-text,
+.app[data-theme] .library-action.danger:hover,
+.app[data-theme] .tool-usage-details .tool-error,
+.app[data-theme] .code-run-output.error { color: var(--red); }
+.app[data-theme] .live-progress-awaiting,
+.app[data-theme] .generating-indicator,
+.app[data-theme] .plan-edit-task.completed .plan-edit-task-state i { background: var(--accent); }
+.app[data-theme] .message-artifacts-title { color: var(--text); }
+.app[data-theme] .message-artifacts-title span { color: var(--muted); }
+.app[data-theme] .plan-chevron,
+.app[data-theme] .agent-plan-dock .plan-chevron { color: var(--muted); }
+.app[data-theme] .plan-edit-task.running .plan-edit-task-state { color: var(--warning, var(--accent2)); }
+.app[data-theme] .plan-edit-task.failed .plan-edit-task-state { color: var(--red); }
+.app[data-theme] .usage-range button.selected,
+.app[data-theme] .drawer-filters button.selected { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
+
+.app[data-theme] .plugin-entry i.not-configured { background: var(--warning, var(--accent2)); }

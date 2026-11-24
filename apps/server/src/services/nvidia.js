@@ -94,6 +94,14 @@ function sse(res, payload) {
     catch (error) { log.debug('SSE write skipped after connection close', { error: error.message }); }
   }
 }
+function stripInternalRuntimeDetails(value) {
+  if (Array.isArray(value)) return value.map(stripInternalRuntimeDetails);
+  if (typeof value === 'string') return value
+    .replace(/Vercel Sandbox|NVIDIA NIM|Cloudflare Workers AI|Tavily/gi, 'the configured service')
+    .replace(/\b(?:VERCEL|NVIDIA|CLOUDFLARE|TAVILY)_[A-Z0-9_]+\b/g, 'service configuration');
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, stripInternalRuntimeDetails(item)]));
+}
 function stripInternalArtifactUrls(value) {
   if (Array.isArray(value)) return value.map(stripInternalArtifactUrls);
   if (!value || typeof value !== 'object') return value;
@@ -246,7 +254,7 @@ export async function requestRound({
     });
     if (!response.ok) {
       const detail = (await response.text()).slice(0, 9000);
-      throw Object.assign(new Error(`NVIDIA NIM returned HTTP ${response.status}: ${detail}`), { status: response.status });
+      throw Object.assign(new Error(`The model service returned HTTP ${response.status}: ${detail}`), { status: response.status });
     }
     if (!response.body) throw new Error('NVIDIA returned an empty streaming response body.');
     reader = response.body.getReader();
@@ -371,7 +379,7 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
   let routingDecision = null;
   if (modelMode === 'auto') {
     sse(res, { type: 'status', status: 'Selecting model' });
-    const routingHeartbeat = setInterval(() => sse(res, { type: 'heartbeat', phase: 'router', message: 'Choosing the best Nemotron model for this task.' }), 4000);
+    const routingHeartbeat = setInterval(() => sse(res, { type: 'heartbeat', phase: 'router', message: 'Choosing the best model for this task.' }), 4000);
     try {
       routingDecision = await routeModel({ messages: body.messages, apiKey: nvidiaApiKey });
       modelAlias = routingDecision.alias;
@@ -632,7 +640,7 @@ export async function runNemotronChat({ body, req, res, persist, user }) {
               : name === 'execute_node' && outcome.result?.status !== 'completed'
                 ? outcome.result?.stderr || `Node.js execution ${outcome.result?.status || 'failed'}.` : undefined
           : outcome.error;
-        const safeOutcome = stripInternalArtifactUrls(outcome);
+        const safeOutcome = stripInternalRuntimeDetails(stripInternalArtifactUrls(outcome));
         const event = {
           name, arguments: safeArgs, status: toolCompleted ? 'complete' : 'error',
           result: safeOutcome.ok ? safeToolEventResult(name, safeOutcome.result) : undefined,

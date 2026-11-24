@@ -30,6 +30,7 @@ import {
   HardDrive,
   Image as ImageIcon,
   ListChecks,
+  Link,
   Loader2,
   LoaderCircle,
   LogOut,
@@ -88,26 +89,8 @@ const DEFAULT_PREFERENCES = {
 const PLUGIN_CATALOG = [
   { id: 'execute_python', name: 'Python sandbox', description: 'execute code in an isolated environment', configurable: true },
   { id: 'execute_node', name: 'Node.js sandbox', description: 'run npm, node and build commands', configurable: true },
-  { id: 'web_search', name: 'Web search', description: 'search the live web with Tavily', configurable: true },
-  { id: 'generate_image', name: 'Image generation', description: 'generate images with Cloudflare Workers AI', configurable: true },
-  { id: 'workspace_delete', name: 'Workspace deletion', description: 'allow the agent to delete project files', configurable: true },
-  { id: 'workspace_archive', name: 'ZIP packaging', description: 'allow the agent to package project workspaces', configurable: true },
-  { id: 'github_search', name: 'GitHub search', description: 'search public repositories', configurable: false },
-  { id: 'npm_search', name: 'npm search', description: 'search npm packages', configurable: false },
-  { id: 'calculator', name: 'Calculator', description: 'evaluate calculations', configurable: false },
-  { id: 'fetch_public_url', name: 'Open webpage', description: 'read public documentation and pages', configurable: false },
-  { id: 'get_current_datetime', name: 'Date & time', description: 'timezone-aware current time', configurable: false },
-  { id: 'workspace_list', name: 'Workspace files', description: 'inspect project files', configurable: false },
-  { id: 'workspace_read', name: 'Workspace reading', description: 'read project source files', configurable: false },
-  { id: 'workspace_create', name: 'Workspace creation', description: 'create project files', configurable: false },
-  { id: 'workspace_edit', name: 'Workspace editing', description: 'edit project files', configurable: false },
-  { id: 'workspace_search', name: 'Workspace search', description: 'search across project files', configurable: false },
-  { id: 'workspace_status', name: 'Workspace status', description: 'inspect workspace storage', configurable: false },
-  { id: 'create_task_plan', name: 'Task planning', description: 'plan and track complex work', configurable: false },
-  { id: 'save_memory', name: 'Save memory', description: 'save durable user context', configurable: false },
-  { id: 'search_memories', name: 'Search memory', description: 'recall saved context', configurable: false },
-  { id: 'search_previous_chats', name: 'Previous chats', description: 'recall earlier conversations', configurable: false },
-  { id: 'list_shared_links', name: 'Shared links', description: 'list your active share links', configurable: false },
+  { id: 'web_search', name: 'Web search', description: 'search the live web', configurable: true },
+  { id: 'generate_image', name: 'Image generation', description: 'generate images', configurable: true },
 ];
 const COLOR_THEMES = [
   { id: 'forest', name: 'Forest', colors: ['#0b0e0c', '#a4df78'] },
@@ -120,38 +103,6 @@ const COLOR_THEMES = [
   { id: 'dracula', name: 'Dracula', colors: ['#282a36', '#bd93f9'] },
   { id: 'nord', name: 'Nord', colors: ['#2e3440', '#88c0d0'] },
   { id: 'solarized', name: 'Solarized', colors: ['#002b36', '#2aa198'] },
-];
-const SUGGESTIONS = [
-  {
-    icon: Search,
-    label: 'Research a topic',
-    prompt:
-      'Research the latest developments in AI coding agents. Use web search and cite reliable sources.',
-  },
-  {
-    icon: Code2,
-    label: 'Analyze a dataset',
-    prompt:
-      'I want to analyze a CSV dataset, calculate useful statistics, identify patterns, and create clear visualizations. Ask me to attach the CSV.',
-  },
-  {
-    icon: Code2,
-    label: 'Build something',
-    prompt:
-      'Help me design and implement a production-ready feature. Start by clarifying requirements and proposing an implementation plan.',
-  },
-  {
-    icon: Github,
-    label: 'Explore GitHub',
-    prompt:
-      'Find popular open-source JavaScript repositories for building agentic applications. Compare their features and licenses.',
-  },
-  {
-    icon: Sparkles,
-    label: 'Think through an idea',
-    prompt:
-      'Help me evaluate a product idea. Analyze feasibility, architecture, risks, and an MVP roadmap.',
-  },
 ];
 // crypto.randomUUID is only available in secure contexts (https or localhost);
 // fall back for LAN/preview hosts served over plain HTTP.
@@ -266,7 +217,7 @@ async function prepareImage(file) {
 async function prepareAudio(file) {
   if (file.size > 15 * 1024 * 1024) throw new Error(`${file.name} exceeds the 15 MB audio limit.`);
   const extension = file.name.split('.').pop().toLowerCase();
-  if (!['mp3', 'wav'].includes(extension)) throw new Error('Nemotron Omni currently accepts MP3 and WAV audio files.');
+  if (!['mp3', 'wav'].includes(extension)) throw new Error('Nemi audio attachment handler accepts MP3 and WAV audio files.');
   const mimeType = extension === 'wav' ? 'audio/wav' : 'audio/mpeg';
   return { name: file.name, type: mimeType, dataUrl: await readFile(file), kind: 'audio' };
 }
@@ -1262,6 +1213,7 @@ function Message({
           <span>{user ? 'You' : 'Assistant'}</span>
           {message.createdAt && <time>{dateLabel(message.createdAt)}</time>}
           {!user && message.model?.name && <span className="model-badge" title={message.routingDecision?.reason || message.model.id}>{message.model.name}{message.modelMode === 'auto' ? ' · Auto' : ''}</span>}
+          {!user && !message.isStreaming && Number(message.durationMs) > 0 && <span className="message-duration">Worked for {Number(message.durationMs) < 60000 ? `${Math.max(1, Math.round(Number(message.durationMs) / 1000))}s` : `${Math.floor(Number(message.durationMs) / 60000)}m ${Math.round((Number(message.durationMs) % 60000) / 1000)}s`}</span>}
         </div>
         {!user && message.isStreaming && liveProgress && (
           <LiveProgress
@@ -1511,7 +1463,7 @@ function artifactIcon(file) {
   if (mime.includes('zip') || mime.includes('compressed')) return FileArchive;
   return FileText;
 }
-function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
+function FileLibraryDialog({ open, onClose, refreshKey = 0, onAttach }) {
   const [files, setFiles] = useState([]),
     [total, setTotal] = useState(0),
     [totalBytes, setTotalBytes] = useState(0);
@@ -1526,12 +1478,13 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
     setLoading(true);
     setError('');
     try {
-      const response = await request('/api/interpreter/artifacts?limit=100');
-      const data = await response.json();
-      setFiles(data.files || []);
-      setSelectedFileIds((current) => new Set([...current].filter((id) => (data.files || []).some((file) => file.id === id))));
-      setTotal(data.total || 0);
-      setTotalBytes(data.totalBytes || 0);
+      const [response, uploadResponse] = await Promise.all([request('/api/interpreter/artifacts?limit=100'), request('/api/interpreter/uploads?limit=100')]);
+      const [data, uploadData] = await Promise.all([response.json(), uploadResponse.json()]);
+      const combinedFiles = [...(data.files || []).map((file) => ({ ...file, kind: 'artifact' })), ...(uploadData.files || []).map((file) => ({ ...file, kind: 'upload', downloadUrl: `/api/interpreter/uploads/${encodeURIComponent(file.uploadId || file.id)}` }))].sort((a,b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+      setFiles(combinedFiles);
+      setSelectedFileIds((current) => new Set([...current].filter((id) => combinedFiles.some((file) => file.id === id))));
+      setTotal((data.total || 0) + (uploadData.total || 0));
+      setTotalBytes((data.totalBytes || 0) + (uploadData.totalBytes || 0));
       setQuotaBytes(data.quotaBytes || 50 * 1024 * 1024);
     } catch (err) {
       setError(err.message || 'Could not load your File Library.');
@@ -1554,9 +1507,7 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
   const remove = async (file) => {
     if (!window.confirm(`Delete ${file.name} from your File Library?`)) return;
     try {
-      await request(`/api/interpreter/artifacts/${encodeURIComponent(file.id)}`, {
-        method: 'DELETE',
-      });
+      await request(file.kind === 'upload' ? `/api/interpreter/uploads/${encodeURIComponent(file.uploadId || file.id)}` : `/api/interpreter/artifacts/${encodeURIComponent(file.id)}`, { method: 'DELETE' });
       if (previewFile?.id === file.id) setPreviewFile(null);
       setSelectedFileIds((current) => { const next = new Set(current); next.delete(file.id); return next; });
       await load();
@@ -1568,10 +1519,11 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
     const ids = [...selectedFileIds];
     if (!ids.length || !window.confirm(`Permanently delete ${ids.length} selected File Library item(s)?`)) return;
     try {
-      const response = await request('/api/interpreter/artifacts/bulk', { method: 'DELETE', body: JSON.stringify({ ids }) });
-      const result = await response.json();
+      const selected = files.filter((file) => selectedFileIds.has(file.id));
+      const results = await Promise.allSettled(selected.map((file) => request(file.kind === 'upload' ? `/api/interpreter/uploads/${encodeURIComponent(file.uploadId || file.id)}` : `/api/interpreter/artifacts/${encodeURIComponent(file.id)}`, { method: 'DELETE' })));
+      const deletedCount = results.filter((result) => result.status === 'fulfilled').length;
       setSelectedFileIds(new Set());
-      if (result.deletedCount !== ids.length) setError(`Deleted ${result.deletedCount} of ${ids.length} selected files.`);
+      if (deletedCount !== ids.length) setError(`Deleted ${deletedCount} of ${ids.length} selected files.`);
       await load();
     } catch (err) { setError(err.message || 'Could not delete selected files.'); }
   };
@@ -1592,7 +1544,7 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
             <h2>
               <Files size={19} /> File Library
             </h2>
-            <p>Files generated by Python across your conversations.</p>
+            <p>Your generated files and previously uploaded attachments.</p>
           </div>
           <button className="icon-button" onClick={onClose} aria-label="Close File Library">
             <X size={17} />
@@ -1657,6 +1609,7 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
                     </small>
                   </div>
                   <div className="library-file-actions">
+                    {onAttach && <button className="library-action" title="Attach this file to the current message" onClick={() => onAttach(file)}><Paperclip size={13} /></button>}
                     <button
                       className="library-action"
                       onClick={() => setPreviewFile(file)}
@@ -1689,7 +1642,7 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0 }) {
               <span>
                 {search
                   ? 'Try another search term.'
-                  : 'Ask Nemotron to create a spreadsheet, PDF, chart, image or other file. Generated files will appear here.'}
+                  : 'Ask Nemi to create a spreadsheet, PDF, chart, image or other file. Generated files will appear here.'}
               </span>
             </div>
           )}
@@ -1842,7 +1795,6 @@ function HistoryDrawer({
   onDelete,
   onRename,
   onChatMeta,
-  onOpenLibrary,
   onBulkDelete,
   deletingChatIds = new Set(),
   chatsLoaded = true,
@@ -1878,9 +1830,6 @@ function HistoryDrawer({
             <button className="secondary-button compact danger-text" disabled={!selectedChatIds.size} onClick={() => { onBulkDelete?.([...selectedChatIds]); setSelectedChatIds(new Set()); setSelectionMode(false); }}>Delete ({selectedChatIds.size})</button>
           </>}
         </div>
-        <button className="library-nav-button" onClick={onOpenLibrary}>
-          <Files size={15} /> File Library <span>Generated files</span>
-        </button>
         <div className="drawer-filters">
           <button
             className={folderFilter === '__pinned__' ? 'selected' : ''}
@@ -2172,9 +2121,7 @@ function PreferencesDialog({
     [usernameState, setUsernameState] = useState('idle'),
     [profileError, setProfileError] = useState('');
   const [pluginPermissions, setPluginPermissions] = useState({}),
-    [customTools, setCustomTools] = useState([]),
-    [pluginsLoading, setPluginsLoading] = useState(false),
-    [toolDraft, setToolDraft] = useState(null);
+    [pluginsLoading, setPluginsLoading] = useState(false);
   const [developerUnlocked, setDeveloperUnlocked] = useState(() => { try { return localStorage.getItem('nemotron.developerMode') === 'unlocked'; } catch { return false; } });
   const [settingsTitleClicks, setSettingsTitleClicks] = useState(0);
   const [integrations, setIntegrations] = useState({});
@@ -2366,7 +2313,6 @@ function PreferencesDialog({
                 .then((r) => r.json())
                 .then((data) => {
                   setPluginPermissions(data.permissions || {});
-                  setCustomTools(data.customTools || []);
                 })
                 .catch(() => {})
                 .finally(() => setPluginsLoading(false));
@@ -2387,12 +2333,12 @@ function PreferencesDialog({
           <div className="developer-settings">
             <div className="memory-intro">
               <b>Developer Mode</b>
-              <p>Configure personal credentials for Nemotron and the services used by agent tools. Secrets are encrypted by the backend and never returned to this page.</p>
+              <p>Configure personal credentials for supported model and tool services. Secrets are encrypted by the backend and never returned to this page.</p>
             </div>
             {integrationMessage && <div className="notice">{integrationMessage}</div>}
             {Object.values(integrations).some((item) => item?.error) && <div className="notice error-notice">One or more saved credentials could not be decrypted. Re-enter the affected credentials. Verify that USER_INTEGRATIONS_ENCRYPTION_KEY has not changed.</div>}
             {[
-              { id: 'nvidia', name: 'NVIDIA NIM', description: 'Personal NVIDIA API key for all Nemotron models.', fields: [{ id: 'apiKey', label: 'NVIDIA API key', secret: true }] },
+              { id: 'nvidia', name: 'NVIDIA NIM', description: 'Personal NVIDIA API key for all AI models.', fields: [{ id: 'apiKey', label: 'NVIDIA API key', secret: true }] },
               { id: 'tavily', name: 'Tavily Search', description: 'Personal Tavily key for web research.', fields: [{ id: 'apiKey', label: 'Tavily API key', secret: true }] },
               { id: 'cloudflare', name: 'Cloudflare Workers AI', description: 'Image generation through your Cloudflare account.', fields: [{ id: 'accountId', label: 'Cloudflare account ID' }, { id: 'apiToken', label: 'Cloudflare API token', secret: true }] },
               { id: 'vercel', name: 'Vercel Sandbox', description: 'Personal sandbox authentication. The deployment still needs an approved Node sandbox image to enable Node.js execution.', fields: [{ id: 'token', label: 'Vercel access token', secret: true }, { id: 'teamId', label: 'Vercel team ID' }, { id: 'projectId', label: 'Vercel project ID' }] },
@@ -2472,8 +2418,7 @@ function PreferencesDialog({
             <div className="memory-intro">
               <b>Tool permissions</b>
               <p>
-                Turn built-in tools off to stop the agent from calling them. Custom tools call your
-                own https:// endpoints when the model decides to.
+                Control the four optional capabilities below. Core project, planning, and File Library tools remain available automatically when relevant.
               </p>
             </div>
             {pluginsLoading ? (
@@ -2503,130 +2448,6 @@ function PreferencesDialog({
                 ))}
               </div>
             )}
-            <div className="custom-tools-head">
-              <b>Custom tools ({customTools.length})</b>
-              <button
-                className="secondary-button compact"
-                onClick={() =>
-                  setToolDraft({ name: '', url: '', description: '', method: 'POST', params: '' })
-                }
-              >
-                <Plus size={13} /> Add tool
-              </button>
-            </div>
-            {toolDraft && (
-              <div className="custom-tool-form">
-                <label>
-                  Name
-                  <input
-                    value={toolDraft.name}
-                    maxLength={60}
-                    placeholder="Weather lookup"
-                    onChange={(e) => setToolDraft({ ...toolDraft, name: e.target.value })}
-                  />
-                </label>
-                <label>
-                  Endpoint (https://)
-                  <input
-                    value={toolDraft.url}
-                    placeholder="https://api.example.com/weather"
-                    onChange={(e) => setToolDraft({ ...toolDraft, url: e.target.value })}
-                  />
-                </label>
-                <label>
-                  Description for the model
-                  <input
-                    value={toolDraft.description}
-                    maxLength={400}
-                    placeholder="Gets the current weather for a city"
-                    onChange={(e) => setToolDraft({ ...toolDraft, description: e.target.value })}
-                  />
-                </label>
-                <label>
-                  Parameters (comma-separated names)
-                  <input
-                    value={toolDraft.params}
-                    placeholder="city, units"
-                    onChange={(e) => setToolDraft({ ...toolDraft, params: e.target.value })}
-                  />
-                </label>
-                <label>
-                  Method
-                  <select
-                    value={toolDraft.method}
-                    onChange={(e) => setToolDraft({ ...toolDraft, method: e.target.value })}
-                  >
-                    <option value="POST">POST (JSON body)</option>
-                    <option value="GET">GET (query string)</option>
-                  </select>
-                </label>
-                <div>
-                  <button className="secondary-button compact" onClick={() => setToolDraft(null)}>
-                    Cancel
-                  </button>
-                  <button
-                    className="primary-button compact"
-                    disabled={!toolDraft.name.trim() || !/^https:\/\/[\w.-]+/.test(toolDraft.url)}
-                    onClick={() => {
-                      request('/api/account/plugins/custom-tools', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          name: toolDraft.name,
-                          url: toolDraft.url,
-                          description: toolDraft.description,
-                          method: toolDraft.method,
-                          parameters: toolDraft.params
-                            .split(',')
-                            .map((part) => part.trim())
-                            .filter(Boolean)
-                            .map((name) => ({ name, type: 'string', required: true })),
-                        }),
-                      })
-                        .then((r) => r.json())
-                        .then((data) => {
-                          if (data.customTools) setCustomTools(data.customTools);
-                          setToolDraft(null);
-                        })
-                        .catch(() => {});
-                    }}
-                  >
-                    Save tool
-                  </button>
-                </div>
-              </div>
-            )}
-            <div className="custom-tool-list">
-              {customTools.map((tool) => (
-                <div className="custom-tool-item" key={tool.id}>
-                  <span>
-                    <b>{tool.name}</b>
-                    <small>
-                      {tool.method} {tool.url}
-                    </small>
-                  </span>
-                  <button
-                    className="tiny-action danger-text"
-                    title="Delete"
-                    onClick={() => {
-                      request(`/api/account/plugins/custom-tools/${encodeURIComponent(tool.id)}`, {
-                        method: 'DELETE',
-                      })
-                        .then((r) => r.json())
-                        .then((data) => {
-                          if (data.customTools) setCustomTools(data.customTools);
-                        })
-                        .catch(() => {});
-                    }}
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-              ))}
-              {!customTools.length && !toolDraft && (
-                <div className="empty-history">No custom tools yet.</div>
-              )}
-            </div>
           </div>
         ) : tab === 'usage' ? (
           <UsageDashboard request={request} />
@@ -2947,8 +2768,8 @@ function PublicSharePage({ shareId }) {
   }, [shareId]);
   useEffect(() => {
     document.title = share?.title
-      ? `${share.title} · Nemotron Agent Lab`
-      : 'Shared response · Nemotron Agent Lab';
+      ? `${share.title} · Nemi`
+      : 'Shared response · Nemi';
   }, [share]);
   if (!loading && errorStatus === 404)
     return (
@@ -2972,7 +2793,7 @@ function PublicSharePage({ shareId }) {
     <div className="public-share-page">
       <header>
         <div className="brand-mark">✦</div>
-        <b>Nemotron Agent Lab</b>
+        <b>Nemi</b>
         <span>Shared content</span>
       </header>
       <main>
@@ -3084,6 +2905,7 @@ export default function App() {
     [drawer, setDrawer] = useState(false),
     [prefsOpen, setPrefsOpen] = useState(false),
     [libraryOpen, setLibraryOpen] = useState(false),
+    [attachMenuOpen, setAttachMenuOpen] = useState(false),
     [libraryRefresh, setLibraryRefresh] = useState(0);
   const [input, setInput] = useState(''),
     [files, setFiles] = useState([]),
@@ -3092,6 +2914,7 @@ export default function App() {
   const scrollRef = useRef(null),
     textareaRef = useRef(null),
     fileRef = useRef(null),
+    photoRef = useRef(null),
     abortRef = useRef(null),
     followScrollRef = useRef(true),
     titleRequestRef = useRef(0),
@@ -3101,6 +2924,7 @@ export default function App() {
     initialRouteHandledRef = useRef(false),
     loadStartedRef = useRef(false),
     recoveryStartedRef = useRef(false),
+    activeDiscoveryDoneRef = useRef(false),
     authFeedbackRef = useRef(null);
   const activeChat = useMemo(() => chats.find((c) => c._id === activeId), [chats, activeId]);
   const activePlan = useMemo(() => latestActivePlan(messages), [messages]);
@@ -3137,7 +2961,7 @@ export default function App() {
         prompt: `Help me make practical progress on this: ${projectMemory.slice(0, 300)}`,
       });
     }
-    return [...personalized, ...recent, ...SUGGESTIONS].slice(0, 5);
+    return [...personalized, ...recent].slice(0, 5);
   }, [chats, memories]);
 
   const loadAccount = useCallback(async () => {
@@ -3409,6 +3233,15 @@ export default function App() {
       setActiveBranchId(chat.activeBranchId || 'main');
       setBranches(chat.branches || []);
       setMessages(chat.messages || []);
+      if (!recoveryStartedRef.current && !busy) {
+        try {
+          const activeResponse = await request(`/api/chat/stream/active?chatId=${encodeURIComponent(id)}`);
+          const activePayload = await activeResponse.json();
+          if (activePayload.active && activePayload.generation?.generationId) {
+            setPendingRecovery({ chatId: id, generationId: activePayload.generation.generationId, startedAt: Date.parse(activePayload.generation.startedAt) || Date.now(), assistantMessageId: (chat.messages || []).findLast?.((item) => item.role === 'assistant' && item.isStreaming)?.id || '', checkpoint: activePayload.checkpoint || null });
+          }
+        } catch { /* Chat history remains available even if live-session discovery is temporarily unavailable. */ }
+      }
       const savedTop = Number(localStorage.getItem(`nemotron.scroll.${id}`) || 0);
       requestAnimationFrame(() => {
         if (sequence === chatLoadSeqRef.current && scrollRef.current) {
@@ -3430,6 +3263,25 @@ export default function App() {
     }
   };
   useEffect(() => {
+    if (!chatsLoaded || busy || pendingRecovery || recoveryStartedRef.current || activeDiscoveryDoneRef.current || !chats.length) return undefined;
+    let cancelled = false;
+    activeDiscoveryDoneRef.current = true;
+    void (async () => {
+      try {
+        const response = await request('/api/chat/stream/active');
+        const data = await response.json();
+        if (cancelled || !data.active || !data.generation?.generationId || !data.generation?.chatId) return;
+        if (data.generation.chatId === activeId) {
+          setPendingRecovery({ chatId: activeId, generationId: data.generation.generationId, startedAt: Date.parse(data.generation.startedAt) || Date.now(), assistantMessageId: '', checkpoint: data.checkpoint || null });
+        } else {
+          await selectChat(data.generation.chatId);
+        }
+      } catch { /* Account history remains usable if live-session discovery is temporarily unavailable. */ }
+    })();
+    return () => { cancelled = true; };
+  }, [chatsLoaded, activeId, busy, pendingRecovery, chats]);
+
+  useEffect(() => {
     if (!chatsLoaded || !pendingRecovery || recoveryStartedRef.current) return;
     recoveryStartedRef.current = true;
     const recovery = pendingRecovery;
@@ -3450,7 +3302,7 @@ export default function App() {
       let output = '';
       let toolEvents = [];
       let agentEvents = [];
-      let agentPlan = null;
+      let agentPlan = recovery.checkpoint?.plan || null;
       try {
         await selectChat(recovery.chatId);
         const chatResponse = await request(`/api/chats/${encodeURIComponent(recovery.chatId)}`);
@@ -4477,7 +4329,7 @@ export default function App() {
           const selected = event.type === 'model_switch' ? event.to : event.model;
           modelInfo = selected || modelInfo;
           routingInfo = event.routing || routingInfo;
-          if (event.type === 'model_switch') setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: `Switching to ${selected?.name || 'another Nemotron model'} to recover the request.`, lastActivityAt: Date.now() }));
+          if (event.type === 'model_switch') setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: `Switching to ${selected?.name || 'another AI model'} to recover the request.`, lastActivityAt: Date.now() }));
           update();
         }
         if (event.type === 'final_content') {
@@ -4683,6 +4535,16 @@ export default function App() {
       setLiveProgress(null);
     }
   };
+  const attachLibraryFile = async (file) => {
+    try {
+      const path = file.kind === 'upload' ? `/api/interpreter/uploads/${encodeURIComponent(file.uploadId || file.id)}` : `/api/interpreter/artifacts/${encodeURIComponent(file.id)}`;
+      const response = await request(path);
+      const blob = await response.blob();
+      addFiles([new File([blob], file.name, { type: file.mimeType || blob.type || 'application/octet-stream' })]);
+      setLibraryOpen(false);
+      setToast({ id: Date.now(), message: `${file.name} attached.`, type: 'success' });
+    } catch (error) { setFileError(error.message || 'Could not attach this library file.'); }
+  };
   const addFiles = (fileList) => {
     const next = [...fileList];
     if (files.length + next.length > 6) {
@@ -4772,7 +4634,7 @@ export default function App() {
           </button>
           <div className="brand-mark">✦</div>
           <div className="brand-text">
-            <b>Nemotron Agent Lab</b>
+            <b>Nemi</b>
             <small>PERSONAL WORKSPACE</small>
           </div>
         </div>
@@ -5029,14 +4891,19 @@ export default function App() {
             />
             <div className="composer-controls">
               <div className="composer-left">
-                <button
-                  type="button"
-                  className="composer-icon"
-                  title="Attach images, videos, MP3/WAV audio or documents"
-                  onClick={() => fileRef.current?.click()}
-                >
-                  <Paperclip size={17} />
+                <button type="button" className="composer-icon" title="Open File Library" onClick={() => setLibraryOpen(true)}>
+                  <Files size={16} />
                 </button>
+                <div className="attachment-source-wrap">
+                  <button type="button" className={`composer-icon ${attachMenuOpen ? 'active' : ''}`} title="Choose an attachment source" onClick={() => setAttachMenuOpen((value) => !value)}><Paperclip size={17} /></button>
+                  {attachMenuOpen && <div className="attachment-source-menu">
+                    <button type="button" onClick={() => { setAttachMenuOpen(false); photoRef.current?.click(); }}><FileImage size={15} /> Photos</button>
+                    <button type="button" onClick={() => { setAttachMenuOpen(false); fileRef.current?.click(); }}><FileText size={15} /> Files</button>
+                    <button type="button" onClick={() => { setAttachMenuOpen(false); setLibraryOpen(true); }}><Files size={15} /> From library</button>
+                    <button type="button" onClick={() => { setAttachMenuOpen(false); const url = window.prompt('Enter a public file or webpage URL'); if (url && /^https?:\/\//i.test(url.trim())) setInput((value) => `${value}${value ? '\n\n' : ''}Please inspect this URL: ${url.trim()}`); else if (url) setFileError('Enter a valid HTTP or HTTPS URL.'); }}><Link size={15} /> From URL</button>
+                  </div>}
+                </div>
+                <input ref={photoRef} hidden type="file" accept="image/*" multiple onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }} />
                 <input
                   ref={fileRef}
                   hidden
@@ -5050,10 +4917,10 @@ export default function App() {
                 />
                 <select
                   className="model-selector"
-                  aria-label="Nemotron model"
+                  aria-label="AI model"
                   value={preferences.activeModel || 'auto'}
                   onChange={(event) => savePreferences({ ...preferences, activeModel: event.target.value })}
-                  title="Choose Auto routing or a Nemotron model"
+                  title="Choose Auto routing or a AI model"
                 >
                   <option value="auto">Auto · Recommended</option>
                   <option value="bolt">Bolt · Quick text</option>
@@ -5113,10 +4980,6 @@ export default function App() {
         onDelete={removeChat}
         onRename={renameChat}
         onChatMeta={(chat) => setMetaChat(chat)}
-        onOpenLibrary={() => {
-          setDrawer(false);
-          setLibraryOpen(true);
-        }}
         onBulkDelete={bulkDeleteChats}
         deletingChatIds={deletingChatIds}
         chatsLoaded={chatsLoaded}
@@ -5125,6 +4988,7 @@ export default function App() {
       <FileLibraryDialog
         open={libraryOpen}
         onClose={() => setLibraryOpen(false)}
+        onAttach={attachLibraryFile}
         refreshKey={libraryRefresh}
       />
       <PreferencesDialog

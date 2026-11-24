@@ -1,6 +1,6 @@
-# Nemotron Client — React Frontend
+# Nemi Client — React Frontend
 
-A full-stack Agent Lab interface for NVIDIA Nemotron 3.5 Super VL, built with React, Vite, and MongoDB.
+Nemi user interface built with React and Vite.
 
 ## Features
 

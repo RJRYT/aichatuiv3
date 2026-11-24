@@ -13,6 +13,7 @@ import {
   setBranchMessages,
 } from '../services/conversationBranches.js';
 import logger from '../utils/logger.js';
+import { aggregateUsageRecords, backfillChatUsage } from '../services/usageRecords.js';
 import { aggregateUsageFromChats } from '../services/usageAnalytics.js';
 import { deleteSandboxForChat } from '../services/interpreter/sandboxManager.js';
 import { deleteWorkspaceForChat } from '../services/workspace/workspaceManager.js';
@@ -29,12 +30,29 @@ router.get('/usage', async (req, res, next) => {
   try {
     res.set('Cache-Control', 'private, no-store');
     const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 90);
-    const indexSince = new Date(Date.now() - (days + 2) * 86400000);
-    const index = (await listChats(owner(req))).filter((item) => new Date(item.updatedAt || item.createdAt || 0) >= indexSince);
-    // listChats intentionally returns only lightweight index rows. Hydrate each chat before
-    // calculating usage; otherwise branch messages are absent and the dashboard reports zero.
+    const index = await listChats(owner(req));
     const chats = (await Promise.all(index.map((item) => getChat(owner(req), String(item._id))))).filter(Boolean);
-    const analytics = aggregateUsageFromChats(chats, days);
+    const legacy = aggregateUsageFromChats(chats, days);
+    const persisted = await aggregateUsageRecords(owner(req), days, Date.now(), chats.map((chat) => String(chat._id)));
+    const totals = { ...legacy.totals };
+    for (const [key, value] of Object.entries(persisted.totals || {})) {
+      if (key === 'avgResponseMs') continue;
+      totals[key] = (Number(totals[key]) || 0) + (Number(value) || 0);
+    }
+    totals.avgResponseMs = totals.assistantDurations ? Math.round(totals.responseMs / totals.assistantDurations) : 0;
+    const dailyMap = new Map((legacy.daily || []).map((item) => [item.date, { ...item }]));
+    for (const item of persisted.daily || []) {
+      const current = dailyMap.get(item.date) || { date: item.date, userMessages: 0, assistantMessages: 0, toolCalls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, responseMs: 0, requestsWithUsage: 0 };
+      for (const key of ['userMessages','assistantMessages','toolCalls','promptTokens','completionTokens','totalTokens','responseMs','requestsWithUsage']) current[key] = (Number(current[key]) || 0) + (Number(item[key]) || 0);
+      dailyMap.set(item.date, current);
+    }
+    const modelUsage = { ...(legacy.modelUsage || {}) };
+    for (const [alias, item] of Object.entries(persisted.modelUsage || {})) {
+      const current = modelUsage[alias] || { requests: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+      for (const key of ['requests','promptTokens','completionTokens','totalTokens']) current[key] = (Number(current[key]) || 0) + (Number(item[key]) || 0);
+      modelUsage[alias] = current;
+    }
+    const analytics = { since: legacy.since, totals, daily: [...dailyMap.values()].sort((a,b) => a.date.localeCompare(b.date)), modelUsage };
     res.json({ usage: { days, ...analytics, folders: [...new Set(chats.map((chat) => String(chat.folder || '')).filter(Boolean))].sort(), tagCounts: {} } });
   } catch (error) { next(error); }
 });
@@ -403,6 +421,9 @@ router.patch('/:id/messages/:messageId', async (req, res, next) => {
 async function removeChatResources(ownerId, chatId, { deleteLibraryFiles = false, deleteSharedSegments = false } = {}) {
   const chat = await getChat(ownerId, chatId);
   if (!chat) return { found: false };
+  // Preserve all usage, including historical branches and regenerated versions,
+  // before deleting the conversation document.
+  await backfillChatUsage(ownerId, chat);
   cancelChatGenerationsForChat(chatId, ownerId);
   // Remove owned resources before deleting the parent chat so failures remain retryable.
   await deleteSandboxForChat(ownerId, chatId);
