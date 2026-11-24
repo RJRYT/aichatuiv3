@@ -266,6 +266,7 @@ router.post('/stream', async (req, res, next) => {
           const previousById = new Map(
             previousMessages.filter((message) => message.id).map((message) => [message.id, message])
           );
+          const generatedIds = new Set(generatedMessages.map((message) => String(message.id || '')).filter(Boolean));
           const messagesWithHistory = generatedMessages.map((message, index) => {
             const previous =
               (message.id && previousById.get(message.id)) || previousMessages[index];
@@ -291,6 +292,9 @@ router.post('/stream', async (req, res, next) => {
               activeVersion: message.activeVersion ?? previous.activeVersion,
             };
           });
+          // Preserve messages added by another tab/device while this generation ran.
+          const concurrentMessages = previousMessages.filter((message) => message.id && !generatedIds.has(String(message.id)));
+          messagesWithHistory.push(...concurrentMessages);
           if (!setBranchMessages(current, branchId, messagesWithHistory))
             throw Object.assign(new Error('Conversation branch no longer exists.'), {
               status: 409,
@@ -301,7 +305,7 @@ router.post('/stream', async (req, res, next) => {
           messages: current.messages,
           activeBranchId: branchId,
           revision: (current.revision || 0) + 1,
-          expectedRevision: req.body.expectedRevision ?? (existing.revision || 0),
+          expectedRevision: current.revision || 0,
         });
         if (!saved) {
           throw Object.assign(

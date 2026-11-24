@@ -3599,9 +3599,9 @@ body[data-theme] {
   color: var(--text);
 }
 .app[data-theme] .message-error {
-  background: rgba(239, 68, 68, 0.12);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
   border-color: var(--border);
-  color: #fca5a5;
+  color: var(--red);
 }
 
 /* Skeleton & loading */
@@ -3988,7 +3988,7 @@ body[data-theme] {
   color: var(--text);
 }
 .app[data-theme] .field-error {
-  color: #fca5a5;
+  color: var(--red);
 }
 .app[data-theme] .save-hint {
   color: var(--muted);
@@ -4052,9 +4052,9 @@ body[data-theme] {
   color: var(--muted);
 }
 .app[data-theme] .error-notice {
-  background: rgba(239, 68, 68, 0.12);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
   border-color: var(--border);
-  color: #fca5a5;
+  color: var(--red);
 }
 .app[data-theme] .status-page {
   background: var(--bg);
@@ -4320,19 +4320,6 @@ body[data-theme] {
 }
 
 /* Nemotron model routing and provider identity */
-.model-selector {
-  max-width: 190px;
-  min-width: 132px;
-  height: 32px;
-  border: 1px solid var(--border, rgba(255,255,255,.12));
-  border-radius: 9px;
-  padding: 0 9px;
-  color: var(--text, inherit);
-  background: var(--surface-2, rgba(255,255,255,.045));
-  font: inherit;
-  font-size: 11px;
-  outline-offset: 2px;
-}
 .model-badge {
   display: inline-flex;
   align-items: center;
@@ -4367,7 +4354,7 @@ body[data-theme] {
 .usage-model-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 12px; }
 .usage-model-row span { display: flex; gap: 8px; align-items: center; }
 .usage-model-row small { color: var(--muted, #999); }
-@media (max-width: 620px) { .integration-fields { grid-template-columns: 1fr; } .integration-card-head { flex-direction: column; } .model-selector { max-width: 140px; min-width: 105px; } }
+@media (max-width: 620px) { .integration-fields { grid-template-columns: 1fr; } .integration-card-head { flex-direction: column; } }
 
 /* v8.3 personality controls and developer credential fields */
 .persona-section {
@@ -4764,3 +4751,107 @@ body[data-theme] {
 .app[data-theme] .drawer-filters button.selected { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
 
 .app[data-theme] .plugin-entry i.not-configured { background: var(--warning, var(--accent2)); }
+
+/* Nemi v8.5.5 — component-scoped dialogs, menus and theme-safe controls */
+.app-dialog-layer { z-index: 80; }
+.app-dialog {
+  width: min(440px, 100%);
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 24px 90px color-mix(in srgb, var(--bg) 55%, transparent);
+}
+.app-dialog-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.app-dialog-heading h2 { margin:5px 0 0; color:var(--text); font-size:18px; }
+.app-dialog-message { margin:0; color:var(--muted); font-size:13px; line-height:1.65; white-space:pre-wrap; overflow-wrap:anywhere; }
+.app-dialog-input,
+.app-dialog-copy input { width:100%; min-width:0; padding:10px 12px; border:1px solid var(--border); border-radius:9px; background:var(--panel2); color:var(--text); outline:none; }
+.app-dialog-input:focus,
+.app-dialog-copy input:focus { border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
+.app-dialog-copy { display:flex; align-items:center; gap:8px; }
+.app-dialog-copy .secondary-button { display:flex; align-items:center; gap:6px; flex:none; }
+.app-dialog-actions { display:flex; justify-content:flex-end; gap:8px; padding-top:4px; }
+.app-dialog .danger-text { color:var(--red); }
+.select-menu { position:relative; display:inline-flex; min-width:0; }
+.select-menu-trigger { display:flex; align-items:center; justify-content:space-between; gap:9px; width:100%; min-width:0; padding:8px 10px; border:1px solid var(--border); border-radius:8px; background:var(--panel2); color:var(--text); font-size:11px; text-align:left; }
+.select-menu-trigger:hover,
+.select-menu-trigger[aria-expanded="true"] { border-color:var(--accent); background:var(--panel3); }
+.select-menu-trigger > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.select-menu-popover { position:absolute; z-index:70; right:0; bottom:calc(100% + 7px); min-width:max(100%, 190px); max-width:min(280px, 80vw); max-height: min(340px, 55vh); overflow:auto; padding:5px; border:1px solid var(--border); border-radius:11px; background:var(--panel); color:var(--text); box-shadow:0 16px 45px color-mix(in srgb, var(--bg) 65%, transparent); }
+.select-menu-popover button { display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; padding:9px 10px; border:0; border-radius:7px; background:transparent; color:var(--text); font-size:11px; text-align:left; }
+.select-menu-popover button:hover,
+.select-menu-popover button.selected { background:var(--panel3); color:var(--accent2); }
+.model-select-menu { width:clamp(145px, 20vw, 220px); }
+.model-select-menu .select-menu-trigger { min-height:34px; font-size:10px; }
+.model-select-menu .select-menu-popover { min-width:220px; bottom:calc(100% + 8px); }
+.branch-select-menu { width:120px; }
+.preference-grid .select-menu { display:flex; width:100%; margin-top:6px; }
+.preference-grid .select-menu-trigger { min-height:38px; }
+.pin-flag { flex:none; margin-right:4px; color:var(--accent); fill:color-mix(in srgb, var(--accent) 20%, transparent); }
+.history-item .delete-chat { display:grid; place-items:center; width:30px; height:30px; flex:none; border:1px solid transparent; border-radius:7px; background:transparent; color:var(--muted); }
+.history-item .delete-chat:hover { border-color:var(--border); background:var(--panel3); color:var(--accent2); }
+.history-item .delete-chat:last-child:hover { color:var(--red); }
+.chat-meta-dialog { background:var(--panel); color:var(--text); border-color:var(--border); }
+.chat-meta-dialog .dialog-head,
+.chat-meta-dialog .meta-row,
+.chat-meta-dialog .dialog-actions { color:var(--text); }
+.chat-meta-dialog .meta-row > span { color:var(--muted); }
+.chat-meta-dialog input:not([type="checkbox"]) { background:var(--panel2); color:var(--text); border-color:var(--border); }
+.chat-meta-dialog .secondary-button { background:var(--panel2); color:var(--text); border-color:var(--border); }
+.chat-meta-dialog .primary-button { background:var(--accent); color:var(--bg); border-color:var(--accent); }
+.chat-meta-dialog .primary-button.danger-text { background:color-mix(in srgb, var(--red) 15%, var(--panel)); color:var(--red); border-color:color-mix(in srgb, var(--red) 45%, var(--border)); }
+.workspace-tools .branch-select-menu .select-menu-trigger { max-width:120px; font-size:9px; padding:7px; }
+.app[data-theme] .new-chat-button { background:var(--panel2); color:var(--accent2); border-color:var(--border); }
+.app[data-theme] .history-item.active,
+.app[data-theme] .history-item:hover { background:var(--panel2); }
+.app[data-theme] .history-select { background:transparent; color:var(--text); }
+.app[data-theme] .delete-chat { color:var(--muted); }
+.app[data-theme] .delete-chat:hover { background:var(--panel3); color:var(--accent2); }
+.app[data-theme] .app-dialog,
+.app[data-theme] .select-menu-popover { background:var(--panel); color:var(--text); border-color:var(--border); }
+.app[data-theme] .app-dialog-input,
+.app[data-theme] .app-dialog-copy input,
+.app[data-theme] .select-menu-trigger { background:var(--panel2); color:var(--text); border-color:var(--border); }
+.app[data-theme='light'] .app-dialog-layer { background:color-mix(in srgb, var(--bg) 38%, transparent); }
+.app[data-theme='light'] .app-dialog,
+.app[data-theme='light'] .select-menu-popover { box-shadow:0 20px 70px rgba(24,35,27,.18); }
+@media (max-width:620px) {
+  .app-dialog { padding:16px; }
+  .model-select-menu { width:135px; }
+  .model-select-menu .select-menu-popover { min-width:190px; }
+  .app-dialog-copy { align-items:stretch; flex-direction:column; }
+}
+
+/* Dialog structure was missing from the earlier theme-only overrides. */
+.chat-meta-dialog {
+  width:min(480px, 100%);
+  max-height:min(88vh, 720px);
+  overflow:auto;
+  display:flex;
+  flex-direction:column;
+  gap:14px;
+  padding:20px;
+  border:1px solid var(--border);
+  border-radius:14px;
+  background:var(--panel);
+  color:var(--text);
+  box-shadow:0 24px 80px color-mix(in srgb, var(--bg) 55%, transparent);
+}
+.chat-meta-dialog .dialog-head { display:flex; align-items:center; justify-content:space-between; gap:12px; color:var(--text); font-size:14px; }
+.chat-meta-dialog .meta-row { display:flex; align-items:center; justify-content:space-between; gap:16px; margin:0; color:var(--muted); font-size:12px; line-height:1.55; }
+.chat-meta-dialog .meta-row > span { min-width:0; flex:1; }
+.chat-meta-dialog .meta-row input:not([type="checkbox"]) { width:min(190px, 48%); min-width:0; padding:9px 10px; border:1px solid var(--border); border-radius:8px; background:var(--panel2); color:var(--text); }
+.chat-meta-dialog .toggle-row { flex:none; gap:12px; padding:0; }
+.chat-meta-dialog .dialog-actions { display:flex; justify-content:flex-end; gap:8px; padding-top:8px; border-top:1px solid var(--border); }
+.chat-meta-dialog .switch { flex:none; background:var(--border); border:1px solid color-mix(in srgb, var(--text) 12%, transparent); }
+.chat-meta-dialog .switch.on { background:var(--accent); }
+.chat-meta-dialog .switch i { background:var(--panel); }
+.chat-meta-dialog .switch.on i { background:var(--bg); }
+.chat-meta-dialog .primary-button { background:var(--accent); color:var(--bg); border:1px solid var(--accent); }
+.chat-meta-dialog .secondary-button { background:var(--panel2); color:var(--text); border:1px solid var(--border); }
+.chat-meta-dialog .primary-button.danger-text { background:color-mix(in srgb, var(--red) 14%, var(--panel)); color:var(--red); border-color:color-mix(in srgb, var(--red) 45%, var(--border)); }
+@media (max-width:560px) { .chat-meta-dialog { padding:16px; } .chat-meta-dialog .meta-row { align-items:flex-start; flex-direction:column; gap:8px; } .chat-meta-dialog .meta-row input:not([type="checkbox"]) { width:100%; } }

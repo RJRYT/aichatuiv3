@@ -1,7 +1,7 @@
 {
   "name": "@nemi/server",
   "private": true,
-  "version": "8.5.4",
+  "version": "8.5.5",
   "type": "module",
   "scripts": {
     "start": "node src/server.js",

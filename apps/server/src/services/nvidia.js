@@ -15,9 +15,9 @@ const MAX_EXECUTION_TOOL_CALLS = Math.max(8, Math.min(128, Number(process.env.AG
 const MAX_RECOVERY_ATTEMPTS_PER_TOOL = Math.max(1, Math.min(5, Number(process.env.AGENT_MAX_RECOVERY_ATTEMPTS) || 3));
 const MODEL_STREAM_IDLE_TIMEOUT_MS = Math.max(60_000, Math.min(10 * 60_000, Number(process.env.AGENT_MODEL_STREAM_IDLE_TIMEOUT_MS) || 5 * 60_000));
 const MODEL_ROUND_TIMEOUT_MS = Math.max(60_000, Math.min(20 * 60_000, Number(process.env.AGENT_MODEL_ROUND_TIMEOUT_MS) || 15 * 60_000));
-// Total wall-clock budget for one agent turn. This is a soft deadline: the
-// current model/tool operation is allowed to settle, then the agent summarizes.
-export const CHAT_TURN_TIMEOUT_MS = Math.max(15 * 60_000, Math.min(4 * 60 * 60_000, Number(process.env.AGENT_CHAT_TURN_TIMEOUT_MS) || 60 * 60_000));
+// Total wall-clock budget for one agent turn. Keep long-running work alive across
+// browser disconnects; the default is four hours and can be tuned by deployment.
+export const CHAT_TURN_TIMEOUT_MS = Math.max(15 * 60_000, Math.min(4 * 60 * 60_000, Number(process.env.AGENT_CHAT_TURN_TIMEOUT_MS) || 4 * 60 * 60_000));
 const MODEL_HEARTBEAT_INTERVAL_MS = 20_000;
 const activeChatGenerations = new Map();
 

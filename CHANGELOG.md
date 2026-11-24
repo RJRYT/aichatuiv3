@@ -1,5 +1,21 @@
 # Changelog
 
+## [8.5.5] - 2026-11-24
+
+### Fixed
+- Reworked the conversation metadata/delete dialog layout and switch semantics; corrected nested-label markup that could distort the pinned toggle.
+- Added component-scoped theme styles for dialogs, pinned controls, model selection, branch selection, and other interactive menus instead of relying on broad inherited overrides.
+- Fixed a stale-revision persistence conflict: completed assistant responses now merge against the latest chat revision and preserve messages added from another tab/device while generation was running.
+- Increased the default soft agent-turn deadline from one hour to four hours so long tasks are not prematurely finalized at the previous one-hour boundary.
+- Clarified that workspace paths are private server-side storage and that requested deliverables must be exported to the user's File Library before they are reported as available.
+
+### Improved
+- Replaced native browser alert, prompt, and confirm dialogs with a consistent in-app dialog system.
+- Replaced native select menus used for model, branch, and preference selection with theme-aware custom dropdowns.
+
+### Verification
+- Focused server tests and source-contract tests pass; full dependency install and production build remain subject to the environment's dependency availability.
+
 All notable changes to this project are documented here. Entries describe release-level changes; patch notes are consolidated here rather than appended to the README.
 
 ## [8.5.4] - 2026-11-24

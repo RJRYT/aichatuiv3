@@ -82,3 +82,32 @@ test('legacy hardcoded UI colors are covered by theme-aware semantic overrides',
   assert.match(styles, /\.app\[data-theme\] \.composer/);
   assert.match(styles, /\.app\[data-theme\] \.file-library-modal/);
 });
+
+
+test('browser dialogs and native select controls are replaced with themed application components', async () => {
+  const client = await read('../../client/src/App.jsx');
+  const styles = await read('../../client/src/styles.css');
+  assert.doesNotMatch(client, /window\.(?:alert|prompt|confirm)\s*\(/);
+  assert.match(client, /function AppDialogHost\(/);
+  assert.match(client, /function SelectMenu\(/);
+  assert.match(client, /className="model-select-menu"/);
+  assert.match(styles, /\.app-dialog-layer/);
+  assert.match(styles, /\.select-menu-popover/);
+  assert.match(styles, /\.chat-meta-dialog \.switch/);
+});
+
+test('assistant deliverables must be exported out of private workspace storage', async () => {
+  const prompt = await read('../prompts/system-prompt.md');
+  const tools = await read('../src/services/tools.js');
+  assert.match(prompt, /user does not have direct filesystem access/i);
+  assert.match(prompt, /workspace_export/);
+  assert.match(prompt, /never tell the user to retrieve/i);
+  assert.match(tools, /user cannot directly access workspace paths/i);
+});
+
+test('completed responses merge against the latest chat revision after client disconnects', async () => {
+  const route = await read('../src/routes/chat.js');
+  assert.match(route, /expectedRevision: current\.revision \|\| 0/);
+  assert.match(route, /Preserve messages added by another tab\/device while this generation ran/);
+  assert.match(route, /messagesWithHistory\.push\(\.\.\.concurrentMessages\)/);
+});

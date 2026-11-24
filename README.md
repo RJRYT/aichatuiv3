@@ -1,4 +1,4 @@
-# Nemi v8.5.4 — AI Workspace
+# Nemi v8.5.5 — AI Workspace
 
 A full-stack AI workspace with a conversational assistant, project tools, persistent files, and isolated execution capabilities.
 

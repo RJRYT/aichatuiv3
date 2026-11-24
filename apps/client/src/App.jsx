@@ -71,6 +71,88 @@ import {
   responseError,
 } from './chatStream.js';
 
+
+const APP_DIALOG_EVENT = 'nemi:app-dialog';
+function showAppDialog(options = {}) {
+  return new Promise((resolve) => {
+    window.dispatchEvent(new CustomEvent(APP_DIALOG_EVENT, { detail: { ...options, resolve } }));
+  });
+}
+
+function AppDialogHost() {
+  const [active, setActive] = useState(null);
+  const [value, setValue] = useState('');
+  const queue = useRef([]);
+  useEffect(() => {
+    const receive = (event) => {
+      queue.current.push(event.detail);
+      setActive((current) => current || queue.current.shift() || null);
+    };
+    window.addEventListener(APP_DIALOG_EVENT, receive);
+    return () => window.removeEventListener(APP_DIALOG_EVENT, receive);
+  }, []);
+  useEffect(() => { setValue(String(active?.defaultValue ?? active?.copyText ?? '')); }, [active]);
+  useEffect(() => {
+    if (!active) return undefined;
+    const closeOnEscape = (event) => { if (event.key === 'Escape') { event.preventDefault(); active.resolve?.(null); setActive(queue.current.shift() || null); } };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [active]);
+  if (!active) return null;
+  const finish = (result) => {
+    active.resolve?.(result);
+    setActive(queue.current.shift() || null);
+  };
+  const submit = (event) => {
+    event.preventDefault();
+    finish(active.type === 'prompt' ? value : true);
+  };
+  return (
+    <div className="modal-layer app-dialog-layer" onMouseDown={() => finish(active.type === 'alert' ? true : null)}>
+      <form className="app-dialog" role="dialog" aria-modal="true" aria-labelledby="app-dialog-title" onSubmit={submit} onMouseDown={(event) => event.stopPropagation()}>
+        <div className="app-dialog-heading">
+          <div><span className="eyebrow">NEMI</span><h2 id="app-dialog-title">{active.title || (active.type === 'confirm' ? 'Are you sure?' : active.type === 'prompt' ? 'Enter a value' : 'Notice')}</h2></div>
+          <button type="button" className="icon-button" onClick={() => finish(null)} aria-label="Close"><X size={16}/></button>
+        </div>
+        {active.message && <p className="app-dialog-message">{active.message}</p>}
+        {active.type === 'prompt' && <input autoFocus className="app-dialog-input" value={value} onChange={(event) => setValue(event.target.value)} placeholder={active.placeholder || ''} readOnly={Boolean(active.readOnly)} />}
+        {active.copyText && <div className="app-dialog-copy"><input value={active.copyText} readOnly aria-label="Share link"/><button type="button" className="secondary-button compact" onClick={async () => { try { await navigator.clipboard.writeText(active.copyText); finish(true); } catch { setValue(active.copyText); } }}> <Copy size={13}/> Copy</button></div>}
+        <div className="app-dialog-actions">
+          {active.type !== 'alert' && <button type="button" className="secondary-button compact" onClick={() => finish(null)}>{active.cancelLabel || 'Cancel'}</button>}
+          {active.type !== 'alert' && <button type="submit" className={`primary-button compact ${active.danger ? 'danger-text' : ''}`}>{active.confirmLabel || (active.type === 'prompt' ? 'Continue' : 'Confirm')}</button>}
+          {active.type === 'alert' && <button type="button" className="primary-button compact" onClick={() => finish(true)}>OK</button>}
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function SelectMenu({ value, onChange, options = [], ariaLabel = 'Choose an option', className = '', disabled = false }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+  const selected = options.find((option) => String(option.value) === String(value)) || options[0];
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = (event) => { if (!rootRef.current?.contains(event.target)) setOpen(false); };
+    document.addEventListener('mousedown', close);
+    const key = (event) => { if (event.key === 'Escape') setOpen(false); };
+    document.addEventListener('keydown', key);
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', key); };
+  }, [open]);
+  return (
+    <div className={`select-menu ${className}`} ref={rootRef}>
+      <button type="button" className="select-menu-trigger" aria-label={ariaLabel} aria-haspopup="listbox" aria-expanded={open} disabled={disabled} onClick={() => setOpen((state) => !state)}>
+        <span>{selected?.label || 'Select'}</span><ChevronDown size={13}/>
+      </button>
+      {open && <div className="select-menu-popover" role="listbox" aria-label={ariaLabel}>
+        {options.map((option) => <button type="button" role="option" aria-selected={String(option.value) === String(value)} className={String(option.value) === String(value) ? 'selected' : ''} key={option.value} onClick={() => { onChange(option.value); setOpen(false); }}>
+          <span>{option.label}</span>{String(option.value) === String(value) && <Check size={13}/>}
+        </button>)}
+      </div>}
+    </div>
+  );
+}
+
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
 const DEFAULT_PREFERENCES = {
   baseStyle: 'friendly',
@@ -1505,7 +1587,7 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0, onAttach }) {
       .includes(search.toLowerCase())
   );
   const remove = async (file) => {
-    if (!window.confirm(`Delete ${file.name} from your File Library?`)) return;
+    if (!(await showAppDialog({ type: 'confirm', title: 'Delete file?', message: `Delete ${file.name} from your File Library?`, confirmLabel: 'Delete file', danger: true }))) return;
     try {
       await request(file.kind === 'upload' ? `/api/interpreter/uploads/${encodeURIComponent(file.uploadId || file.id)}` : `/api/interpreter/artifacts/${encodeURIComponent(file.id)}`, { method: 'DELETE' });
       if (previewFile?.id === file.id) setPreviewFile(null);
@@ -1517,7 +1599,7 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0, onAttach }) {
   };
   const bulkRemove = async () => {
     const ids = [...selectedFileIds];
-    if (!ids.length || !window.confirm(`Permanently delete ${ids.length} selected File Library item(s)?`)) return;
+    if (!ids.length || !(await showAppDialog({ type: 'confirm', title: 'Delete selected files?', message: `Permanently delete ${ids.length} selected File Library item(s)? This cannot be undone.`, confirmLabel: 'Delete files', danger: true }))) return;
     try {
       const selected = files.filter((file) => selectedFileIds.has(file.id));
       const results = await Promise.allSettled(selected.map((file) => request(file.kind === 'upload' ? `/api/interpreter/uploads/${encodeURIComponent(file.uploadId || file.id)}` : `/api/interpreter/artifacts/${encodeURIComponent(file.id)}`, { method: 'DELETE' })));
@@ -2029,10 +2111,10 @@ function ChatMetaDialog({ chat, onClose, onSave }) {
             <X size={16} />
           </button>
         </div>
-        <label className="meta-row">
+        <div className="meta-row">
           <span>Pin to top</span>
-          <Toggle label="" value={pinned} onChange={setPinned} />
-        </label>
+          <Toggle label="" ariaLabel="Pin conversation to top" value={pinned} onChange={setPinned} />
+        </div>
         <label className="meta-row">
           <span>Folder</span>
           <input
@@ -2561,11 +2643,11 @@ function PreferencesDialog({
               <div className="persona-presentation-controls">
                 <div className="personality-group-heading"><b>Communication preferences</b><small>These settings are part of Nemi's character and directly shape its responses.</small></div>
                 <div className="persona-presentation-grid">
-                  <label>Base style<select value={preferences.baseStyle || 'friendly'} onChange={(event) => update('baseStyle', event.target.value)}><option value="friendly">Friendly</option><option value="professional">Professional</option><option value="efficient">Efficient</option><option value="academic">Academic</option><option value="creative">Creative</option><option value="direct">Direct</option></select></label>
-                  <label>Base tone<select value={preferences.tone || 'balanced'} onChange={(event) => update('tone', event.target.value)}><option value="balanced">Balanced</option><option value="casual">Casual</option><option value="formal">Formal</option><option value="empathetic">Empathetic</option><option value="technical">Technical</option><option value="playful">Playful</option></select></label>
+                  <label>Base style<SelectMenu value={preferences.baseStyle || 'friendly'} onChange={(value) => update('baseStyle', value)} options={[['friendly','Friendly'],['professional','Professional'],['efficient','Efficient'],['academic','Academic'],['creative','Creative'],['direct','Direct']].map(([value,label]) => ({ value, label }))} ariaLabel="Base style" /></label>
+                  <label>Base tone<SelectMenu value={preferences.tone || 'balanced'} onChange={(value) => update('tone', value)} options={[['balanced','Balanced'],['casual','Casual'],['formal','Formal'],['empathetic','Empathetic'],['technical','Technical'],['playful','Playful']].map(([value,label]) => ({ value, label }))} ariaLabel="Base tone" /></label>
                   <label className="personality-slider"><span className="personality-slider-title"><b>Warmth</b><output>{preferences.warmth ?? 3}/5</output></span><input type="range" min="1" max="5" step="1" value={preferences.warmth ?? 3} onChange={(event) => update('warmth', Number(event.target.value))}/><span className="personality-slider-ends"><small>Reserved</small><small>Warm</small></span></label>
                   <label className="personality-slider"><span className="personality-slider-title"><b>Enthusiasm</b><output>{preferences.enthusiasm ?? 3}/5</output></span><input type="range" min="1" max="5" step="1" value={preferences.enthusiasm ?? 3} onChange={(event) => update('enthusiasm', Number(event.target.value))}/><span className="personality-slider-ends"><small>Calm</small><small>Energetic</small></span></label>
-                  <label>Emoji usage<select value={preferences.emoji || 'moderate'} onChange={(event) => update('emoji', event.target.value)}><option value="none">None</option><option value="minimal">Minimal</option><option value="moderate">Moderate</option><option value="expressive">Expressive</option></select></label>
+                  <label>Emoji usage<SelectMenu value={preferences.emoji || 'moderate'} onChange={(value) => update('emoji', value)} options={[['none','None'],['minimal','Minimal'],['moderate','Moderate'],['expressive','Expressive']].map(([value,label]) => ({ value, label }))} ariaLabel="Emoji usage" /></label>
                 </div>
                 <div className="persona-formatting-toggles">
                   <Toggle label="Visual answers when useful" value={preferences.visualAnswers !== false} onChange={(value) => update('visualAnswers', value)}/>
@@ -2720,20 +2802,21 @@ function PreferencesDialog({
     </div>
   );
 }
-function Toggle({ label, value, onChange }) {
+function Toggle({ label, value, onChange, ariaLabel }) {
   return (
-    <label className="toggle-row">
+    <div className="toggle-row">
       <span>{label}</span>
       <button
         type="button"
         role="switch"
+        aria-label={ariaLabel || label || 'Toggle setting'}
         aria-checked={value}
         className={`switch ${value ? 'on' : ''}`}
         onClick={() => onChange(!value)}
       >
         <i />
       </button>
-    </label>
+    </div>
   );
 }
 
@@ -3430,7 +3513,7 @@ export default function App() {
     }
   };
   const renameChat = async (chat) => {
-    const title = window.prompt('Rename conversation', chat.title || 'New chat');
+    const title = await showAppDialog({ type: 'prompt', title: 'Rename conversation', message: 'Choose a name for this conversation.', defaultValue: chat.title || 'New chat', placeholder: 'Conversation name', confirmLabel: 'Save name' });
     if (!title?.trim()) return;
     titleRequestRef.current++;
     manualTitleIdsRef.current.add(chat._id);
@@ -3457,7 +3540,7 @@ export default function App() {
   };
   const bulkDeleteChats = async (ids) => {
     const uniqueIds = [...new Set(ids)].filter((id) => chats.some((chat) => chat._id === id));
-    if (!uniqueIds.length || !window.confirm(`Delete ${uniqueIds.length} selected conversation(s) and ALL associated workspace files, library files, shared links, uploads, checkpoints and generation history? This cannot be undone.`)) return;
+    if (!uniqueIds.length || !(await showAppDialog({ type: 'confirm', title: 'Delete conversations?', message: `Delete ${uniqueIds.length} selected conversation(s) and ALL associated workspace files, library files, shared links, uploads, checkpoints and generation history? This cannot be undone.`, confirmLabel: 'Delete conversations' }))) return;
     setDeletingChatIds((current) => new Set([...current, ...uniqueIds]));
     try {
       const response = await request('/api/chats/bulk', { method: 'DELETE', body: JSON.stringify({ chatIds: uniqueIds }) });
@@ -3696,7 +3779,7 @@ export default function App() {
     try {
       await navigator.clipboard.writeText(data.url);
     } catch {
-      window.prompt('Copy this share link', data.url);
+      await showAppDialog({ type: 'alert', title: 'Share link created', message: 'Copy this link to share the response.', copyText: data.url });
     }
     setStatus('Share link copied');
   };
@@ -3722,7 +3805,7 @@ export default function App() {
       try {
         await navigator.clipboard.writeText(data.url);
       } catch {
-        window.prompt('Copy this full conversation share link', data.url);
+        await showAppDialog({ type: 'alert', title: 'Share link created', message: 'Copy this link to share the full conversation.', copyText: data.url });
       }
       setToast({
         id: Date.now(),
@@ -4670,37 +4753,19 @@ export default function App() {
           </div>
           <div className="workspace-tools">
             {branches.length > 1 && (
-              <select
-                aria-label="Conversation branch"
+              <SelectMenu
+                className="branch-select-menu"
+                ariaLabel="Conversation branch"
                 value={activeBranchId}
-                onChange={async (e) => {
-                  const id = e.target.value;
-                  const result = await request(`/api/chats/${activeId}/branches/${id}/activate`, {
-                    method: 'PATCH',
-                    body: JSON.stringify({
-                      expectedRevision: activeChat?.revision || 0,
-                    }),
-                  });
+                onChange={async (id) => {
+                  const result = await request(`/api/chats/${activeId}/branches/${id}/activate`, { method: 'PATCH', body: JSON.stringify({ expectedRevision: activeChat?.revision || 0 }) });
                   const data = await result.json();
                   setActiveBranchId(id);
                   setMessages(data.messages || []);
-                  setChats((current) => [
-                    data.chat,
-                    ...current.filter((c) => c._id !== data.chat._id),
-                  ]);
+                  setChats((current) => [data.chat, ...current.filter((c) => c._id !== data.chat._id)]);
                 }}
-              >
-                <option value={activeBranchId}>
-                  Branch {branches.findIndex((b) => b.branchId === activeBranchId) + 1}
-                </option>
-                {branches
-                  .filter((b) => b.branchId !== activeBranchId)
-                  .map((b, i) => (
-                    <option key={b.branchId} value={b.branchId}>
-                      Branch {branches.findIndex((x) => x.branchId === b.branchId) + 1}
-                    </option>
-                  ))}
-              </select>
+                options={branches.map((branch) => ({ value: branch.branchId, label: `Branch ${branches.findIndex((item) => item.branchId === branch.branchId) + 1}` }))}
+              />
             )}
             <button
               className="text-action"
@@ -4900,7 +4965,7 @@ export default function App() {
                     <button type="button" onClick={() => { setAttachMenuOpen(false); photoRef.current?.click(); }}><FileImage size={15} /> Photos</button>
                     <button type="button" onClick={() => { setAttachMenuOpen(false); fileRef.current?.click(); }}><FileText size={15} /> Files</button>
                     <button type="button" onClick={() => { setAttachMenuOpen(false); setLibraryOpen(true); }}><Files size={15} /> From library</button>
-                    <button type="button" onClick={() => { setAttachMenuOpen(false); const url = window.prompt('Enter a public file or webpage URL'); if (url && /^https?:\/\//i.test(url.trim())) setInput((value) => `${value}${value ? '\n\n' : ''}Please inspect this URL: ${url.trim()}`); else if (url) setFileError('Enter a valid HTTP or HTTPS URL.'); }}><Link size={15} /> From URL</button>
+                    <button type="button" onClick={async () => { setAttachMenuOpen(false); const url = await showAppDialog({ type: 'prompt', title: 'Attach from URL', message: 'Enter a public HTTP or HTTPS file or webpage URL. The URL will be added to your message for the assistant to inspect.', placeholder: 'https://example.com/file.pdf', confirmLabel: 'Add URL' }); if (url && /^https?:\/\//i.test(url.trim())) setInput((value) => `${value}${value ? '\n\n' : ''}Please inspect this URL: ${url.trim()}`); else if (url) setFileError('Enter a valid HTTP or HTTPS URL.'); }}><Link size={15} /> From URL</button>
                   </div>}
                 </div>
                 <input ref={photoRef} hidden type="file" accept="image/*" multiple onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }} />
@@ -4915,20 +4980,13 @@ export default function App() {
                     e.target.value = '';
                   }}
                 />
-                <select
-                  className="model-selector"
-                  aria-label="AI model"
+                <SelectMenu
+                  className="model-select-menu"
+                  ariaLabel="AI model"
                   value={preferences.activeModel || 'auto'}
-                  onChange={(event) => savePreferences({ ...preferences, activeModel: event.target.value })}
-                  title="Choose Auto routing or a AI model"
-                >
-                  <option value="auto">Auto · Recommended</option>
-                  <option value="bolt">Bolt · Quick text</option>
-                  <option value="surge">Surge · Agent workhorse</option>
-                  <option value="titan">Titan · Advanced reasoning</option>
-                  <option value="vision">Vision · Visual tasks</option>
-                  <option value="omni">Omni · Multimodal</option>
-                </select>
+                  onChange={(value) => savePreferences({ ...preferences, activeModel: value })}
+                  options={[{value:'auto',label:'Auto · Recommended'},{value:'bolt',label:'Bolt · Quick text'},{value:'surge',label:'Surge · Agent workhorse'},{value:'titan',label:'Titan · Advanced reasoning'},{value:'vision',label:'Vision · Visual tasks'},{value:'omni',label:'Omni · Multimodal'}]}
+                />
                 <button
                   type="button"
                   className={`thinking-control ${thinking ? 'enabled' : ''}`}
@@ -5067,7 +5125,7 @@ export default function App() {
                 Cancel
               </button>
               <button
-                className="primary-button compact danger-text"
+                className="primary-button compact"
                 disabled={deleteConfirmInput !== 'DELETE'}
                 onClick={confirmDeleteChat}
               >
@@ -5077,6 +5135,7 @@ export default function App() {
           </section>
         </div>
       )}
+      <AppDialogHost />
     </div>
   );
 }
