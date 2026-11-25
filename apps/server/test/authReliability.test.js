@@ -34,3 +34,14 @@ test('current-user endpoint safely handles a request without an authenticated us
   assert.match(source, /if \(!req\.user\?\._id\) return res\.json\(\{ user: null \}\)/);
   assert.match(routes, /router\.get\('\/me', optionalAuth/);
 });
+
+
+test('logout clears the shared application session for every OAuth provider', async () => {
+  const routes = await readFile(routesFile, 'utf8');
+  const auth = await readFile(authFile, 'utf8');
+  assert.match(routes, /router\.post\('\/logout', performLogout\)/);
+  assert.match(routes, /router\.get\('\/logout'/);
+  assert.match(routes, /clearSessionCookie\(res\)/);
+  assert.match(auth, /Expires=Thu, 01 Jan 1970 00:00:00 GMT/);
+  assert.match(auth, /host-only variant/);
+});

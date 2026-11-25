@@ -50,7 +50,7 @@ export function cancelChatGenerationsForChat(chatId, ownerId) {
   return cancelled;
 }
 
-export async function generateSuggestedNextSteps({ user, userPrompt, assistantResponse, toolEvents = [], agentPlan = null }) {
+export async function generateSuggestedNextSteps({ user, userPrompt, assistantResponse, toolEvents = [], agentPlan = null, error = '' }) {
   const apiKey = decryptUserIntegrations(user).nvidia?.apiKey || process.env.NVIDIA_API_KEY;
   if (!apiKey) throw Object.assign(new Error('NVIDIA API key is not configured.'), { status: 503 });
   const compactTools = (Array.isArray(toolEvents) ? toolEvents : []).slice(-20).map((event) => ({
@@ -65,7 +65,7 @@ export async function generateSuggestedNextSteps({ user, userPrompt, assistantRe
       model: MODEL_REGISTRY.bolt.id,
       messages: [
         { role: 'system', content: 'Generate 2 to 4 genuinely useful, context-specific next actions after an assistant response. Do not use generic suggestions. Consider unfinished plan tasks, tool failures, and deliverables. Return ONLY valid JSON: {"suggestions":[{"label":"short action title","prompt":"specific actionable user prompt"}]}. Each label must be 3-55 characters; each prompt 20-500 characters. If no meaningful next action exists, return {"suggestions":[]}.' },
-        { role: 'user', content: JSON.stringify({ userPrompt: String(userPrompt || '').slice(0, 5000), assistantResponse: String(assistantResponse || '').slice(0, 9000), toolEvents: compactTools, agentPlan }).slice(0, 16000) },
+        { role: 'user', content: JSON.stringify({ userPrompt: String(userPrompt || '').slice(0, 5000), assistantResponse: String(assistantResponse || '').slice(0, 9000), error: String(error || '').slice(0, 2000), toolEvents: compactTools, agentPlan }).slice(0, 16000) },
       ],
       temperature: 0.35,
       top_p: 0.9,
@@ -85,6 +85,42 @@ export async function generateSuggestedNextSteps({ user, userPrompt, assistantRe
   })).filter((item) => item.label && item.prompt.length >= 20);
 }
 
+
+
+export async function generateStarterSuggestions({ user, memories = [], recentChats = [] }) {
+  const apiKey = decryptUserIntegrations(user).nvidia?.apiKey || process.env.NVIDIA_API_KEY;
+  if (!apiKey) return [];
+  const context = {
+    savedContext: (Array.isArray(memories) ? memories : []).map((item) => String(item?.text || '').slice(0, 500)).filter(Boolean).slice(-12),
+    recentTopics: (Array.isArray(recentChats) ? recentChats : []).map((item) => String(item?.title || '').slice(0, 100)).filter(Boolean).slice(0, 8),
+    capabilities: ['answer and explain', 'research current information', 'write and debug code', 'create and edit files', 'analyze uploaded files', 'generate images', 'search YouTube videos, channels and playlists'],
+  };
+  const response = await fetch(NVIDIA_ENDPOINT, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: MODEL_REGISTRY.bolt.id,
+      messages: [
+        { role: 'system', content: 'Create 3 or 4 excellent starter prompts for a new conversation with this user. These are real prompts the user can submit, not generic labels or advice. Use their saved context and recent topics when present. If there is no history, create varied, useful prompts based on the available capabilities, avoiding assumptions about the user. Keep prompts concrete, naturally phrased, distinct, and immediately actionable. Return only JSON: {"suggestions":[{"label":"short UI label","prompt":"complete prompt to submit"}]}. Labels 3-32 chars; prompts 30-350 chars. Do not mention that you used profile data.' },
+        { role: 'user', content: JSON.stringify(context).slice(0, 6000) },
+      ],
+      temperature: 0.75,
+      top_p: 0.9,
+      max_tokens: 650,
+      stream: false,
+      chat_template_kwargs: { enable_thinking: false },
+    }),
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!response.ok) throw new Error(`Starter suggestion generation failed with HTTP ${response.status}.`);
+  const data = await response.json();
+  const raw = String(data.choices?.[0]?.message?.content || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  const parsed = JSON.parse(raw);
+  return (Array.isArray(parsed.suggestions) ? parsed.suggestions : []).slice(0, 4).map((item) => ({
+    label: String(item.label || '').trim().slice(0, 32),
+    prompt: String(item.prompt || '').trim().slice(0, 350),
+  })).filter((item) => item.label.length >= 3 && item.prompt.length >= 30);
+}
 
 function sse(res, payload) {
   let outgoing = payload;

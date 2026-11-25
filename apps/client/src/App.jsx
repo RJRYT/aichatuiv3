@@ -57,6 +57,7 @@ import {
   UserRound,
   Video,
   Wrench,
+  Youtube,
   X,
 } from 'lucide-react';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -576,6 +577,10 @@ function toolUsageIcon(name) {
       return Calculator;
     case 'github_search':
       return Github;
+    case 'youtube_search':
+    case 'youtube_video_details':
+    case 'youtube_playlist_items':
+      return Youtube;
     case 'npm_search':
       return Search;
     case 'search_memories':
@@ -938,15 +943,16 @@ function ToolUsageInline({ events = [] }) {
   if (!events.length) return null;
   const grouped = [
     ...events
-      .reduce((map, event) => {
+      .reduce((map, event, eventIndex) => {
         const key = `${event.name}:${event.status === 'error' ? 'error' : 'used'}`;
-        const current = map.get(key) || { name: event.name, status: event.status, events: [] };
+        const current = map.get(key) || { name: event.name, status: event.status, events: [], lastIndex: eventIndex };
         current.events.push(event);
+        current.lastIndex = eventIndex;
         map.set(key, current);
         return map;
       }, new Map())
       .values(),
-  ];
+  ].sort((a, b) => a.lastIndex - b.lastIndex);
   return (
     <div className="tool-usage-inline" aria-label="Tool activity">
       {grouped.map((group) => {
@@ -954,7 +960,7 @@ function ToolUsageInline({ events = [] }) {
         const label =
           group.events.length === 1
             ? toolUsageSentence(group.events[0])
-            : `${toolUsageSentence(group.events[0])} (${group.events.length} calls)`;
+            : `${toolUsageSentence(group.events[group.events.length - 1])} (${group.events.length} calls)`;
         return (
           <details
             className={`tool-usage-item ${group.status || ''}`}
@@ -965,7 +971,7 @@ function ToolUsageInline({ events = [] }) {
               <span className="tool-usage-summary-text">{label}</span>
             </summary>
             <div className="tool-usage-details">
-              {group.events.map((event, index) => (
+              {[...group.events].reverse().map((event, index) => (
                 <div className="tool-usage-detail-entry" key={`${group.name}-${index}`}>
                   <div className="tool-usage-call-title">{toolUsageSentence(event)}</div>
                   {event.error && <p className="tool-error">{event.error}</p>}
@@ -1156,6 +1162,9 @@ function toolActivityMessage(name, args = {}) {
     execute_python: 'Running the Python task in the isolated environment.',
     execute_node: 'Running the Node.js command in the isolated environment.',
     web_search: `Researching current information${query}.`,
+    youtube_search: `Searching YouTube for${query}.`,
+    youtube_video_details: 'Fetching the requested YouTube video details.',
+    youtube_playlist_items: 'Loading videos from the requested YouTube playlist.',
     fetch_public_url: 'Opening the requested web page and extracting its content.',
     create_task_plan: 'Organizing the work into a structured execution plan.',
     update_task_status: 'Updating project milestone and task progress.',
@@ -1240,7 +1249,7 @@ function LiveProgress({ progress, now, toolEvents = [] }) {
   );
 }
 
-function Toast({ toast, onClose }) {
+function Toast({ toast, onClose, onAction }) {
   if (!toast) return null;
   return (
     <div
@@ -1249,6 +1258,7 @@ function Toast({ toast, onClose }) {
     >
       {toast.type === 'success' ? <Check size={15} /> : <AlertCircle size={15} />}
       <span>{toast.message}</span>
+      {toast.action && <button className="toast-action" onClick={() => onAction?.(toast.action.chatId)}>{toast.action.label || 'Open chat'}</button>}
       <button onClick={onClose} aria-label="Dismiss notification">
         <X size={14} />
       </button>
@@ -1264,8 +1274,6 @@ function Message({
   onShare,
   onRegenerate,
   onVersion,
-  onRetry,
-  onContinue,
   liveProgress,
   progressClock,
   thinking,
@@ -1395,10 +1403,11 @@ function Message({
           <div className="message-error" role="alert">
             <AlertCircle size={14} />
             <span>{message.error}</span>
-            {!user && isLastAssistant && !message.isStreaming && (
+            {!user && isLastAssistant && !message.isStreaming && message.suggestedNextSteps?.length > 0 && (
               <div className="message-recovery-actions">
-                <button type="button" onClick={() => onRetry?.(message)}>Retry task</button>
-                <button type="button" onClick={() => onContinue?.(message)}>Continue from saved progress</button>
+                {message.suggestedNextSteps.slice(0, 3).map((step, index) => (
+                  <button type="button" key={`${step.label}-${index}`} title={step.prompt} onClick={() => onFollowup?.(step.prompt)}>{step.label}</button>
+                ))}
               </div>
             )}
           </div>
@@ -1407,10 +1416,11 @@ function Message({
           <div className="message-execution-status" role="status">
             <strong>{message.executionStatus === 'stopped' ? 'Execution stopped early' : message.executionStatus === 'interrupted' ? 'Execution interrupted' : 'Completed with issues'}</strong>
             {message.stopReason && <span>{message.stopReason === 'time_limit' ? 'The configured time budget was reached.' : message.stopReason}</span>}
-            <div className="message-recovery-actions">
-              <button type="button" onClick={() => onContinue?.(message)}>Continue from saved progress</button>
-              <button type="button" onClick={() => onRetry?.(message)}>Retry task</button>
-            </div>
+            {message.suggestedNextSteps?.length > 0 && <div className="message-recovery-actions">
+              {message.suggestedNextSteps.slice(0, 3).map((step, index) => (
+                <button type="button" key={`${step.label}-${index}`} title={step.prompt} onClick={() => onFollowup?.(step.prompt)}>{step.label}</button>
+              ))}
+            </div>}
           </div>
         )}
         {!user && !message.isStreaming && content.trim() && (
@@ -1591,8 +1601,10 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0, onAttach }) {
     try {
       await request(file.kind === 'upload' ? `/api/interpreter/uploads/${encodeURIComponent(file.uploadId || file.id)}` : `/api/interpreter/artifacts/${encodeURIComponent(file.id)}`, { method: 'DELETE' });
       if (previewFile?.id === file.id) setPreviewFile(null);
+      setFiles((current) => current.filter((item) => item.id !== file.id));
+      setTotal((current) => Math.max(0, current - 1));
+      setTotalBytes((current) => Math.max(0, current - Number(file.size || 0)));
       setSelectedFileIds((current) => { const next = new Set(current); next.delete(file.id); return next; });
-      await load();
     } catch (err) {
       setError(err.message || 'Could not delete file.');
     }
@@ -1603,10 +1615,13 @@ function FileLibraryDialog({ open, onClose, refreshKey = 0, onAttach }) {
     try {
       const selected = files.filter((file) => selectedFileIds.has(file.id));
       const results = await Promise.allSettled(selected.map((file) => request(file.kind === 'upload' ? `/api/interpreter/uploads/${encodeURIComponent(file.uploadId || file.id)}` : `/api/interpreter/artifacts/${encodeURIComponent(file.id)}`, { method: 'DELETE' })));
-      const deletedCount = results.filter((result) => result.status === 'fulfilled').length;
-      setSelectedFileIds(new Set());
-      if (deletedCount !== ids.length) setError(`Deleted ${deletedCount} of ${ids.length} selected files.`);
-      await load();
+      const deletedFiles = selected.filter((file, index) => results[index].status === 'fulfilled');
+      const deletedIds = new Set(deletedFiles.map((file) => file.id));
+      setFiles((current) => current.filter((file) => !deletedIds.has(file.id)));
+      setTotal((current) => Math.max(0, current - deletedFiles.length));
+      setTotalBytes((current) => Math.max(0, current - deletedFiles.reduce((sum, file) => sum + Number(file.size || 0), 0)));
+      setSelectedFileIds((current) => { const next = new Set(current); deletedIds.forEach((id) => next.delete(id)); return next; });
+      if (deletedFiles.length !== ids.length) setError(`Deleted ${deletedFiles.length} of ${ids.length} selected files.`);
     } catch (err) { setError(err.message || 'Could not delete selected files.'); }
   };
   const handleDownload = async (file) => {
@@ -2980,10 +2995,11 @@ export default function App() {
     [chatLoading, setChatLoading] = useState(false),
     [chatLoadError, setChatLoadError] = useState('');
   const [busy, setBusy] = useState(false),
+    [generationChats, setGenerationChats] = useState(() => new Set()),
     [status, setStatus] = useState('Ready'),
     [toast, setToast] = useState(null),
     [pendingRecovery, setPendingRecovery] = useState(null),
-    [liveProgress, setLiveProgress] = useState(null),
+    [liveProgressByChat, setLiveProgressByChat] = useState({}),
     [progressClock, setProgressClock] = useState(Date.now()),
     [drawer, setDrawer] = useState(false),
     [prefsOpen, setPrefsOpen] = useState(false),
@@ -2999,6 +3015,7 @@ export default function App() {
     fileRef = useRef(null),
     photoRef = useRef(null),
     abortRef = useRef(null),
+    generationControllersRef = useRef(new Map()),
     followScrollRef = useRef(true),
     titleRequestRef = useRef(0),
     activeIdRef = useRef(null),
@@ -3006,46 +3023,23 @@ export default function App() {
     chatLoadSeqRef = useRef(0),
     initialRouteHandledRef = useRef(false),
     loadStartedRef = useRef(false),
-    recoveryStartedRef = useRef(false),
-    activeDiscoveryDoneRef = useRef(false),
+    recoveryStartedRef = useRef(new Set()),
     authFeedbackRef = useRef(null);
   const activeChat = useMemo(() => chats.find((c) => c._id === activeId), [chats, activeId]);
+  const setProgressForChat = (chatId, update) => {
+    if (!chatId) return;
+    setLiveProgressByChat((current) => {
+      const previous = current[chatId] ?? null;
+      const next = typeof update === 'function' ? update(previous) : update;
+      return { ...current, [chatId]: next };
+    });
+  };
+  const visibleLiveProgress = activeId ? (liveProgressByChat[activeId] ?? null) : null;
+
   const activePlan = useMemo(() => latestActivePlan(messages), [messages]);
   const setFileError = (message) =>
     setToast(message ? { id: Date.now(), message: String(message), type: 'error' } : null);
-  const starterSuggestions = useMemo(() => {
-    const recent = chats
-      .filter((c) => c.title && c.title !== 'New chat')
-      .slice(0, 2)
-      .map((chat) => ({
-        icon: MessageSquare,
-        label: `Continue: ${chat.title.slice(0, 28)}`,
-        prompt: `Find my previous chat titled "${chat.title}" and continue from its context.`,
-      }));
-    const memoryFacts = memories.map((memory) => String(memory.text || '').trim()).filter(Boolean);
-    const styleMemory = memoryFacts.find((fact) =>
-      /\b(prefer|prefers|like|likes|style|concise|example|format|tone|language)\b/i.test(fact)
-    );
-    const projectMemory = memoryFacts.find((fact) =>
-      /\b(working on|building|developing|project|goal|learning|migrating)\b/i.test(fact)
-    );
-    const personalized = [];
-    if (styleMemory) {
-      personalized.push({
-        icon: Sparkles,
-        label: 'Use my preferred style',
-        prompt: `Help me with a coding task using this preference: ${styleMemory.slice(0, 300)}`,
-      });
-    }
-    if (projectMemory) {
-      personalized.push({
-        icon: Code2,
-        label: 'Make progress on my goal',
-        prompt: `Help me make practical progress on this: ${projectMemory.slice(0, 300)}`,
-      });
-    }
-    return [...personalized, ...recent].slice(0, 5);
-  }, [chats, memories]);
+  const [starterSuggestions, setStarterSuggestions] = useState([]);
 
   const loadAccount = useCallback(async () => {
     try {
@@ -3078,6 +3072,7 @@ export default function App() {
       ]);
       const [me, health] = await Promise.all([meRes.json(), healthRes.json()]);
       if (!me.user) {
+        setStarterSuggestions([]);
         setAuth({
           loading: false,
           user: null,
@@ -3119,6 +3114,13 @@ export default function App() {
       const chatList = Array.isArray(chatResult.value.chats) ? chatResult.value.chats : [];
       setChats(chatList);
       setChatsLoaded(true);
+      setStarterSuggestions([]);
+      request('/api/chat/starter-suggestions', {
+        method: 'POST',
+        body: JSON.stringify({ recentChats: chatList.slice(0, 8).map(({ title }) => ({ title })) }),
+      }).then((response) => response.json()).then((data) => {
+        setStarterSuggestions((data.suggestions || []).map((item) => ({ ...item, icon: Sparkles })));
+      }).catch(() => setStarterSuggestions([]));
       setActiveId(null);
       activeIdRef.current = null;
       setMessages([]);
@@ -3162,6 +3164,33 @@ export default function App() {
       }
     }
   }, []);
+
+  useEffect(() => {
+    if (!auth.user) return undefined;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const tracked = JSON.parse(localStorage.getItem('nemotron.activeGenerationSessions') || '{}');
+        const ids = Object.keys(tracked);
+        if (!ids.length) return;
+        const response = await request(`/api/chat/stream/recent?since=${Date.now() - 7 * 86400000}`);
+        const data = await response.json();
+        if (cancelled) return;
+        const completed = (data.sessions || []).find((session) => ids.includes(session.generationId));
+        if (completed) {
+          const next = { ...tracked };
+          delete next[completed.generationId];
+          localStorage.setItem('nemotron.activeGenerationSessions', JSON.stringify(next));
+          const chat = chats.find((item) => item._id === completed.chatId);
+          setToast({ id: Date.now(), message: `Your work in “${chat?.title || 'a conversation'}” has finished${completed.status === 'completed' ? '' : ' with issues'}.`, type: completed.status === 'completed' ? 'success' : 'error', action: { chatId: completed.chatId, label: 'Open conversation' } });
+        }
+      } catch { /* Notification polling must never interfere with chat use. */ }
+    };
+    void poll();
+    const timer = window.setInterval(poll, 12000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [auth.user?._id, chats]);
+
   useEffect(() => {
     const selected = COLOR_THEMES.find((item) => item.id === theme) || COLOR_THEMES[0];
     document.documentElement.dataset.theme = selected.id;
@@ -3171,7 +3200,7 @@ export default function App() {
   }, [theme]);
   useEffect(() => {
     if (!toast) return undefined;
-    const timer = window.setTimeout(() => setToast(null), 5000);
+    const timer = window.setTimeout(() => setToast(null), toast.action ? 12000 : 5000);
     return () => window.clearTimeout(timer);
   }, [toast]);
   useEffect(() => {
@@ -3182,17 +3211,8 @@ export default function App() {
   useEffect(() => {
     if (loadStartedRef.current) return;
     loadStartedRef.current = true;
-    try {
-      const pending = localStorage.getItem('nemotron.pendingGeneration');
-      if (pending) {
-        const parsed = JSON.parse(pending);
-        if (parsed?.chatId && parsed?.generationId) setPendingRecovery(parsed);
-        else {
-          localStorage.removeItem('nemotron.pendingGeneration');
-          setToast({ id: Date.now(), message: 'A previous generation ended before a recovery session could be created. You can retry it when ready.', type: 'error' });
-        }
-      }
-    } catch {}
+    // Restore account/navigation first. A running generation is recovered only
+    // when its own conversation is selected, never by hijacking a new-chat route.
     loadAccount();
   }, [loadAccount]);
   useEffect(() => {
@@ -3254,6 +3274,8 @@ export default function App() {
   }, []);
   const newChat = async ({ navigate = true } = {}) => {
     ++chatLoadSeqRef.current;
+    setBusy(false);
+    abortRef.current = null;
     setChatLoading(false);
     setChatLoadError('');
     followScrollRef.current = true;
@@ -3264,7 +3286,7 @@ export default function App() {
     setMessages([]);
     setInput('');
     setFiles([]);
-    setLiveProgress(null);
+    setProgressForChat(activeIdRef.current, null);
     setDrawer(false);
     setRouteError('');
     if (navigate && location.pathname !== '/') history.pushState({}, '', '/');
@@ -3288,6 +3310,8 @@ export default function App() {
     return chat;
   };
   const selectChat = async (id, { navigate = true } = {}) => {
+    setBusy(generationControllersRef.current.has(id) || generationChats.has(id));
+    abortRef.current = generationControllersRef.current.get(id) || null;
     const sequence = ++chatLoadSeqRef.current;
     followScrollRef.current = true;
     setActiveId(id);
@@ -3316,10 +3340,16 @@ export default function App() {
       setActiveBranchId(chat.activeBranchId || 'main');
       setBranches(chat.branches || []);
       setMessages(chat.messages || []);
-      if (!recoveryStartedRef.current && !busy) {
+      if (!recoveryStartedRef.current.has(id) && !generationControllersRef.current.has(id)) {
         try {
           const activeResponse = await request(`/api/chat/stream/active?chatId=${encodeURIComponent(id)}`);
           const activePayload = await activeResponse.json();
+          if (activePayload.checkpoint?.plan) {
+            const restored = [...(chat.messages || [])];
+            const target = [...restored].reverse().find((item) => item.role === 'assistant');
+            if (target && !target.agentPlan) target.agentPlan = activePayload.checkpoint.plan;
+            setMessages(restored);
+          }
           if (activePayload.active && activePayload.generation?.generationId) {
             setPendingRecovery({ chatId: id, generationId: activePayload.generation.generationId, startedAt: Date.parse(activePayload.generation.startedAt) || Date.now(), assistantMessageId: (chat.messages || []).findLast?.((item) => item.role === 'assistant' && item.isStreaming)?.id || '', checkpoint: activePayload.checkpoint || null });
           }
@@ -3345,37 +3375,23 @@ export default function App() {
       if (sequence === chatLoadSeqRef.current) setChatLoading(false);
     }
   };
-  useEffect(() => {
-    if (!chatsLoaded || busy || pendingRecovery || recoveryStartedRef.current || activeDiscoveryDoneRef.current || !chats.length) return undefined;
-    let cancelled = false;
-    activeDiscoveryDoneRef.current = true;
-    void (async () => {
-      try {
-        const response = await request('/api/chat/stream/active');
-        const data = await response.json();
-        if (cancelled || !data.active || !data.generation?.generationId || !data.generation?.chatId) return;
-        if (data.generation.chatId === activeId) {
-          setPendingRecovery({ chatId: activeId, generationId: data.generation.generationId, startedAt: Date.parse(data.generation.startedAt) || Date.now(), assistantMessageId: '', checkpoint: data.checkpoint || null });
-        } else {
-          await selectChat(data.generation.chatId);
-        }
-      } catch { /* Account history remains usable if live-session discovery is temporarily unavailable. */ }
-    })();
-    return () => { cancelled = true; };
-  }, [chatsLoaded, activeId, busy, pendingRecovery, chats]);
+
 
   useEffect(() => {
-    if (!chatsLoaded || !pendingRecovery || recoveryStartedRef.current) return;
-    recoveryStartedRef.current = true;
+    if (!chatsLoaded || !pendingRecovery || recoveryStartedRef.current.has(pendingRecovery.chatId)) return;
     const recovery = pendingRecovery;
+    recoveryStartedRef.current.add(recovery.chatId);
     setPendingRecovery(null);
     const controller = new AbortController();
     controller.generationId = recovery.generationId;
     const generationStartedAt = Number(recovery.startedAt) || Date.parse(recovery.assistantStartedAt || '') || Date.now();
     abortRef.current = controller;
-    setBusy(true);
+    generationControllersRef.current.set(recovery.chatId, controller);
+    try { const tracked = JSON.parse(localStorage.getItem('nemotron.activeGenerationSessions') || '{}'); tracked[recovery.generationId] = recovery.chatId; localStorage.setItem('nemotron.activeGenerationSessions', JSON.stringify(tracked)); } catch {}
+    setGenerationChats((current) => new Set(current).add(recovery.chatId));
+    setBusy(activeIdRef.current === recovery.chatId);
     setStatus('Recovering previous generation…');
-    setLiveProgress({ message: 'Reconnecting to the saved generation session…', startedAt: generationStartedAt, lastActivityAt: Date.now() });
+    setProgressForChat(recovery.chatId, { message: 'Reconnecting to the saved generation session…', startedAt: generationStartedAt, lastActivityAt: Date.now() });
     void (async () => {
       let recoveredError = '';
       let recoveredMessages = [];
@@ -3387,7 +3403,6 @@ export default function App() {
       let agentEvents = [];
       let agentPlan = recovery.checkpoint?.plan || null;
       try {
-        await selectChat(recovery.chatId);
         const chatResponse = await request(`/api/chats/${encodeURIComponent(recovery.chatId)}`);
         const chatPayload = await chatResponse.json();
         recoveredChat = chatPayload.chat;
@@ -3400,7 +3415,7 @@ export default function App() {
           recoveredMessages.push(recoveredAssistant);
         }
         output = String(recoveredAssistant.content || '');
-        setLiveProgress((current) => ({ ...(current || {}), startedAt: stableStartedAt, lastActivityAt: Date.now() }));
+        setProgressForChat(recovery.chatId, (current) => ({ ...(current || {}), startedAt: stableStartedAt, lastActivityAt: Date.now() }));
         toolEvents = Array.isArray(recoveredAssistant.toolEvents) ? [...recoveredAssistant.toolEvents] : [];
         agentEvents = Array.isArray(recoveredAssistant.agentEvents) ? [...recoveredAssistant.agentEvents] : [];
         agentPlan = recoveredAssistant.agentPlan || null;
@@ -3416,14 +3431,14 @@ export default function App() {
           signal: controller.signal,
           reconnect: (after) => fetch(api(`/api/chat/stream/${recovery.generationId}/events?after=${after}`), { credentials: 'include', headers: { Accept: 'text/event-stream' }, signal: controller.signal }),
         })) {
-          if (event.type === 'heartbeat') setLiveProgress((current) => ({ ...(current || {}), startedAt: stableStartedAt, message: event.message || 'The agent is continuing in the background.', lastActivityAt: Date.now() }));
+          if (event.type === 'heartbeat') setProgressForChat(recovery.chatId, (current) => ({ ...(current || {}), startedAt: stableStartedAt, message: event.message || 'The agent is continuing in the background.', lastActivityAt: Date.now() }));
           if (event.type === 'status') setStatus(event.status || 'Recovering…');
-          if (event.type === 'chunk') { output += String(event.content || ''); publish(); setLiveProgress(null); }
+          if (event.type === 'chunk') { output += String(event.content || ''); publish(); setProgressForChat(recovery.chatId, null); }
           if (event.type === 'final_content' && !event.replayTruncated) { output = String(event.content || ''); publish(); }
           if (event.type === 'tool_start') {
             toolEvents = [...toolEvents, { name: event.name, status: 'running', arguments: event.arguments || {}, startedAt: event.startedAt }];
             publish();
-            setLiveProgress({ message: toolActivityMessage(event.name, event.arguments || {}), startedAt: stableStartedAt, lastActivityAt: Date.now() });
+            setProgressForChat(recovery.chatId, { message: toolActivityMessage(event.name, event.arguments || {}), startedAt: stableStartedAt, lastActivityAt: Date.now() });
           }
           if (event.type === 'tool_result') {
             const index = toolEvents.map((item) => item.name).lastIndexOf(event.name);
@@ -3434,7 +3449,7 @@ export default function App() {
             const item = event.event || {};
             agentEvents = [...agentEvents, item];
             if (item.plan) agentPlan = item.plan;
-            if (item.type === 'progress_update' && item.message) setLiveProgress({ message: item.message, startedAt: stableStartedAt, lastActivityAt: Date.now() });
+            if (item.type === 'progress_update' && item.message) setProgressForChat(recovery.chatId, { message: item.message, startedAt: stableStartedAt, lastActivityAt: Date.now() });
             publish();
           }
           if (event.type === 'model_selected') recoveredAssistant = { ...recoveredAssistant, model: event.model || recoveredAssistant.model, routingDecision: event.routing || recoveredAssistant.routingDecision };
@@ -3456,7 +3471,7 @@ export default function App() {
           if (savePayload.chat) finalMessages = savePayload.chat.messages || finalMessages;
         }
         const finalAssistant = finalMessages.find((item) => item.id === recoveredAssistant.id);
-        if (!recoveredError && finalAssistant?.content && !finalAssistant.suggestedNextSteps?.length) {
+        if (finalAssistant && !finalAssistant.suggestedNextSteps?.length) {
           try {
             const suggestionsResponse = await request('/api/chat/suggestions', { method: 'POST', body: JSON.stringify({ chatId: recovery.chatId, branchId: latestChat.activeBranchId || 'main', messageId: finalAssistant.id }) });
             const suggestionsPayload = await suggestionsResponse.json();
@@ -3468,14 +3483,17 @@ export default function App() {
           setMessages(finalMessages);
           setChats((current) => latestChat ? [latestChat, ...current.filter((item) => item._id !== latestChat._id)] : current);
         }
-        setToast({ id: Date.now(), message: recoveredError ? `Previous generation ended: ${recoveredError}` : 'Previous generation recovered and its live response was restored.', type: recoveredError ? 'error' : 'success' });
+        setToast({ id: Date.now(), message: recoveredError ? `Previous generation ended: ${recoveredError}` : 'Previous generation completed and its response was restored.', type: recoveredError ? 'error' : 'success', ...(activeIdRef.current !== recovery.chatId ? { action: { chatId: recovery.chatId, label: 'Open conversation' } } : {}) });
       } catch (error) {
         if (error?.name !== 'AbortError') setToast({ id: Date.now(), message: `Could not recover the previous generation: ${error.message}`, type: 'error' });
       } finally {
-        if (abortRef.current === controller) abortRef.current = null;
+        if (generationControllersRef.current.get(recovery.chatId) === controller) generationControllersRef.current.delete(recovery.chatId);
+        if (abortRef.current === controller) abortRef.current = generationControllersRef.current.get(activeIdRef.current) || null;
+        setGenerationChats((current) => { const next = new Set(current); next.delete(recovery.chatId); return next; });
+      try { const tracked = JSON.parse(localStorage.getItem('nemotron.activeGenerationSessions') || '{}'); delete tracked[recovery.generationId]; localStorage.setItem('nemotron.activeGenerationSessions', JSON.stringify(tracked)); } catch {}
+        if (activeIdRef.current === recovery.chatId) { setBusy(false); setProgressForChat(recovery.chatId, null); }
+        recoveryStartedRef.current.delete(recovery.chatId);
         try { localStorage.removeItem('nemotron.pendingGeneration'); } catch {}
-        setBusy(false);
-        setLiveProgress(null);
       }
     })();
   }, [chatsLoaded, pendingRecovery]);
@@ -3548,7 +3566,7 @@ export default function App() {
       const deletedIds = (result.results || []).filter((item) => item.ok).map((item) => item.chatId);
       setChats((current) => current.filter((chat) => !deletedIds.includes(chat._id)));
       if (deletedIds.includes(activeIdRef.current)) {
-        ++chatLoadSeqRef.current; abortRef.current?.abort(); setBusy(false); setActiveId(null); activeIdRef.current = null; setMessages([]); setBranches([]); setActiveBranchId('main'); setLiveProgress(null); setChatLoading(false); setChatLoadError(''); history.replaceState({}, '', '/');
+        ++chatLoadSeqRef.current; abortRef.current?.abort(); setBusy(false); setActiveId(null); activeIdRef.current = null; setMessages([]); setBranches([]); setActiveBranchId('main'); setProgressForChat(activeIdRef.current, null); setChatLoading(false); setChatLoadError(''); history.replaceState({}, '', '/');
         try { localStorage.removeItem('nemotron.activeChatId'); localStorage.removeItem('nemotron.pendingGeneration'); } catch {}
       }
       setLibraryRefresh((value) => value + 1); loadShares().catch(() => {});
@@ -3588,7 +3606,7 @@ export default function App() {
         setMessages([]);
         setBranches([]);
         setActiveBranchId('main');
-        setLiveProgress(null);
+        setProgressForChat(id, null);
         setChatLoading(false);
         setChatLoadError('');
         setDrawer(false);
@@ -3642,9 +3660,22 @@ export default function App() {
   const logout = async () => {
     try {
       await request('/api/auth/logout', { method: 'POST' });
-    } finally {
-      location.replace('/');
+    } catch {
+      // A direct navigation still clears the HttpOnly cookie when a fetch-based
+      // sign-out fails because of a transient cross-origin/network issue.
+      location.assign(api('/api/auth/logout'));
+      return;
     }
+    setAuth({ loading: false, user: null, providers: {}, error: '' });
+    setChats([]);
+    setMessages([]);
+    setActiveId(null);
+    setChatsLoaded(false);
+    try {
+      localStorage.removeItem('nemotron.activeChatId');
+      localStorage.removeItem('nemotron.pendingGeneration');
+    } catch {}
+    location.replace('/');
   };
   const savePreferences = async (update) => {
     const next = typeof update === 'function' ? update(preferences) : update;
@@ -3859,9 +3890,10 @@ export default function App() {
   const regenerateResponse = async (message) => {
     const index = messages.findIndex((m) => m.id === message.id);
     if (index < 1 || busy) return;
+    setGenerationChats((current) => new Set(current).add(activeId));
     setBusy(true);
     setStatus('Regenerating response…');
-    setLiveProgress(
+    setProgressForChat(activeId, 
       thinking
         ? { message: 'Connecting to the agent…', startedAt: Date.now(), lastActivityAt: Date.now() }
         : { type: 'working' }
@@ -3881,6 +3913,8 @@ export default function App() {
     controller.generationId = crypto.randomUUID();
     try { localStorage.setItem('nemotron.pendingGeneration', JSON.stringify({ chatId: activeId, generationId: controller.generationId, assistantMessageId: message.id, startedAt: Date.now() })); } catch {}
     abortRef.current = controller;
+    generationControllersRef.current.set(activeId, controller);
+    try { const tracked = JSON.parse(localStorage.getItem('nemotron.activeGenerationSessions') || '{}'); tracked[controller.generationId] = activeId; localStorage.setItem('nemotron.activeGenerationSessions', JSON.stringify(tracked)); } catch {}
     try {
       const res = await fetchChatStream(
         api('/api/chat/stream'),
@@ -3916,7 +3950,7 @@ export default function App() {
       for await (const event of readChatEventStream(res, { signal: controller.signal, reconnect: (after) => fetch(api(`/api/chat/stream/${controller.generationId}/events?after=${after}`), { credentials: 'include', headers: { Accept: 'text/event-stream' }, signal: controller.signal }) })) {
         if (event.type === 'status') setStatus(event.status || 'Working');
         if (event.type === 'heartbeat')
-          setLiveProgress((current) => ({
+          setProgressForChat(activeId, (current) => ({
             ...(current || { startedAt: Date.now(), lastActivityAt: Date.now() }),
             message: event.phase === 'tool'
               ? toolActivityMessage(event.name, event.arguments || {})
@@ -3927,14 +3961,14 @@ export default function App() {
           const item = event.event || {};
           const progressMessage = item.type === 'progress_update' ? item.message : '';
           if (progressMessage)
-            setLiveProgress((current) => ({
+            setProgressForChat(activeId, (current) => ({
               ...(current || { startedAt: Date.now() }),
               message: progressMessage,
               lastActivityAt: Date.now(),
             }));
         }
         if (event.type === 'final_content') {
-          setLiveProgress(null);
+          setProgressForChat(activeId, null);
           regeneratedOutput = event.content || '';
           setMessages((current) =>
             current.map((item) =>
@@ -3950,7 +3984,7 @@ export default function App() {
           );
         }
         if (event.type === 'chunk') {
-          setLiveProgress(null);
+          setProgressForChat(activeId, null);
           regeneratedOutput += event.content || '';
           setMessages((current) =>
             current.map((item) =>
@@ -3975,7 +4009,7 @@ export default function App() {
               startedAt: event.startedAt,
             },
           ];
-          setLiveProgress((current) => ({
+          setProgressForChat(activeId, (current) => ({
             ...(current || { startedAt: Date.now() }),
             message: toolActivityMessage(event.name, event.arguments || {}),
             lastActivityAt: Date.now(),
@@ -4035,6 +4069,7 @@ export default function App() {
       } catch { /* Optional AI follow-ups; no static fallback. */ }
       setMessages(refreshedMessages);
       setChats((current) => [refreshed.chat, ...current.filter((c) => c._id !== activeId)]);
+      if (activeIdRef.current !== activeId) setToast({ id: Date.now(), message: 'A response was regenerated in another conversation.', type: 'success', action: { chatId: activeId, label: 'Open conversation' } });
       setStatus('Response regenerated');
     } catch (error) {
       setMessages((current) =>
@@ -4044,12 +4079,12 @@ export default function App() {
       if (error.name !== 'AbortError')
         setFileError(chatErrorMessage(error, 'Could not regenerate the response.'));
     } finally {
-      abortRef.current = null;
-      try {
-        localStorage.removeItem('nemotron.pendingGeneration');
-      } catch {}
-      setBusy(false);
-      setLiveProgress(null);
+      if (generationControllersRef.current.get(activeId) === controller) generationControllersRef.current.delete(activeId);
+      if (abortRef.current === controller) abortRef.current = generationControllersRef.current.get(activeIdRef.current) || null;
+      setGenerationChats((current) => { const next = new Set(current); next.delete(activeId); return next; });
+      try { const tracked = JSON.parse(localStorage.getItem('nemotron.activeGenerationSessions') || '{}'); delete tracked[controller.generationId]; localStorage.setItem('nemotron.activeGenerationSessions', JSON.stringify(tracked)); } catch {}
+      if (activeIdRef.current === activeId) { setBusy(false); setProgressForChat(activeId, null); }
+      try { localStorage.removeItem('nemotron.pendingGeneration'); } catch {}
     }
   };
 
@@ -4312,8 +4347,12 @@ export default function App() {
     controller.generationId = crypto.randomUUID();
     try { localStorage.setItem('nemotron.pendingGeneration', JSON.stringify({ chatId: chat._id, generationId: controller.generationId, assistantMessageId: assistantId, startedAt: Date.now() })); } catch {}
     abortRef.current = controller;
+    generationControllersRef.current.set(chat._id, controller);
+    try { const tracked = JSON.parse(localStorage.getItem('nemotron.activeGenerationSessions') || '{}'); tracked[controller.generationId] = chat._id; localStorage.setItem('nemotron.activeGenerationSessions', JSON.stringify(tracked)); } catch {}
+    setGenerationChats((current) => new Set(current).add(chat._id));
+    if (activeIdRef.current === chat._id) setBusy(true);
     const started = performance.now();
-    setLiveProgress(
+    setProgressForChat(chat._id, 
       thinking
         ? { message: 'Connecting to the agent…', startedAt: Date.now(), lastActivityAt: Date.now() }
         : { type: 'working' }
@@ -4401,7 +4440,7 @@ export default function App() {
       for await (const event of readChatEventStream(res, { signal: controller.signal, reconnect: (after) => fetch(api(`/api/chat/stream/${controller.generationId}/events?after=${after}`), { credentials: 'include', headers: { Accept: 'text/event-stream' }, signal: controller.signal }) })) {
         if (event.type === 'status') setStatus(event.status || 'Working');
         if (event.type === 'heartbeat')
-          setLiveProgress((current) => ({
+          setProgressForChat(chat._id, (current) => ({
             ...(current || { startedAt: Date.now(), lastActivityAt: Date.now() }),
             message: event.phase === 'tool'
               ? toolActivityMessage(event.name, event.arguments || {})
@@ -4412,16 +4451,16 @@ export default function App() {
           const selected = event.type === 'model_switch' ? event.to : event.model;
           modelInfo = selected || modelInfo;
           routingInfo = event.routing || routingInfo;
-          if (event.type === 'model_switch') setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: `Switching to ${selected?.name || 'another AI model'} to recover the request.`, lastActivityAt: Date.now() }));
+          if (event.type === 'model_switch') setProgressForChat(chat._id, (current) => ({ ...(current || { startedAt: Date.now() }), message: `Switching to ${selected?.name || 'another AI model'} to recover the request.`, lastActivityAt: Date.now() }));
           update();
         }
         if (event.type === 'final_content') {
-          setLiveProgress(null);
+          setProgressForChat(chat._id, null);
           output = event.content || '';
           update();
         }
         if (event.type === 'chunk') {
-          setLiveProgress(null);
+          setProgressForChat(chat._id, null);
           output += event.content || '';
           setStatus('Generating');
           update();
@@ -4433,7 +4472,7 @@ export default function App() {
           if (item.type === 'task_updated' && item.plan) agentPlan = item.plan;
           const message = item.type === 'progress_update' ? item.message : '';
           if (message)
-            setLiveProgress((current) => ({
+            setProgressForChat(chat._id, (current) => ({
               ...(current || { startedAt: Date.now() }),
               message,
               lastActivityAt: Date.now(),
@@ -4451,7 +4490,7 @@ export default function App() {
             },
           ];
           setStatus(`Using ${event.name.replaceAll('_', ' ')}…`);
-          setLiveProgress((current) => ({
+          setProgressForChat(chat._id, (current) => ({
             ...(current || { startedAt: Date.now() }),
             message: toolActivityMessage(event.name, event.arguments || {}),
             lastActivityAt: Date.now(),
@@ -4570,6 +4609,7 @@ export default function App() {
           );
         }
       }
+      if (activeIdRef.current !== chat._id) setToast({ id: Date.now(), message: `Finished working in “${refreshed.chat.title || 'your conversation'}”.`, type: 'success', action: { chatId: chat._id, label: 'Open conversation' } });
       setStatus('Ready');
     } catch (error) {
       const stopped = error.name === 'AbortError';
@@ -4606,16 +4646,22 @@ export default function App() {
             }),
           });
         else await saveMessages(chat._id, [...nextMessages, liveAssistant]);
+        try {
+          const suggestionResponse = await request('/api/chat/suggestions', { method: 'POST', body: JSON.stringify({ chatId: chat._id, branchId: options.branchId || activeBranchId, messageId: assistantId }) });
+          const suggestionData = await suggestionResponse.json();
+          liveAssistant = { ...liveAssistant, suggestedNextSteps: suggestionData.suggestions || [] };
+          if (activeIdRef.current === chat._id) setMessages((current) => current.map((item) => item.id === assistantId ? liveAssistant : item));
+        } catch { /* Recovery actions remain hidden if contextual generation is unavailable. */ }
       } catch {
         /* display generation error */
       }
     } finally {
-      abortRef.current = null;
-      try {
-        localStorage.removeItem('nemotron.pendingGeneration');
-      } catch {}
-      setBusy(false);
-      setLiveProgress(null);
+      if (generationControllersRef.current.get(chat._id) === controller) generationControllersRef.current.delete(chat._id);
+      if (abortRef.current === controller) abortRef.current = generationControllersRef.current.get(activeIdRef.current) || null;
+      setGenerationChats((current) => { const next = new Set(current); next.delete(chat._id); return next; });
+      try { const tracked = JSON.parse(localStorage.getItem('nemotron.activeGenerationSessions') || '{}'); delete tracked[controller.generationId]; localStorage.setItem('nemotron.activeGenerationSessions', JSON.stringify(tracked)); } catch {}
+      if (activeIdRef.current === chat._id) { setBusy(false); setProgressForChat(chat._id, null); }
+      try { localStorage.removeItem('nemotron.pendingGeneration'); } catch {}
     }
   };
   const attachLibraryFile = async (file) => {
@@ -4722,11 +4768,11 @@ export default function App() {
           </div>
         </div>
         <div className="top-actions">
-          {busy && (
+          {busy && abortRef.current && (
             <button
               className="icon-button stop-button"
               title="Finish current operation and summarize progress"
-              onClick={() => { const generationId = abortRef.current?.generationId; if (!generationId) return; setStatus('Finishing current operation and preparing summary…'); setLiveProgress((current) => ({ ...(current || { startedAt: Date.now() }), message: 'Stop requested. The current operation will finish, then the agent will summarize completed work and what remains.', lastActivityAt: Date.now() })); void fetch(api(`/api/chat/stream/${generationId}/cancel`), { method: 'POST', credentials: 'include' }).then(async (response) => { if (!response.ok) throw await responseError(response, 'Could not request a graceful stop'); }).catch((error) => setToast({ id: Date.now(), message: error.message, type: 'error' })); }}
+              onClick={() => { const generationId = generationControllersRef.current.get(activeIdRef.current)?.generationId || abortRef.current?.generationId; if (!generationId) return; setStatus('Finishing current operation and preparing summary…'); setProgressForChat(activeIdRef.current, (current) => ({ ...(current || { startedAt: Date.now() }), message: 'Stop requested. The current operation will finish, then the agent will summarize completed work and what remains.', lastActivityAt: Date.now() })); void fetch(api(`/api/chat/stream/${generationId}/cancel`), { method: 'POST', credentials: 'include' }).then(async (response) => { if (!response.ok) throw await responseError(response, 'Could not request a graceful stop'); }).catch((error) => setToast({ id: Date.now(), message: error.message, type: 'error' })); }}
             >
               <Square size={14} />
             </button>
@@ -4850,9 +4896,7 @@ export default function App() {
                     onShare={shareResponse}
                     onRegenerate={regenerateResponse}
                     onVersion={changeVersion}
-                    onRetry={() => sendMessage('', [], { reuseLastUser: true })}
-                    onContinue={() => sendMessage('Continue from the saved project progress. First inspect the current workspace, agent plan, completed operations, generated artifacts, and any recorded errors. Do not repeat completed work. Identify remaining tasks, run appropriate tests, verify the results, and package a multi-file project as one complete ZIP archive when appropriate.', [])}
-                    liveProgress={liveProgress}
+                    liveProgress={visibleLiveProgress}
                     progressClock={progressClock}
                     thinking={thinking}
                     onFollowup={(prompt) => sendMessage(prompt, [])}
@@ -4991,7 +5035,7 @@ export default function App() {
                   type="button"
                   className={`thinking-control ${thinking ? 'enabled' : ''}`}
                   onClick={() => {
-                    if (thinking) setLiveProgress(null);
+                    if (thinking) setProgressForChat(activeIdRef.current, null);
                     setThinking((value) => !value);
                   }}
                   title="Toggle model think mode. Private reasoning is never displayed."
@@ -5027,7 +5071,7 @@ export default function App() {
           </div>
         </div>
       </main>
-      <Toast toast={toast} onClose={() => setToast(null)} />
+      <Toast toast={toast} onClose={() => setToast(null)} onAction={(chatId) => { setToast(null); selectChat(chatId); }} />
       <HistoryDrawer
         open={drawer}
         onClose={() => setDrawer(false)}

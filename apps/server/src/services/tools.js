@@ -28,6 +28,10 @@ const parser = new Parser({
 });
 
 const tools = [
+
+  { type: 'function', function: { name: 'youtube_search', description: 'Search YouTube using ytsearch.js. Search videos, channels, playlists, movies or live streams; choose relevance, upload_date, view_count or rating sorting and a bounded result count. Use this for finding videos and creators, not for general web search.', parameters: { type: 'object', properties: { query: { type: 'string', minLength: 2, maxLength: 300 }, type: { type: 'string', enum: ['video', 'channel', 'playlist', 'movie', 'live', 'any'] }, sort: { type: 'string', enum: ['relevance', 'upload_date', 'view_count', 'rating'] }, limit: { type: 'integer', minimum: 10, maximum: 50 }, pages: { type: 'integer', minimum: 1, maximum: 3, description: 'Fetch one to three result pages in a single bounded call.' } }, required: ['query'] } } },
+  { type: 'function', function: { name: 'youtube_video_details', description: 'Fetch detailed public metadata for one YouTube video by its video ID. Use after youtube_search when a user asks for details about a particular video.', parameters: { type: 'object', properties: { video_id: { type: 'string', minLength: 6, maxLength: 32 } }, required: ['video_id'] } } },
+  { type: 'function', function: { name: 'youtube_playlist_items', description: 'Fetch metadata and a page of videos from a YouTube playlist. Returns a next-page indicator for follow-up retrieval.', parameters: { type: 'object', properties: { playlist_id: { type: 'string', minLength: 8, maxLength: 80 }, limit: { type: 'integer', minimum: 10, maximum: 100 }, pages: { type: 'integer', minimum: 1, maximum: 3 } }, required: ['playlist_id'] } } },
   { type: 'function', function: { name: 'file_library_search', description: 'Search the signed-in user File Library for project-related artifacts. Use query to find source archives, reports, generated documents, images, or other deliverables. When read_file_id is supplied, read a bounded text artifact and return its contents. Never expose private download URLs.', parameters: { type: 'object', properties: { query: { type: 'string', maxLength: 160 }, read_file_id: { type: 'string' }, max_chars: { type: 'integer', minimum: 500, maximum: 12000 } } } } },
   { type: 'function', function: { name: 'workspace_list', description: 'List files in the private server-side conversation workspace. The user cannot directly browse these files. Use this to inspect project structure and file revisions. This is a native file operation; it does not start Python or Node.js.', parameters: { type: 'object', properties: { prefix: { type: 'string', description: 'Optional relative directory prefix.' } } } } },
   { type: 'function', function: { name: 'workspace_read', description: 'Read a text file from the private server-side conversation workspace. The user cannot directly access workspace paths. Use this before editing unfamiliar or existing files. Large files can be read in chunks using start_line and max_lines; continue from nextLine when truncated is true. This does not start a runtime.', parameters: { type: 'object', properties: { path: { type: 'string' }, start_line: { type: 'integer', minimum: 1 }, max_lines: { type: 'integer', minimum: 1, maximum: 500 } }, required: ['path'] } } },
@@ -391,6 +395,55 @@ async function tavilySearch(args) {
 }
 async function executeTool(name, args, user, options = {}) {
   const userId = user?._id ? String(user._id) : 'unknown';
+
+  if (name === 'youtube_search' || name === 'youtube_video_details' || name === 'youtube_playlist_items') {
+    let youtube;
+    try { youtube = await import('ytsearch.js'); }
+    catch { throw new Error('YouTube search is not installed. Install the ytsearch.js package on the server and restart the application.'); }
+    if (name === 'youtube_search') {
+      let result = await youtube.searchYouTube(String(args.query || '').trim(), {
+        type: ['video', 'channel', 'playlist', 'movie', 'live', 'any'].includes(args.type) ? args.type : 'video',
+        sort: ['relevance', 'upload_date', 'view_count', 'rating'].includes(args.sort) ? args.sort : 'relevance',
+        limit: Math.max(10, Math.min(50, Number(args.limit) || 20)),
+      });
+      const aggregate = { videos: [...(result.videos || [])], channels: [...(result.channels || [])], playlists: [...(result.playlists || [])], movies: [...(result.movies || [])], lives: [...(result.lives || [])] };
+      const requestedPages = Math.max(1, Math.min(3, Number(args.pages) || 1));
+      let pagesFetched = 1;
+      for (let page = 1; page < requestedPages && typeof result.nextPage === 'function'; page++) {
+        const next = await result.nextPage();
+        if (!next) break;
+        result = next;
+        for (const key of Object.keys(aggregate)) aggregate[key].push(...(next[key] || []));
+        pagesFetched++;
+      }
+      const compact = (items = []) => items.slice(0, 150).map((item) => ({
+        id: item.id, type: item.type, title: item.title, description: item.description,
+        thumbnail: item.thumbnail, thumbnails: item.thumbnails, url: item.url || item.watchUrl,
+        watchUrl: item.watchUrl, duration: item.duration, viewCount: item.viewCount,
+        shortViewCount: item.shortViewCount, publishedAt: item.publishedAt,
+        author: item.author, subscriberCount: item.subscriberCount, videoCount: item.videoCount,
+        verified: item.verified, isLive: item.isLive,
+      }));
+      return { query: String(args.query || '').trim(), videos: compact(aggregate.videos), channels: compact(aggregate.channels), playlists: compact(aggregate.playlists), movies: compact(aggregate.movies), lives: compact(aggregate.lives), metadata: result.metadata, pagesFetched, hasNextPage: Boolean(result.metadata?.hasNextPage) };
+    }
+    if (name === 'youtube_video_details') {
+      const details = await youtube.getVideoDetails(String(args.video_id || '').trim());
+      return { video: details };
+    }
+    let result = await youtube.getPlaylistItems(String(args.playlist_id || '').trim(), { limit: Math.max(10, Math.min(100, Number(args.limit) || 50)) });
+    const playlist = result.playlist;
+    const videos = [...(result.videos || [])];
+    const requestedPages = Math.max(1, Math.min(3, Number(args.pages) || 1));
+    let pagesFetched = 1;
+    for (let page = 1; page < requestedPages && typeof result.nextPage === 'function'; page++) {
+      const next = await result.nextPage();
+      if (!next) break;
+      result = next;
+      videos.push(...(next.videos || []));
+      pagesFetched++;
+    }
+    return { playlist, videos: videos.slice(0, 300), metadata: result.metadata, pagesFetched, hasNextPage: Boolean(result.metadata?.hasNextPage) };
+  }
   if (name === 'file_library_search') {
     if (!user?._id || String(user._id).startsWith('guest:')) throw new Error('Sign in is required to access the File Library.');
     if (args.read_file_id) {

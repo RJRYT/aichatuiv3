@@ -26,8 +26,17 @@ for (const provider of ['google', 'github', 'discord']) {
 router.get('/me', optionalAuth, (req, res, next) => {
   currentUser(req, res).catch(next);
 });
-router.post('/logout', (_req, res) => {
+const performLogout = (_req, res) => {
   clearSessionCookie(res);
+  res.append('Set-Cookie', `${'nemotron_oauth_state'}=; Path=/; HttpOnly; SameSite=${String(process.env.SESSION_COOKIE_SAME_SITE || (process.env.NODE_ENV === 'production' ? 'None' : 'Lax'))}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${process.env.NODE_ENV === 'production' ? '; Secure' : ''}${process.env.SESSION_COOKIE_DOMAIN ? `; Domain=${process.env.SESSION_COOKIE_DOMAIN}` : ''}`);
+  res.set('Cache-Control', 'no-store');
   res.json({ ok: true });
+};
+router.post('/logout', performLogout);
+router.get('/logout', (_req, res) => {
+  clearSessionCookie(res);
+  res.append('Set-Cookie', `nemotron_oauth_state=; Path=/; HttpOnly; SameSite=${String(process.env.SESSION_COOKIE_SAME_SITE || (process.env.NODE_ENV === 'production' ? 'None' : 'Lax'))}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${process.env.NODE_ENV === 'production' ? '; Secure' : ''}${process.env.SESSION_COOKIE_DOMAIN ? `; Domain=${process.env.SESSION_COOKIE_DOMAIN}` : ''}`);
+  res.set('Cache-Control', 'no-store');
+  res.redirect(303, process.env.FRONTEND_URL || '/');
 });
 export default router;

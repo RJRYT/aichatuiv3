@@ -42,8 +42,12 @@ test('multi-file projects are packaged as one archive instead of individual arti
   assert.match(prompt, /one ZIP/);
 });
 
-test('failed messages expose retry and continue-from-checkpoint actions', () => {
+test('failed messages expose chat-specific model-generated recovery actions', () => {
   const client = read('../../client/src/App.jsx');
-  assert.match(client, /Retry task/);
-  assert.match(client, /Continue from saved progress/);
+  const route = read('../src/routes/chat.js');
+  const nvidia = read('../src/services/nvidia.js');
+  assert.match(client, /message\.suggestedNextSteps\.slice\(0, 3\)/);
+  assert.match(route, /generateSuggestedNextSteps/);
+  assert.match(nvidia, /error: String\(error \|\| ''\)/);
+  assert.doesNotMatch(client, /Retry task|Continue from saved progress/);
 });

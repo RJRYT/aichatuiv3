@@ -111,3 +111,70 @@ test('completed responses merge against the latest chat revision after client di
   assert.match(route, /Preserve messages added by another tab\/device while this generation ran/);
   assert.match(route, /messagesWithHistory\.push\(\.\.\.concurrentMessages\)/);
 });
+
+
+test('starter suggestions are model-generated even with no previous chats', async () => {
+  const client = await read('../../client/src/App.jsx');
+  const route = await read('../src/routes/chat.js');
+  const nvidia = await read('../src/services/nvidia.js');
+  assert.match(client, /starter-suggestions/);
+  assert.match(client, /setStarterSuggestions\(\[\]\)/);
+  assert.match(route, /generateStarterSuggestions/);
+  assert.match(nvidia, /export async function generateStarterSuggestions/);
+  assert.match(nvidia, /available capabilities/);
+});
+
+test('recovery actions are generated from the exact failed assistant response', async () => {
+  const client = await read('../../client/src/App.jsx');
+  const route = await read('../src/routes/chat.js');
+  const nvidia = await read('../src/services/nvidia.js');
+  assert.match(route, /assistant\.error \|\| assistant\.stopReason \|\| assistant\.executionStatus/);
+  assert.match(nvidia, /error: String\(error \|\| ''\)/);
+  assert.match(client, /message\.suggestedNextSteps\.slice\(0, 3\)/);
+  assert.doesNotMatch(client, /Continue from saved progress|Retry task/);
+});
+
+test('chat navigation keeps background generations scoped and does not steal the refresh route', async () => {
+  const client = await read('../../client/src/App.jsx');
+  const route = await read('../src/routes/chat.js');
+  assert.match(client, /generationControllersRef = useRef\(new Map\(\)\)/);
+  assert.match(client, /setGenerationChats\(\(current\) => new Set\(current\)\.add\(chat\._id\)\)/);
+  assert.match(client, /generationControllersRef\.current\.get\(id\)/);
+  assert.doesNotMatch(client, /setPendingRecovery\(parsed\)/);
+  assert.match(client, /stream\/recent/);
+  assert.match(route, /getRecentGenerationSessions/);
+});
+
+test('YouTube tools are backed by ytsearch.js and cover search, details and playlist retrieval', async () => {
+  const tools = await read('../src/services/tools.js');
+  const serverPackage = JSON.parse(await read('../package.json'));
+  assert.equal(serverPackage.dependencies['ytsearch.js'], '2.1.3');
+  for (const name of ['youtube_search', 'youtube_video_details', 'youtube_playlist_items']) assert.ok(tools.includes(name));
+  assert.match(tools, /await import\('ytsearch\.js'\)/);
+  assert.match(tools, /searchYouTube/);
+  assert.match(tools, /getVideoDetails/);
+  assert.match(tools, /getPlaylistItems/);
+});
+
+test('File Library deletes update local state without reloading the full library', async () => {
+  const client = await read('../../client/src/App.jsx');
+  assert.match(client, /setFiles\(\(current\) => current\.filter\(\(item\) => item\.id !== file\.id\)\)/);
+  assert.match(client, /const deletedFiles = selected\.filter/);
+  assert.doesNotMatch(client, /setSelectedFileIds\(new Set\(\)\);\s*if \(deletedFiles\.length !== ids\.length\)[\s\S]{0,120}await load\(\)/);
+});
+
+test('tool activity groups show latest call first and sort the most recently used group last', async () => {
+  const client = await read('../../client/src/App.jsx');
+  assert.match(client, /\.sort\(\(a, b\) => a\.lastIndex - b\.lastIndex\)/);
+  assert.match(client, /group\.events\[group\.events\.length - 1\]/);
+  assert.match(client, /\[\.\.\.group\.events\]\.reverse\(\)/);
+});
+
+
+test('progress and stop controls are scoped to the selected conversation', async () => {
+  const client = await read('../../client/src/App.jsx');
+  assert.match(client, /liveProgressByChat/);
+  assert.match(client, /setProgressForChat\(chat\.\_id/);
+  assert.match(client, /const visibleLiveProgress = activeId \? \(liveProgressByChat\[activeId\]/);
+  assert.match(client, /generationControllersRef\.current\.get\(activeIdRef\.current\)/);
+});

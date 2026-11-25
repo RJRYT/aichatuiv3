@@ -35,6 +35,13 @@ export async function getLatestActiveGenerationSession(ownerId, chatId = '') {
   return [...memory.values()].filter((session) => session.ownerId === String(ownerId) && (!chatId || session.chatId === String(chatId)) && session.status === 'running').sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt))[0] || null;
 }
 
+
+export async function getRecentGenerationSessions(ownerId, since = new Date(Date.now() - 86400000)) {
+  const filter = { ownerId: String(ownerId), status: { $in: ['completed', 'completed_with_errors', 'failed', 'interrupted', 'cancelled', 'stopped'] }, updatedAt: { $gte: new Date(since) } };
+  if (databaseReady()) return GenerationSession.find(filter).sort({ updatedAt: -1 }).limit(30).select('generationId chatId status updatedAt completedAt').lean();
+  return [...memory.values()].filter((session) => session.ownerId === String(ownerId) && filter.status.$in.includes(session.status) && new Date(session.updatedAt) >= new Date(since)).sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)).slice(0, 30).map(({ generationId, chatId, status, updatedAt, completedAt }) => ({ generationId, chatId, status, updatedAt, completedAt }));
+}
+
 export async function getGenerationSession(generationId, ownerId) {
   if (databaseReady()) return GenerationSession.findOne({ generationId: String(generationId), ownerId: String(ownerId) }).lean();
   const session = memory.get(String(generationId)); return session && session.ownerId === String(ownerId) ? session : null;

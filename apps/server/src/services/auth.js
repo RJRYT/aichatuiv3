@@ -56,7 +56,14 @@ function setCookie(res, name, value, maxAge) {
   res.append('Set-Cookie', `${name}=${encodeURIComponent(value)}; ${cookieOptions(maxAge)}`);
 }
 function clearCookie(res, name) {
-  res.append('Set-Cookie', `${name}=; ${cookieOptions(0)}`);
+  const expired = `${name}=; ${cookieOptions(0)}; Expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+  res.append('Set-Cookie', expired);
+  // Also clear the host-only variant in case a deployment changed its cookie
+  // domain setting since the session was issued.
+  if (process.env.SESSION_COOKIE_DOMAIN) {
+    const hostOnly = `${name}=; Path=/; HttpOnly; SameSite=${String(process.env.SESSION_COOKIE_SAME_SITE || (process.env.NODE_ENV === 'production' ? 'None' : 'Lax'))}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`;
+    res.append('Set-Cookie', hostOnly);
+  }
 }
 
 export function createSessionCookie(res, userId) {

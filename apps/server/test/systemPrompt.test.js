@@ -4,7 +4,7 @@ import { buildSystemPrompt, SYSTEM_PROMPT_VERSION } from '../src/services/system
 
 test('system prompt loads the versioned Nemi identity and concise tool policy', () => {
   const prompt = buildSystemPrompt();
-  assert.equal(SYSTEM_PROMPT_VERSION, '8.5.5');
+  assert.equal(SYSTEM_PROMPT_VERSION, '8.5.6');
   assert.match(prompt, /You are \*\*Nemi\*\*/);
   assert.match(prompt, /created and maintained by RJRYT/);
   assert.match(prompt, /`save_memory`/);

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { runNemotronChat, generateChatTitle, requestStopChatGeneration, generateSuggestedNextSteps } from '../services/nvidia.js';
+import { runNemotronChat, generateChatTitle, requestStopChatGeneration, generateSuggestedNextSteps, generateStarterSuggestions } from '../services/nvidia.js';
 import { getChat, updateChat } from '../services/chatStore.js';
 import {
   ensureBranches,
@@ -8,7 +8,7 @@ import {
 } from '../services/conversationBranches.js';
 import logger from '../utils/logger.js';
 import { randomUUID } from 'node:crypto';
-import { createGenerationSession, appendGenerationEvent, finishGenerationSession, getGenerationEvents, getGenerationSession, getLatestActiveGenerationSession } from '../services/generationSessions.js';
+import { createGenerationSession, appendGenerationEvent, finishGenerationSession, getGenerationEvents, getGenerationSession, getLatestActiveGenerationSession, getRecentGenerationSessions } from '../services/generationSessions.js';
 import { getLatestAgentCheckpoint } from '../services/agents/checkpointManager.js';
 import { recordUsageEvent } from '../services/usageRecords.js';
 
@@ -26,15 +26,25 @@ router.post('/suggestions', async (req, res, next) => {
     const branchId = String(req.body?.branchId || chat.activeBranchId || 'main');
     const messages = getBranchMessages(chat, branchId);
     const assistant = messages?.find((item) => item.id === messageId && item.role === 'assistant');
-    if (!assistant || !assistant.content) return res.status(404).json({ error: 'Completed assistant response not found.' });
+    if (!assistant || (!assistant.content && !assistant.error && !assistant.executionStatus)) return res.status(404).json({ error: 'Assistant response not found.' });
     if (Array.isArray(assistant.suggestedNextSteps) && assistant.suggestedNextSteps.length) return res.json({ suggestions: assistant.suggestedNextSteps, revision: chat.revision || 0 });
     const index = messages.indexOf(assistant);
     const previousUser = [...messages.slice(0, index)].reverse().find((item) => item.role === 'user');
-    const suggestions = await generateSuggestedNextSteps({ user: req.user, userPrompt: previousUser?.content, assistantResponse: assistant.content, toolEvents: assistant.toolEvents, agentPlan: assistant.agentPlan });
+    const suggestions = await generateSuggestedNextSteps({ user: req.user, userPrompt: previousUser?.content, assistantResponse: assistant.content || '(No final response was produced.)', toolEvents: assistant.toolEvents, agentPlan: assistant.agentPlan, error: assistant.error || assistant.stopReason || assistant.executionStatus });
     assistant.suggestedNextSteps = suggestions;
     const saved = await updateChat(ownerId, chatId, { branches: chat.branches, messages: chat.messages, revision: (chat.revision || 0) + 1, expectedRevision: chat.revision || 0 });
     if (!saved) return res.status(409).json({ error: 'Conversation changed while suggestions were being generated.' });
     return res.json({ suggestions, revision: saved.revision || 0 });
+  } catch (error) { next(error); }
+});
+
+
+router.post('/starter-suggestions', async (req, res, next) => {
+  try {
+    const chats = Array.isArray(req.body?.recentChats) ? req.body.recentChats.slice(0, 8) : [];
+    const memories = Array.isArray(req.user?.memories) ? req.user.memories : [];
+    const suggestions = await generateStarterSuggestions({ user: req.user, memories, recentChats: chats });
+    return res.json({ suggestions });
   } catch (error) { next(error); }
 });
 
@@ -47,6 +57,18 @@ router.get('/stream/active', async (req, res, next) => {
     const checkpoint = session ? await getLatestAgentCheckpoint(ownerId, session.chatId) : (chatId ? await getLatestAgentCheckpoint(ownerId, chatId) : null);
     if (!session) return res.json({ active: false, checkpoint: checkpoint || null });
     return res.json({ active: true, generation: { generationId: session.generationId, chatId: session.chatId, startedAt: session.startedAt, status: session.status }, checkpoint: checkpoint || null });
+  } catch (error) { next(error); }
+});
+
+
+router.get('/stream/recent', async (req, res, next) => {
+  try {
+    const ownerId = String(req.user?._id || '');
+    if (!ownerId) return res.status(401).json({ error: 'Sign in to inspect recent work.' });
+    const requested = Number(req.query.since || 0);
+    const since = Number.isFinite(requested) && requested > 0 ? new Date(Math.max(Date.now() - 7 * 86400000, requested)) : new Date(Date.now() - 86400000);
+    const sessions = await getRecentGenerationSessions(ownerId, since);
+    return res.json({ sessions });
   } catch (error) { next(error); }
 });
 
